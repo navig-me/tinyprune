@@ -1,0 +1,38 @@
+name: Build native package
+
+on:
+  pull_request:
+    paths:
+      - TinyPrune.xcodeproj/**
+      - Package.swift
+      - Sources/**
+      - Tests/**
+  push:
+    branches: [main]
+    paths:
+      - TinyPrune.xcodeproj/**
+      - Package.swift
+      - Sources/**
+      - Tests/**
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Resolve Swift package dependencies
+        run: xcodebuild -resolvePackageDependencies -project TinyPrune.xcodeproj -scheme TinyPrune
+      - name: Test native package
+        run: xcodebuild test -project TinyPrune.xcodeproj -scheme TinyPrune -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
+      - name: Build unsigned archive
+        run: xcodebuild archive -project TinyPrune.xcodeproj -scheme TinyPrune -configuration Release -archivePath "$RUNNER_TEMP/TinyPrune.xcarchive" CODE_SIGNING_ALLOWED=NO
+      - name: Upload unsigned archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: tinyprune-unsigned-${{ github.sha }}
+          path: ${{ runner.temp }}/TinyPrune.xcarchive
+          if-no-files-found: error
+          retention-days: 7

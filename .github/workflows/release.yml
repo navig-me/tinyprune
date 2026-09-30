@@ -29,16 +29,17 @@ jobs:
     name: Sign, notarize, and publish
     runs-on: macos-14
     environment: release
-    env:
-      ARCHIVE_PATH: ${{ runner.temp }}/TinyPrune.xcarchive
-      STAGING_PATH: ${{ runner.temp }}/TinyPrune-release
-      DMG_PATH: ${{ runner.temp }}/TinyPrune.dmg
-      KEYCHAIN_PATH: ${{ runner.temp }}/tinyprune-signing.keychain-db
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0
+      - name: Set release paths
+        run: |
+          echo "ARCHIVE_PATH=$RUNNER_TEMP/TinyPrune.xcarchive" >> "$GITHUB_ENV"
+          echo "STAGING_PATH=$RUNNER_TEMP/TinyPrune-release" >> "$GITHUB_ENV"
+          echo "DMG_PATH=$RUNNER_TEMP/TinyPrune.dmg" >> "$GITHUB_ENV"
+          echo "KEYCHAIN_PATH=$RUNNER_TEMP/tinyprune-signing.keychain-db" >> "$GITHUB_ENV"
       - name: Require production package configuration
         run: |
           test -f TinyPrune.xcodeproj/project.pbxproj
