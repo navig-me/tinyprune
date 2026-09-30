@@ -47,34 +47,84 @@ public struct RuleDuration: Hashable, Codable, Sendable, Comparable {
     }
 }
 
+public enum RuleMatchMode: String, Codable, Sendable, Hashable {
+    case scoped
+    case exactPath
+    case itemSpecific
+    case template
+}
+
 public struct RuleScope: Hashable, Codable, Sendable {
     public let path: String
     public let recursive: Bool
 
     public init(path: String, recursive: Bool) throws {
-        guard !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw RuleValidationError.emptyScope
-        }
-        self.path = path
+        guard !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              path.hasPrefix("/") else { throw RuleValidationError.invalidScope }
+        let normalizedPath = Self.normalized(path)
+        guard normalizedPath != "/" else { throw RuleValidationError.invalidScope }
+        self.path = normalizedPath
         self.recursive = recursive
+    }
+
+    public static func normalized(_ path: String) -> String {
+        URL(fileURLWithPath: path).standardizedFileURL.path
+    }
+
+    public func relativePath(of candidatePath: String) -> String? {
+        let candidate = Self.normalized(candidatePath)
+        guard candidate != path, candidate.hasPrefix(path + "/") else { return nil }
+        let relative = String(candidate.dropFirst(path.count + 1))
+        guard recursive || !relative.contains("/") else { return nil }
+        return relative
     }
 }
 
 public struct ItemMatcher: Hashable, Codable, Sendable {
     public let itemKind: ItemKind
     public let exactNames: Set<String>
+    public let globPatterns: Set<String>
+    private let compiledGlobPatterns: [GlobPattern]
 
-    public init(itemKind: ItemKind, exactNames: Set<String>) throws {
-        guard exactNames.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
-            throw RuleValidationError.emptyExactName
+    public init(itemKind: ItemKind, exactNames: Set<String>, globPatterns: Set<String> = []) throws {
+        guard exactNames.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
+              globPatterns.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
+            throw RuleValidationError.emptyMatcherPattern
         }
         self.itemKind = itemKind
         self.exactNames = exactNames
+        self.globPatterns = globPatterns
+        self.compiledGlobPatterns = globPatterns.sorted().map(GlobPattern.init)
     }
 
-    public func matches(name: String, kind: ItemKind) -> Bool {
-        guard itemKind.accepts(kind) else { return false }
-        return exactNames.isEmpty || exactNames.contains(name)
+    private enum CodingKeys: String, CodingKey { case itemKind, exactNames, globPatterns }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            itemKind: container.decode(ItemKind.self, forKey: .itemKind),
+            exactNames: container.decode(Set<String>.self, forKey: .exactNames),
+            globPatterns: container.decodeIfPresent(Set<String>.self, forKey: .globPatterns) ?? []
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(itemKind, forKey: .itemKind)
+        try container.encode(exactNames.sorted(), forKey: .exactNames)
+        try container.encode(globPatterns.sorted(), forKey: .globPatterns)
+    }
+
+    public func matches(name: String, relativePath: String, kind: ItemKind) -> Bool {
+        specificity(name: name, relativePath: relativePath, kind: kind) != nil
+    }
+
+    func specificity(name: String, relativePath: String, kind: ItemKind) -> Int? {
+        guard itemKind.accepts(kind) else { return nil }
+        if exactNames.contains(name) { return 2 }
+        if compiledGlobPatterns.contains(where: { $0.matches(relativePath) }) { return 1 }
+        if exactNames.isEmpty && compiledGlobPatterns.isEmpty { return 0 }
+        return nil
     }
 }
 
@@ -88,6 +138,7 @@ public struct LifetimeRule: Hashable, Codable, Sendable, Identifiable {
     public let gracePeriod: RuleDuration?
     public let action: FolderAction
     public let state: RuleState
+    public let matchMode: RuleMatchMode
 
     public init(
         id: UUID = UUID(),
@@ -98,7 +149,8 @@ public struct LifetimeRule: Hashable, Codable, Sendable, Identifiable {
         lifetime: RuleDuration,
         gracePeriod: RuleDuration? = nil,
         action: FolderAction,
-        state: RuleState
+        state: RuleState,
+        matchMode: RuleMatchMode = .scoped
     ) throws {
         guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw RuleValidationError.emptyRuleName
@@ -112,12 +164,59 @@ public struct LifetimeRule: Hashable, Codable, Sendable, Identifiable {
         self.gracePeriod = gracePeriod
         self.action = action
         self.state = state
+        self.matchMode = matchMode
+    }
+}
+
+public struct GlobPattern: Hashable, @unchecked Sendable {
+    public let pattern: String
+    private let expression: NSRegularExpression?
+
+    public init(_ pattern: String) {
+        self.pattern = pattern
+        self.expression = try? NSRegularExpression(pattern: Self.regex(for: pattern))
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool { lhs.pattern == rhs.pattern }
+
+    public func hash(into hasher: inout Hasher) { hasher.combine(pattern) }
+
+    public func matches(_ value: String) -> Bool {
+        guard let expression else { return false }
+        let range = NSRange(value.startIndex..<value.endIndex, in: value)
+        return expression.firstMatch(in: value, range: range) != nil
+    }
+
+    private static func regex(for pattern: String) -> String {
+        let characters = Array(pattern)
+        var result = "^"
+        var index = 0
+        while index < characters.count {
+            switch characters[index] {
+            case "*":
+                if index + 1 < characters.count, characters[index + 1] == "*" {
+                    if index + 2 < characters.count, characters[index + 2] == "/" {
+                        result += "(?:.*/)?"
+                        index += 2
+                    } else {
+                        result += ".*"
+                        index += 1
+                    }
+                } else {
+                    result += "[^/]*"
+                }
+            case "?": result += "[^/]"
+            default: result += NSRegularExpression.escapedPattern(for: String(characters[index]))
+            }
+            index += 1
+        }
+        return result + "$"
     }
 }
 
 public enum RuleValidationError: Error, Equatable, Sendable {
     case invalidDuration
-    case emptyScope
-    case emptyExactName
+    case invalidScope
+    case emptyMatcherPattern
     case emptyRuleName
 }

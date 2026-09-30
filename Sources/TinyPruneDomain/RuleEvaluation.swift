@@ -10,6 +10,15 @@ public struct FilesystemIdentity: Hashable, Codable, Sendable {
         self.resourceIdentifier = resourceIdentifier
         self.pathHint = pathHint
     }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.volumeIdentifier == rhs.volumeIdentifier && lhs.resourceIdentifier == rhs.resourceIdentifier
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(volumeIdentifier)
+        hasher.combine(resourceIdentifier)
+    }
 }
 
 public struct CandidateTimestamps: Hashable, Codable, Sendable {
@@ -70,6 +79,8 @@ public enum EvaluationSuppression: String, Codable, Sendable {
     case itemDoesNotMatch
     case missingExpiryTimestamp
     case pausedRule
+    case globalPause
+    case previewOnly
 }
 
 public enum ScheduledDisposition: String, Codable, Sendable {
@@ -106,12 +117,18 @@ public enum CandidateEvaluation: Hashable, Codable, Sendable {
 
 public enum RuleEvaluator {
     public static func evaluate(candidate: RuleCandidate, against rule: LifetimeRule) -> CandidateEvaluation {
-        guard rule.matcher.matches(name: candidate.name, kind: candidate.kind) else {
-            return .suppressed(.itemDoesNotMatch)
+        guard rule.state != .paused else { return .suppressed(.pausedRule) }
+        let path = RuleScope.normalized(candidate.identity.pathHint)
+        let matches: Bool
+        switch rule.matchMode {
+        case .itemSpecific, .exactPath:
+            matches = path == rule.scope.path && rule.matcher.matches(name: candidate.name, relativePath: candidate.name, kind: candidate.kind)
+        case .scoped:
+            matches = rule.scope.relativePath(of: path).map { rule.matcher.matches(name: candidate.name, relativePath: $0, kind: candidate.kind) } ?? false
+        case .template:
+            matches = rule.matcher.matches(name: candidate.name, relativePath: candidate.name, kind: candidate.kind)
         }
-        guard rule.state != .paused else {
-            return .suppressed(.pausedRule)
-        }
+        guard matches else { return .suppressed(.itemDoesNotMatch) }
         guard let basisDate = candidate.timestamps.value(for: rule.expiryBasis) else {
             return .suppressed(.missingExpiryTimestamp)
         }

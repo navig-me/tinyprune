@@ -11,6 +11,9 @@ let package = Package(
         .executable(name: "TinyPruneAgent", targets: ["TinyPruneAgent"]),
         .executable(name: "tinyprune", targets: ["tinyprune"]),
         .executable(name: "TinyPruneDomainCheck", targets: ["TinyPruneDomainCheck"]),
+        .library(name: "TinyPruneEngine", targets: ["TinyPruneEngine"]),
+        .executable(name: "TinyPruneEngineCheck", targets: ["TinyPruneEngineCheck"]),
+        .library(name: "TinyPrunePersistence", targets: ["TinyPrunePersistence"]),
     ],
     targets: [
         .target(name: "TinyPruneDomain"),
@@ -19,6 +22,12 @@ let package = Package(
         .executableTarget(name: "TinyPruneApp", dependencies: ["TinyPruneDomain", "TinyPruneIPC"]),
         .executableTarget(name: "tinyprune", dependencies: ["TinyPruneIPC"]),
         .executableTarget(name: "TinyPruneDomainCheck", dependencies: ["TinyPruneDomain"]),
+        .target(name: "TinyPruneEngine", dependencies: ["TinyPruneDomain"]),
+        .systemLibrary(name: "CSQLite"),
+        .target(name: "TinyPrunePersistence", dependencies: ["CSQLite", "TinyPruneDomain", "TinyPruneEngine"]),
+        .testTarget(name: "TinyPrunePersistenceTests", dependencies: ["TinyPrunePersistence", "TinyPruneDomain", "TinyPruneEngine"]),
+        .testTarget(name: "TinyPruneEngineTests", dependencies: ["TinyPruneEngine", "TinyPruneDomain"]),
+        .executableTarget(name: "TinyPruneEngineCheck", dependencies: ["TinyPruneEngine", "TinyPruneDomain", "TinyPrunePersistence"]),
         .testTarget(name: "TinyPruneDomainTests", dependencies: ["TinyPruneDomain"]),
         .testTarget(name: "TinyPruneIPCTests", dependencies: ["TinyPruneIPC"]),
     ]
