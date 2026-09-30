@@ -102,6 +102,7 @@ final class SQLiteSafetyStoreTests: XCTestCase {
 
     private func makeRule(id: UUID = UUID(), name: String) throws -> LifetimeRule {
         try LifetimeRule(
+            id: id,
             name: name,
             scope: RuleScope(path: "/Developer", recursive: true),
             matcher: ItemMatcher(itemKind: .file, exactNames: ["*.zip"]),
