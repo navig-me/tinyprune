@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="TinyPrune gives files a lifetime, then safely moves expired items to the Mac Trash.">
+    <meta name="theme-color" content="#310927">
+    <title>TinyPrune — File lifetimes for your Mac</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,400;6..72,500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="wordmark" href="/" aria-label="TinyPrune home"><span aria-hidden="true">✦</span> TinyPrune</a>
+      <nav aria-label="Primary navigation">
+        <a href="https://docs.tinyprune.com">Documentation</a>
+        <a href="https://github.com/navig-me/tinyprune">GitHub</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="kicker">A quiet utility for macOS</p>
+          <h1>Keep what matters.<br>Let the rest expire.</h1>
+          <p class="lede">Give downloads, build artifacts, screenshots, and temporary folders a lifetime. TinyPrune checks its rules locally, explains every decision, and moves eligible items to your Mac’s Trash.</p>
+          <div class="hero-actions">
+            <a class="button primary" href="https://github.com/navig-me/tinyprune">Follow development on GitHub</a>
+            <a class="button secondary" href="https://docs.tinyprune.com">Read the docs</a>
+          </div>
+          <p class="availability">Public release is in development. No account. No cloud sync. No permanent deletion.</p>
+        </div>
+
+        <div class="orchard-window" aria-label="Illustration of an active TinyPrune rule">
+          <div class="window-bar"><i></i><i></i><i></i><span>TinyPrune</span></div>
+          <div class="window-body">
+            <p class="pane-label">A rule for Downloads</p>
+            <h2>Files matching <code>*.dmg</code></h2>
+            <div class="rule-line"><span>Expire after entering Downloads</span><strong>7 days</strong></div>
+            <div class="path"><span class="leaf">⌘</span> ~/Downloads/Arc-1.82.1.dmg</div>
+            <div class="outcome"><span>✓</span><div><b>Ready on Friday</b><small>Will move to Trash, never deleted outright.</small></div></div>
+          </div>
+          <div class="branch branch-one"></div><div class="branch branch-two"></div><div class="fruit fruit-one"></div><div class="fruit fruit-two"></div>
+        </div>
+      </section>
+
+      <section class="principles" aria-label="TinyPrune principles">
+        <article><span>01</span><h2>Rules, not routines</h2><p>Set a policy once. TinyPrune watches the places you choose and schedules the next eligible item without running repeated disk-wide scans.</p></article>
+        <article><span>02</span><h2>Safety has the last word</h2><p>A scheduled item is checked again before it moves. Keep overrides, protected descendants, pause states, permissions, and volume availability always win.</p></article>
+        <article><span>03</span><h2>Every action is legible</h2><p>See the rule, expiry basis, and reason behind each decision. Preview broad rules first. Change your mind in the Mac Trash.</p></article>
+      </section>
+
+      <section class="statement">
+        <p class="kicker">The missing filesystem concept</p>
+        <blockquote>Files can have a lifetime.</blockquote>
+        <p>Not another Mac cleaner. A small, local system for deciding when disposable things have reached the end of their useful life.</p>
+      </section>
+
+      <section class="examples">
+        <div><p class="kicker">Made for the things that accumulate</p><h2>Prune the disposable,<br>not the important.</h2></div>
+        <ul>
+          <li><span>Downloads</span><b>Files after 14 days</b></li>
+          <li><span>Screenshots</span><b>Files after 7 days</b></li>
+          <li><span><code>node_modules</code></span><b>30 days after project activity</b></li>
+          <li><span><code>.venv</code></span><b>45 days after project activity</b></li>
+        </ul>
+      </section>
+    </main>
+
+    <footer><a class="wordmark" href="/"><span aria-hidden="true">✦</span> TinyPrune</a><p>Local-first file lifetimes for macOS.</p><a href="https://docs.tinyprune.com">Documentation</a><a href="https://github.com/navig-me/tinyprune">GitHub</a></footer>
+  </body>
+</html>

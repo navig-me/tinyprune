@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="TinyPrune documentation: safe local file lifetimes for macOS.">
+    <meta name="theme-color" content="#310927">
+    <title>TinyPrune documentation</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,400;6..72,500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <header><a class="wordmark" href="https://tinyprune.com"><span aria-hidden="true">✦</span> TinyPrune</a><a class="site-link" href="https://tinyprune.com">tinyprune.com</a></header>
+    <div class="layout">
+      <aside><p>Documentation</p><nav aria-label="Documentation"><a href="#overview">Overview</a><a href="#safety">Safety model</a><a href="#rules">Rules</a><a href="#preview">Preview first</a><a href="#updates">Updates</a><a href="#development">Development</a></nav><a class="source" href="https://github.com/navig-me/tinyprune">View source on GitHub</a></aside>
+      <main>
+        <article>
+          <p class="eyebrow">TinyPrune documentation</p><h1 id="overview">File lifetimes, locally enforced.</h1>
+          <p class="intro">TinyPrune is a macOS utility for assigning lifecycle rules to files and folders. It exists to manage disposable material without becoming a generic system cleaner.</p>
+          <div class="notice"><b>Project status</b><p>TinyPrune is under active development. These docs describe the intended v1 behavior; download and installation instructions will be published with the first signed release.</p></div>
+
+          <h2 id="safety">Safety model</h2>
+          <p>TinyPrune only operates on folders you select. It records a stable filesystem identity for each managed root rather than trusting a path alone. Before an item moves, the agent evaluates the current filesystem state again.</p>
+          <ul><li><strong>Trash, not permanent deletion.</strong> Eligible items move through the standard macOS Trash path.</li><li><strong>Keep wins.</strong> An explicit Keep override takes precedence over every rule. A protected descendant blocks its parent from being moved.</li><li><strong>Preview has no side effects.</strong> Preview evaluates matching, scheduling, and audit records but never invokes the Trash executor.</li><li><strong>Local operation.</strong> Normal processing reads metadata only. TinyPrune does not require an account, cloud sync, or file-content inspection.</li></ul>
+
+          <h2 id="rules">Rules</h2>
+          <p>A rule answers four questions: where to look, what to match, when it expires, and what to do. Rules can match files or folders by scope, depth, exact name, glob, age, modification time, project inactivity, or an explicit override.</p>
+          <pre><code>WHERE  ~/Developer/**
+WHAT   Folder named node_modules
+WHEN   Project inactive for 30 days
+ACTION Move the folder to Trash</code></pre>
+          <p>Rules can apply to an entire folder or to matching children. More specific rules and explicit item overrides resolve predictably. The inspector shows the matched rule, expiry basis, resolved deadline, and any condition suppressing an action.</p>
+
+          <h2 id="preview">Preview first</h2>
+          <p>Start broad rules in Preview. This lets you inspect candidate items and explain why each one would be eligible without moving anything. TinyPrune uses this mode by default for broad developer-cleanup templates.</p>
+          <ol><li>Select a folder you control.</li><li>Choose a template or create a rule.</li><li>Leave it in Preview and review the upcoming list.</li><li>Add Keep or expiry overrides where needed.</li><li>Enable the rule only when the explanation matches your intent.</li></ol>
+
+          <h2 id="updates">Updates and distribution</h2>
+          <p>Direct downloads will use a signed, notarized DMG and Sparkle update feed. Sparkle updates are HTTPS-delivered and EdDSA-signed. The application will not install an update while it is actively processing a Trash operation.</p>
+          <p>Homebrew installs will use the TinyPrune cask. Homebrew is the sole updater for that channel; Sparkle automatic update checks are disabled in its build.</p>
+
+          <h2 id="development">Development</h2>
+          <p>The repository contains the product specification and staged implementation plan. Contributions must preserve the policy invariant: the database schedules candidates but never authorizes a Trash operation. See <a href="https://github.com/navig-me/tinyprune/blob/main/CLAUDE.md">CLAUDE.md</a> for contribution constraints and <a href="https://github.com/navig-me/tinyprune/blob/main/PLAN.md">PLAN.md</a> for the release architecture.</p>
+        </article>
+      </main>
+    </div>
+  </body>
+</html>

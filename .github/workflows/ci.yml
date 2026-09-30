@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  static-sites:
+    name: Validate ${{ matrix.site }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        site: [website, docs]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.14.0
+          cache: npm
+          cache-dependency-path: ${{ matrix.site }}/package.json
+      - name: Validate static site
+        run: npm --prefix ${{ matrix.site }} run check
+
+  native-package:
+    name: Build native package
+    if: ${{ hashFiles('TinyPrune.xcodeproj/project.pbxproj') != '' }}
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Resolve Swift package dependencies
+        run: xcodebuild -resolvePackageDependencies -project TinyPrune.xcodeproj -scheme TinyPrune
+      - name: Test native package
+        run: xcodebuild test -project TinyPrune.xcodeproj -scheme TinyPrune -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
+      - name: Build unsigned archive
+        run: xcodebuild archive -project TinyPrune.xcodeproj -scheme TinyPrune -configuration Release -archivePath "$RUNNER_TEMP/TinyPrune.xcarchive" CODE_SIGNING_ALLOWED=NO
+      - name: Upload unsigned archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: tinyprune-unsigned-${{ github.sha }}
+          path: ${{ runner.temp }}/TinyPrune.xcarchive
+          if-no-files-found: error
+          retention-days: 7

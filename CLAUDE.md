@@ -46,6 +46,8 @@ Use the Stitch references in `stitch_tinyprune_macos_app/` as visual direction, 
 
 ## Test and release requirements
 
+- `website/` is the static landing site for `tinyprune.com`; `docs/` is the separate static site for `docs.tinyprune.com`. Keep their published-domain links absolute, validate each with its local `npm run check`, and deploy them only through `.github/workflows/deploy-pages.yml`.
+- Cloudflare Pages Direct Upload credentials belong exclusively in the reviewer-protected `cloudflare-pages-production` GitHub Environment. Use an account-scoped Pages-edit API token, never a Global API key.
 - Add tests for behavior and invariants, not implementation plumbing. At minimum cover precedence, glob boundaries, protection, preview, stale identity, pause/safety races, project activity noise, recovery, and failed Trash operations when modifying those paths.
 - For agent behavior, run a fixture-tree smoke test that observes actual scheduling/preflight/Trash outcomes. For UI, perform a manual/automation smoke of the affected native flow.
 - Direct DMG releases use signed, notarized Sparkle updates. Homebrew releases update only through the cask and must disable Sparkle automatic checks in that distribution build.

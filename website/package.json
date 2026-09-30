@@ -1,0 +1,7 @@
+{
+  "name": "tinyprune-website",
+  "private": true,
+  "scripts": {
+    "check": "node scripts/check.mjs"
+  }
+}
