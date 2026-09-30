@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+
+<html lang="en"><head><meta charset="utf-8"/><meta content="width=device-width, initial-scale=1.0" name="viewport"/><meta content="web_dashboard" name="shell-type"/><link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/><link href="https://fonts.googleapis.com" rel="preconnect"/><link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/><link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&amp;family=Manrope:wght@400;500;600&amp;family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/><style>@layer base{html,body{margin:0;padding:0;}body{overscroll-behavior:none;}main>:first-child{margin-top:0!important;}main>:last-child{margin-bottom:0!important;}}::-webkit-scrollbar{display:none;}</style><script src="https://cdn.tailwindcss.com"></script><script id="tailwind-config">tailwind.config={"darkMode":"class","theme":{"extend":{"colors":{"tertiary":"#2b1400","secondary-container":"#c3e9ca","tertiary-fixed":"#ffdcc0","on-secondary-container":"#486a51","on-background":"#1b1c1a","surface-container":"#efeeeb","outline":"#81737a","on-secondary-fixed-variant":"#2d4e37","surface-container-lowest":"#ffffff","on-tertiary-fixed-variant":"#6b3b00","surface-tint":"#814e6f","inverse-on-surface":"#f2f0ed","surface-bright":"#fbf9f6","background":"#fbf9f6","on-primary":"#ffffff","on-secondary-fixed":"#00210e","error-container":"#ffdad6","secondary":"#44664d","on-primary-fixed":"#340b29","inverse-primary":"#f3b4da","on-surface-variant":"#4f444a","on-error":"#ffffff","on-tertiary-fixed":"#2d1600","secondary-fixed-dim":"#aad0b1","on-tertiary":"#ffffff","surface-variant":"#e4e2df","on-primary-fixed-variant":"#663756","primary":"#310927","on-secondary":"#ffffff","on-primary-container":"#be85a8","surface-container-high":"#eae8e5","tertiary-fixed-dim":"#ffb875","surface-container-low":"#f5f3f0","on-tertiary-container":"#d28432","outline-variant":"#d3c2c9","on-surface":"#1b1c1a","surface-container-highest":"#e4e2df","surface-dim":"#dbdad7","primary-container":"#4a1f3d","surface":"#fbf9f6","tertiary-container":"#482600","error":"#ba1a1a","primary-fixed-dim":"#f3b4da","on-error-container":"#93000a","secondary-fixed":"#c6eccd","primary-fixed":"#ffd8ed","inverse-surface":"#30312f"},"borderRadius":{"DEFAULT":"0.25rem","lg":"0.5rem","xl":"0.75rem","full":"9999px"},"spacing":{"gutter":"1rem","space-sm":"0.5rem","space-xs":"0.25rem","space-xl":"1.75rem","space-lg":"1.25rem","margin":"1.5rem","margin-window":"1.25rem","space-md":"0.875rem","gutter-compact":"0.75rem"},"fontFamily":{"headline-lg":["Newsreader"],"body-sm":["Manrope"],"body-lg":["Manrope"],"body-md":["Manrope"],"headline-xl":["Newsreader"],"label-sm":["Manrope"],"headline-sm":["Newsreader"],"label-md":["Manrope"],"headline-md":["Newsreader"],"code-sm":["JetBrains Mono"]},"fontSize":{"headline-lg":["1.75rem",{"lineHeight":"2.25rem","letterSpacing":"-0.015em","fontWeight":"400"}],"body-sm":["0.8125rem",{"lineHeight":"1.25rem","letterSpacing":"0.005em","fontWeight":"400"}],"body-lg":["1rem",{"lineHeight":"1.5rem","letterSpacing":"-0.005em","fontWeight":"400"}],"body-md":["0.875rem",{"lineHeight":"1.375rem","letterSpacing":"0em","fontWeight":"400"}],"headline-xl":["2.25rem",{"lineHeight":"2.75rem","letterSpacing":"-0.02em","fontWeight":"400"}],"label-sm":["0.6875rem",{"lineHeight":"0.875rem","letterSpacing":"0.04em","fontWeight":"600"}],"headline-sm":["1.125rem",{"lineHeight":"1.5rem","letterSpacing":"0em","fontWeight":"500"}],"label-md":["0.75rem",{"lineHeight":"1rem","letterSpacing":"0.02em","fontWeight":"600"}],"headline-md":["1.375rem",{"lineHeight":"1.75rem","letterSpacing":"-0.01em","fontWeight":"500"}],"code-sm":["0.75rem",{"lineHeight":"1.125rem","letterSpacing":"0em","fontWeight":"400"}]}}}}</script></head><body class="bg-background font-body-md text-on-surface antialiased select-none"><div class="min-h-screen flex flex-col bg-background"><header class="fixed top-0 left-0 right-0 h-14 bg-surface-container-low/90 backdrop-blur-xl border-b border-outline-variant/40 z-50 flex items-center justify-between px-space-md"><div class="flex items-center gap-space-lg w-56 flex-shrink-0 pl-space-xs"><div class="flex items-center gap-space-xs"><div class="w-3 h-3 rounded-full bg-[#ff5f57] border border-[#e0443e]/50 cursor-pointer shadow-sm"></div><div class="w-3 h-3 rounded-full bg-[#febc2e] border border-[#d89e24]/50 cursor-pointer shadow-sm"></div><div class="w-3 h-3 rounded-full bg-[#28c840] border border-[#1aab29]/50 cursor-pointer shadow-sm"></div></div><div class="flex items-center gap-space-sm pl-space-xs"><span class="font-headline-sm text-headline-sm text-primary tracking-tight">TinyPrune</span></div></div><div class="flex items-center gap-space-md"><div class="flex items-center gap-space-xs px-space-sm py-1 bg-surface-container-highest/60 rounded-full border border-outline-variant/30 text-on-surface-variant"><span class="w-1.5 h-1.5 rounded-full bg-secondary animate-pulse"></span><span class="font-label-sm text-label-sm font-medium text-on-surface-variant">Running quietly</span></div></div><div class="flex items-center gap-space-md"><div class="flex items-center bg-surface-container px-space-sm py-1 rounded-lg border border-outline-variant/40 text-on-surface-variant"><span class="material-symbols-outlined text-[16px] mr-1">search</span><span class="font-code-sm text-code-sm text-outline">⌘K</span></div><img alt="Profile" class="w-8 h-8 rounded-full object-cover ring-1 ring-outline-variant/50" src="https://lh3.googleusercontent.com/aida/AEtjO1Vh698ienCxLqzEZU3ye2kAazFK4_nbqTAGXc2mKyRecg8ii22gVTWSWu4rwxmf3ynN-ahhONJllongmGM4bMkzyoU2Drz9Z4ZKo2x-mvg3tYww1gQ_by-eLXnEFtlCqt_X5Owaqi3Nc4pTCQqxFL5nxlnJlbed7ZJNwNQ8uXJFzL0GaQ_rEotsO5_C2G-r5bS8sp4Huf-g2xo3_4qDNT3ot7q_IWdHo3bxkOo8JH52Rry4cU46wn3jMW82"/></div></header><div class="flex flex-1 pt-14"><aside class="fixed left-0 top-14 bottom-0 w-60 bg-surface-container-low/80 backdrop-blur-xl border-r border-outline-variant/40 flex flex-col justify-between p-space-md z-40"><div class="space-y-space-md"><div class="px-space-xs"><span class="font-label-sm text-label-sm uppercase tracking-wider text-outline font-semibold">Library</span></div><nav class="flex flex-col gap-1" data-active-classes="bg-primary-container text-on-primary-container font-medium rounded-lg shadow-sm"><a class="flex items-center justify-between px-space-sm py-1.5 rounded-lg text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface transition-colors" data-path="overview" href="#"><div class="flex items-center gap-space-sm"><span class="material-symbols-outlined text-[18px]">space_dashboard</span><span class="font-body-md text-body-md">Overview</span></div></a><a aria-current="page" class="flex items-center justify-between px-space-sm py-1.5 transition-colors bg-primary-container text-on-primary-container font-medium rounded-lg shadow-sm" data-path="rules" href="#"><div class="flex items-center gap-space-sm"><span class="material-symbols-outlined text-[18px]">tune</span><span class="font-body-md text-body-md">Rules</span></div></a><a class="flex items-center justify-between px-space-sm py-1.5 rounded-lg text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface transition-colors" data-path="upcoming" href="#"><div class="flex items-center gap-space-sm"><span class="material-symbols-outlined text-[18px]">schedule</span><span class="font-body-md text-body-md">Upcoming</span></div><span class="px-1.5 py-0.5 rounded-full bg-secondary-container text-on-secondary-container font-label-sm text-label-sm font-semibold">17</span></a><a class="flex items-center justify-between px-space-sm py-1.5 rounded-lg text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface transition-colors" data-path="activity" href="#"><div class="flex items-center gap-space-sm"><span class="material-symbols-outlined text-[18px]">history</span><span class="font-body-md text-body-md">Activity</span></div></a><a class="flex items-center justify-between px-space-sm py-1.5 rounded-lg text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface transition-colors" data-path="templates" href="#"><div class="flex items-center gap-space-sm"><span class="material-symbols-outlined text-[18px]">folder_supervised</span><span class="font-body-md text-body-md">Templates</span></div></a><a class="flex items-center justify-between px-space-sm py-1.5 rounded-lg text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface transition-colors" data-path="settings" href="#"><div class="flex items-center gap-space-sm"><span class="material-symbols-outlined text-[18px]">settings</span><span class="font-body-md text-body-md">Settings</span></div></a></nav></div><div class="p-space-sm rounded-xl bg-surface-container border border-outline-variant/30 flex items-start gap-space-sm"><span class="material-symbols-outlined text-secondary text-[20px] mt-0.5">eco</span><div class="flex flex-col"><span class="font-label-md text-label-md font-semibold text-on-surface">Storage tidy</span><span class="font-body-sm text-body-sm text-on-surface-variant leading-tight mt-0.5">18.2 GB reclaimed this month</span></div></div></aside><div class="flex-1 pl-60"><main class="w-full px-margin-window py-margin-window bg-background min-h-[calc(100vh-3.5rem)]"><div class="flex flex-col w-full">
+<!-- Subtle ambient top gradient accent -->
+<div class="relative w-full">
+<div class="absolute -top-6 left-1/4 w-96 h-32 bg-primary/5 blur-3xl pointer-events-none rounded-full"></div>
+<div class="absolute top-20 right-10 w-72 h-44 bg-secondary/10 blur-3xl pointer-events-none rounded-full"></div>
+<!-- Editorial Header & Sheet Identity Strip -->
+<header class="flex flex-col md:flex-row md:items-end justify-between gap-space-md mb-space-lg">
+<div class="space-y-1">
+<!-- Breadcrumb / Overline -->
+<div class="flex items-center gap-space-xs text-on-surface-variant font-code-sm text-code-sm tracking-wide">
+<a class="hover:text-primary transition-colors" href="#">Rules</a>
+<span class="text-outline/40">/</span>
+<span class="text-on-surface font-medium">Edit Rule</span>
+<span class="ml-space-xs px-2 py-0.5 rounded-full bg-surface-container-high text-primary font-label-sm text-label-sm">v2.4 Engine</span>
+</div>
+<div class="flex items-baseline gap-space-sm">
+<h1 class="font-headline-xl text-headline-xl text-primary tracking-tight font-normal">
+            Old Node Modules
+          </h1>
+<span class="font-code-sm text-code-sm text-outline">#rule-dev-09</span>
+</div>
+<p class="font-body-md text-body-md text-on-surface-variant max-w-2xl">
+          Automatically reclaim disk space from dormant JavaScript and TypeScript projects without touching git stashes or untracked state.
+        </p>
+</div>
+<!-- Rule State Indicator & Master Toggle -->
+<div class="flex items-center gap-space-md self-start md:self-end bg-surface-container-low px-space-md py-space-sm rounded-xl shadow-sm">
+<div class="flex flex-col text-right">
+<span class="font-label-md text-label-md text-on-surface font-semibold" id="toggle-label">Rule Active</span>
+<span class="font-code-sm text-code-sm text-secondary">Hourly evaluation</span>
+</div>
+<button aria-checked="true" class="relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full bg-primary-container p-0.5 transition-colors duration-200 ease-in-out focus:outline-none" id="rule-master-toggle" role="switch" type="button">
+<span class="translate-x-5 pointer-events-none inline-block h-5 w-5 transform rounded-full bg-surface-container-lowest shadow ring-0 transition duration-200 ease-in-out" id="rule-master-knob"></span>
+</button>
+</div>
+</header>
+<!-- Natural Language Visual Builder & Sentence Summary Ribbon -->
+<section class="mb-space-lg p-space-md rounded-xl bg-surface-container-high/60 backdrop-blur-sm shadow-sm flex flex-wrap items-center gap-x-2 gap-y-2 text-on-surface font-body-md text-body-md">
+<span class="font-label-sm text-label-sm uppercase tracking-wider text-outline font-semibold">Semantic Summary:</span>
+<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-surface-container-lowest text-primary font-code-sm text-code-sm shadow-sm">
+<span class="material-symbols-outlined text-[14px] text-primary">folder</span> ~/Developer/**
+      </span>
+<span class="text-on-surface-variant font-headline-sm italic">prune folders named</span>
+<span class="inline-flex items-center px-2 py-0.5 rounded bg-surface-container-lowest text-primary font-code-sm text-code-sm shadow-sm">
+        node_modules
+      </span>
+<span class="text-on-surface-variant font-headline-sm italic">when inactive for</span>
+<span class="inline-flex items-center px-2 py-0.5 rounded bg-surface-container-lowest text-on-surface font-code-sm text-code-sm shadow-sm">
+        &gt; 30 days
+      </span>
+<span class="text-on-surface-variant font-headline-sm italic">then</span>
+<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-primary-fixed text-on-primary-fixed font-code-sm text-code-sm font-medium">
+<span class="material-symbols-outlined text-[13px]">delete</span> Move to Trash
+      </span>
+<span class="text-on-surface-variant font-headline-sm italic">safeguarding</span>
+<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-secondary-container text-on-secondary-container font-code-sm text-code-sm font-semibold">
+<span class="material-symbols-outlined text-[13px]">lock</span> 2 exclusions
+      </span>
+</section>
+<!-- Main Grid: Condition Stack (Left) + Auxiliary Inspector (Right) -->
+<div class="grid grid-cols-1 lg:grid-cols-12 gap-gutter mb-space-xl">
+<!-- Rule Condition Architecture (8 cols) -->
+<div class="lg:col-span-8 flex flex-col gap-space-md">
+<!-- 1. WHERE Block -->
+<article class="relative bg-surface-container-lowest p-space-lg rounded-xl shadow-sm hover:shadow-md transition-shadow">
+<div class="flex items-center justify-between mb-space-sm">
+<div class="flex items-center gap-space-sm">
+<span class="w-6 h-6 rounded-lg bg-surface-container-high flex items-center justify-center font-code-sm text-code-sm text-primary font-medium">1</span>
+<span class="font-label-sm text-label-sm uppercase tracking-wider text-primary font-bold">WHERE</span>
+</div>
+<span class="font-body-sm text-body-sm text-on-surface-variant">Scope &amp; Directory Traversal</span>
+</div>
+<div class="space-y-space-sm">
+<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-space-sm p-space-sm rounded-lg bg-surface-container-low shadow-inner">
+<div class="flex items-center gap-space-sm min-w-0">
+<span class="material-symbols-outlined text-primary text-[20px] shrink-0">folder_open</span>
+<span class="font-code-sm text-code-sm text-on-surface font-medium truncate">~/Developer/**</span>
+<span class="px-1.5 py-0.5 rounded text-[10px] font-label-sm bg-surface-container-highest text-on-surface-variant uppercase font-semibold">Recursive</span>
+</div>
+<button class="inline-flex items-center gap-1.5 px-space-sm py-1 rounded-lg bg-surface-container-lowest text-primary font-label-md text-label-md font-semibold hover:bg-surface-container transition-colors shadow-sm self-start sm:self-auto" type="button">
+<span class="material-symbols-outlined text-[16px]">folder_special</span>
+                Choose directory...
+              </button>
+</div>
+<!-- Path Modifiers -->
+<div class="flex flex-wrap items-center gap-space-lg pt-space-xs px-1 text-on-surface-variant font-body-sm text-body-sm">
+<label class="flex items-center gap-2 cursor-pointer">
+<input checked="" class="w-3.5 h-3.5 rounded accent-primary-container cursor-pointer" type="checkbox"/>
+<span>Traverse nested repositories</span>
+</label>
+<label class="flex items-center gap-2 cursor-pointer">
+<input checked="" class="w-3.5 h-3.5 rounded accent-primary-container cursor-pointer" type="checkbox"/>
+<span>Follow symlinks in worktrees</span>
+</label>
+</div>
+</div>
+</article>
+<!-- 2. WHAT Block -->
+<article class="relative bg-surface-container-lowest p-space-lg rounded-xl shadow-sm hover:shadow-md transition-shadow">
+<div class="flex items-center justify-between mb-space-sm">
+<div class="flex items-center gap-space-sm">
+<span class="w-6 h-6 rounded-lg bg-surface-container-high flex items-center justify-center font-code-sm text-code-sm text-primary font-medium">2</span>
+<span class="font-label-sm text-label-sm uppercase tracking-wider text-primary font-bold">WHAT</span>
+</div>
+<span class="font-body-sm text-body-sm text-on-surface-variant">Target Artifact Pattern</span>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-12 gap-space-sm items-center">
+<div class="md:col-span-4">
+<div class="flex items-center justify-between px-space-sm py-2 rounded-lg bg-surface-container-low text-on-surface font-body-md text-body-md shadow-inner">
+<span class="text-on-surface">Target selector</span>
+<span class="font-label-md text-label-md text-primary font-semibold">Folder named</span>
+</div>
+</div>
+<div class="md:col-span-8 flex items-center gap-space-sm">
+<div class="relative flex-1">
+<span class="absolute left-3 top-2.5 material-symbols-outlined text-[16px] text-outline">label</span>
+<input class="w-full pl-9 pr-space-md py-1.5 rounded-lg bg-surface-container-low font-code-sm text-code-sm text-on-surface focus:outline-none focus:ring-2 focus:ring-primary-container/20 shadow-inner" type="text" value="node_modules"/>
+</div>
+<span class="px-2 py-1 rounded bg-secondary-container text-on-secondary-container font-code-sm text-code-sm font-semibold shrink-0">Exact match</span>
+</div>
+</div>
+<!-- Secondary match criteria tag stack -->
+<div class="flex items-center gap-space-sm mt-space-sm pt-space-xs text-on-surface-variant font-body-sm text-body-sm">
+<span class="text-outline text-label-sm font-label-sm uppercase">Requires:</span>
+<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-surface-container text-on-surface font-code-sm text-code-sm">
+<span class="material-symbols-outlined text-[14px]">code</span> package.json in parent
+            </span>
+<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-surface-container text-on-surface font-code-sm text-code-sm">
+<span class="material-symbols-outlined text-[14px]">check</span> Directory payload &gt; 10MB
+            </span>
+</div>
+</article>
+<!-- 3. WHEN Block -->
+<article class="relative bg-surface-container-lowest p-space-lg rounded-xl shadow-sm hover:shadow-md transition-shadow">
+<div class="flex items-center justify-between mb-space-sm">
+<div class="flex items-center gap-space-sm">
+<span class="w-6 h-6 rounded-lg bg-surface-container-high flex items-center justify-center font-code-sm text-code-sm text-primary font-medium">3</span>
+<span class="font-label-sm text-label-sm uppercase tracking-wider text-primary font-bold">WHEN</span>
+</div>
+<span class="font-body-sm text-body-sm text-on-surface-variant">Aging &amp; Dormancy Conditions</span>
+</div>
+<div class="space-y-space-sm">
+<!-- Condition 1 -->
+<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-space-sm p-space-sm rounded-lg bg-surface-container-low">
+<div class="flex items-center gap-space-sm">
+<span class="material-symbols-outlined text-tertiary-container text-[18px]">history_edu</span>
+<span class="font-body-md text-body-md text-on-surface font-medium">Project git inactivity</span>
+</div>
+<div class="flex items-center gap-space-xs">
+<span class="font-code-sm text-code-sm text-outline">&gt;</span>
+<div class="inline-flex items-center bg-surface-container-lowest px-2.5 py-1 rounded-md shadow-sm">
+<input class="w-12 text-center font-code-sm text-code-sm font-semibold text-primary focus:outline-none" type="number" value="30"/>
+<span class="font-body-sm text-body-sm text-on-surface-variant ml-1">days</span>
+</div>
+<button class="w-6 h-6 rounded bg-surface-container flex items-center justify-center text-outline hover:text-on-surface hover:bg-surface-container-high transition-colors" type="button">
+<span class="material-symbols-outlined text-[14px]">unfold_more</span>
+</button>
+</div>
+</div>
+<!-- Condition 2 -->
+<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-space-sm p-space-sm rounded-lg bg-surface-container-low">
+<div class="flex items-center gap-space-sm">
+<span class="material-symbols-outlined text-secondary text-[18px]">calendar_clock</span>
+<span class="font-body-md text-body-md text-on-surface font-medium">Filesystem access / touched</span>
+</div>
+<div class="flex items-center gap-space-xs">
+<span class="font-code-sm text-code-sm text-outline">&gt;</span>
+<div class="inline-flex items-center bg-surface-container-lowest px-2.5 py-1 rounded-md shadow-sm">
+<input class="w-12 text-center font-code-sm text-code-sm font-semibold text-primary focus:outline-none" type="number" value="30"/>
+<span class="font-body-sm text-body-sm text-on-surface-variant ml-1">days ago</span>
+</div>
+<button class="w-6 h-6 rounded bg-surface-container flex items-center justify-center text-outline hover:text-on-surface hover:bg-surface-container-high transition-colors" type="button">
+<span class="material-symbols-outlined text-[14px]">unfold_more</span>
+</button>
+</div>
+</div>
+<div class="flex justify-end pt-1">
+<button class="inline-flex items-center gap-1 font-label-md text-label-md text-primary font-semibold hover:text-primary-container" type="button">
+<span class="material-symbols-outlined text-[16px]">add_circle</span>
+                Add sub-condition
+              </button>
+</div>
+</div>
+</article>
+<!-- 4. THEN Block -->
+<article class="relative bg-surface-container-lowest p-space-lg rounded-xl shadow-sm hover:shadow-md transition-shadow">
+<div class="flex items-center justify-between mb-space-sm">
+<div class="flex items-center gap-space-sm">
+<span class="w-6 h-6 rounded-lg bg-surface-container-high flex items-center justify-center font-code-sm text-code-sm text-primary font-medium">4</span>
+<span class="font-label-sm text-label-sm uppercase tracking-wider text-primary font-bold">THEN</span>
+</div>
+<span class="font-body-sm text-body-sm text-on-surface-variant">Prune Action Pipeline</span>
+</div>
+<div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-space-sm p-space-sm rounded-lg bg-surface-container-low">
+<div class="flex items-center gap-space-sm">
+<div class="w-8 h-8 rounded-lg bg-primary-fixed flex items-center justify-center text-on-primary-fixed">
+<span class="material-symbols-outlined text-[20px]">delete_sweep</span>
+</div>
+<div class="flex flex-col">
+<div class="flex items-center gap-2">
+<span class="font-body-md text-body-md font-semibold text-on-surface">Move entire folder to Trash</span>
+<span class="font-label-sm text-label-sm px-1.5 py-0.5 rounded bg-secondary-fixed text-on-secondary-fixed font-bold">Non-Destructive</span>
+</div>
+<span class="font-body-sm text-body-sm text-on-surface-variant">Always recoverable via macOS Trash. Never calls rm -rf immediately.</span>
+</div>
+</div>
+<button class="font-label-md text-label-md text-outline hover:text-on-surface px-space-sm py-1 rounded bg-surface-container-lowest shadow-sm self-end sm:self-center" type="button">
+              Configure Retention
+            </button>
+</div>
+</article>
+<!-- 5. EXCEPT (Exclusions) Block -->
+<article class="relative bg-surface-container-lowest p-space-lg rounded-xl shadow-sm hover:shadow-md transition-shadow">
+<div class="flex items-center justify-between mb-space-sm">
+<div class="flex items-center gap-space-sm">
+<span class="w-6 h-6 rounded-lg bg-surface-container-high flex items-center justify-center font-code-sm text-code-sm text-primary font-medium">5</span>
+<span class="font-label-sm text-label-sm uppercase tracking-wider text-primary font-bold">EXCEPT</span>
+</div>
+<span class="font-body-sm text-body-sm text-on-surface-variant">Guaranteed Safe Havens</span>
+</div>
+<div class="flex flex-wrap items-center gap-space-sm">
+<!-- Tag 1: Protected Project -->
+<div class="inline-flex items-center gap-1.5 px-space-sm py-1 rounded-lg bg-surface-container-low text-on-surface font-code-sm text-code-sm shadow-sm group">
+<span class="material-symbols-outlined text-[15px] text-secondary">lock</span>
+<span class="font-medium">~/Developer/Scout</span>
+<span class="font-label-sm text-label-sm text-on-surface-variant bg-surface-container px-1 rounded">Pinned</span>
+<button aria-label="Remove exception" class="text-outline hover:text-error transition-colors ml-1" type="button">
+<span class="material-symbols-outlined text-[14px]">close</span>
+</button>
+</div>
+<!-- Tag 2: Pattern Exclude -->
+<div class="inline-flex items-center gap-1.5 px-space-sm py-1 rounded-lg bg-surface-container-low text-on-surface font-code-sm text-code-sm shadow-sm group">
+<span class="material-symbols-outlined text-[15px] text-tertiary">folder_off</span>
+<span class="font-medium">~/Developer/ActiveWork/**</span>
+<button aria-label="Remove exception" class="text-outline hover:text-error transition-colors ml-1" type="button">
+<span class="material-symbols-outlined text-[14px]">close</span>
+</button>
+</div>
+<!-- Add Exception Button -->
+<button class="inline-flex items-center gap-1 px-space-sm py-1 rounded-lg bg-surface-container text-primary font-label-md text-label-md font-semibold hover:bg-surface-container-high transition-colors shadow-sm" type="button">
+<span class="material-symbols-outlined text-[16px]">add</span>
+              Add Exception
+            </button>
+</div>
+</article>
+</div>
+<!-- Right Column: Visual Inspector, Dry Run & Contextual Telemetry (4 cols) -->
+<aside class="lg:col-span-4 flex flex-col gap-space-md">
+<!-- Live Diagnostics & Storage Gauge Tile -->
+<div class="bg-surface-container-lowest p-space-lg rounded-xl shadow-sm space-y-space-md">
+<div class="flex items-center justify-between">
+<span class="font-label-sm text-label-sm uppercase tracking-wider text-outline font-semibold">Live Prune Projection</span>
+<span class="inline-flex items-center gap-1 font-code-sm text-code-sm text-secondary">
+<span class="w-2 h-2 rounded-full bg-secondary"></span> Ready
+            </span>
+</div>
+<!-- Big Stat Hero -->
+<div class="pt-1">
+<div class="font-headline-xl text-headline-xl text-primary font-normal leading-none">6.4 GB</div>
+<p class="font-body-sm text-body-sm text-on-surface-variant mt-1">Estimated recoverable payload right now</p>
+</div>
+<!-- Mini Inline Bar Visualization -->
+<div class="space-y-1.5">
+<div class="flex justify-between font-label-sm text-label-sm text-on-surface-variant">
+<span>8 Eligible Folders</span>
+<span class="font-code-sm text-code-sm">18.6% of ~/Developer</span>
+</div>
+<div class="w-full h-2 rounded-full bg-surface-container overflow-hidden flex">
+<div class="h-full bg-primary-container rounded-full" style="width: 48%;"></div>
+<div class="h-full bg-secondary-fixed-dim rounded-full" style="width: 22%;"></div>
+</div>
+<div class="flex justify-between font-code-sm text-[10px] text-outline pt-0.5">
+<span>0 GB</span>
+<span>43 scanned total</span>
+<span>34.8 GB Total</span>
+</div>
+</div>
+<!-- Telemetry breakdown pill list -->
+<div class="space-y-2 pt-space-xs">
+<div class="flex items-center justify-between p-2 rounded-lg bg-surface-container-low font-body-sm text-body-sm">
+<span class="text-on-surface-variant">Candidate targets</span>
+<span class="font-code-sm text-code-sm text-on-surface font-semibold">43 paths</span>
+</div>
+<div class="flex items-center justify-between p-2 rounded-lg bg-surface-container-low font-body-sm text-body-sm">
+<span class="text-on-surface-variant">Safeguarded paths</span>
+<span class="font-code-sm text-code-sm text-secondary font-semibold">35 preserved</span>
+</div>
+<div class="flex items-center justify-between p-2 rounded-lg bg-surface-container-low font-body-sm text-body-sm">
+<span class="text-on-surface-variant">Estimated prune cycle</span>
+<span class="font-code-sm text-code-sm text-on-surface font-semibold">1.4 seconds</span>
+</div>
+</div>
+</div>
+<!-- System Safety Badge & Integrity Guarantee Card -->
+<div class="bg-surface-container-low p-space-md rounded-xl shadow-sm space-y-space-xs">
+<div class="flex items-center gap-space-xs text-primary font-headline-sm text-headline-sm">
+<span class="material-symbols-outlined text-[18px]">verified_user</span>
+<span>Archival Integrity</span>
+</div>
+<p class="font-body-sm text-body-sm text-on-surface-variant leading-relaxed">
+            TinyPrune inspects active terminal locks and git worktree status before invoking Trash moves. Zero chances of discarding ongoing compilation caches.
+          </p>
+<div class="pt-2">
+<a class="inline-flex items-center gap-1 font-label-sm text-label-sm text-primary font-semibold hover:underline" href="#">
+<span>Inspect safe-delete sandbox protocol</span>
+<span class="material-symbols-outlined text-[14px]">arrow_forward</span>
+</a>
+</div>
+</div>
+<!-- Visual Anchor Placeholder (Editorial Mac Studio Setup) -->
+<div class="relative overflow-hidden rounded-xl bg-surface-container-low p-space-md shadow-sm flex items-center gap-space-md">
+<img class="w-16 h-16 rounded-lg object-cover shrink-0 shadow-sm" data-alt="Warm serene Scandinavian wooden workstation in morning twilight, displaying a sleek laptop running an elegant typography-rich code application beside ceramic coffee cup and fresh botanical plant, minimal soft daylight, peaceful curated atmosphere" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDMP21gA2ltpObhGKhR9b-GAJorJ2V2t-kmVFNpS0M1MumCN89iyM__bnZ47RfpIhhPcYbTLadfIVdGTIPngk0FMGZ7pv_HpVRXENxI9-EfYr-i8B8l2i4sxk7CTxKBzD6UkLLnEuL_zl5DeoSwiocQNpsHKc8ab2nZSijoCuoDXG9vOHe7-mn2YpR2adkEoiIsDNl3uOG728Bp-VkAY9dlVUxztRTXlqc1KAfggrFt7hP1Dpvyv0exuQ"/>
+<div class="flex flex-col min-w-0">
+<span class="font-headline-sm text-headline-sm text-primary truncate">Curated Serenity</span>
+<span class="font-body-sm text-body-sm text-on-surface-variant leading-tight">Silent maintenance for uninterrupted focus.</span>
+</div>
+</div>
+</aside>
+</div>
+<!-- Live Impact Preview Panel (Sub-surface stone tier #F3EEE8 feel) -->
+<section class="mb-space-xl bg-surface-container-low p-space-lg rounded-xl shadow-sm">
+<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-space-sm pb-space-md mb-space-md">
+<div class="space-y-0.5">
+<div class="flex items-center gap-space-sm">
+<span class="w-2.5 h-2.5 rounded-full bg-secondary animate-pulse"></span>
+<h2 class="font-headline-md text-headline-md text-primary font-normal">Dry Run Impact Preview</h2>
+</div>
+<p class="font-body-sm text-body-sm text-on-surface-variant">
+            Live sample of directory targets meeting all active conditions based on index updated 4 minutes ago.
+          </p>
+</div>
+<div class="flex items-center gap-space-sm">
+<span class="px-space-sm py-1 rounded-full bg-surface-container-highest font-code-sm text-code-sm text-on-surface font-medium">
+            43 matching folders found
+          </span>
+<span class="px-space-sm py-1 rounded-full bg-secondary-container text-on-secondary-container font-code-sm text-code-sm font-semibold">
+            8 eligible to prune right now
+          </span>
+</div>
+</div>
+<!-- Path Sample Rows -->
+<div class="space-y-space-xs font-body-md text-body-md">
+<!-- Item 1 -->
+<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-space-sm rounded-lg bg-surface-container-lowest hover:bg-surface-bright transition-colors shadow-sm">
+<div class="flex items-center gap-space-sm min-w-0">
+<span class="material-symbols-outlined text-[18px] text-outline shrink-0">inventory_2</span>
+<span class="font-code-sm text-code-sm text-on-surface font-medium truncate">~/Developer/archive-blog/<span class="text-primary font-semibold">node_modules</span></span>
+</div>
+<div class="flex items-center gap-space-md text-on-surface-variant shrink-0 pl-7 sm:pl-0">
+<span class="font-code-sm text-code-sm text-outline">last touched 74d ago</span>
+<span class="px-2 py-0.5 rounded bg-surface-container font-code-sm text-code-sm font-semibold text-primary">840 MB</span>
+<button class="text-outline hover:text-primary transition-colors" title="Reveal in Finder" type="button">
+<span class="material-symbols-outlined text-[16px]">visibility</span>
+</button>
+</div>
+</div>
+<!-- Item 2 -->
+<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-space-sm rounded-lg bg-surface-container-lowest hover:bg-surface-bright transition-colors shadow-sm">
+<div class="flex items-center gap-space-sm min-w-0">
+<span class="material-symbols-outlined text-[18px] text-outline shrink-0">inventory_2</span>
+<span class="font-code-sm text-code-sm text-on-surface font-medium truncate">~/Developer/react-v17-test/<span class="text-primary font-semibold">node_modules</span></span>
+</div>
+<div class="flex items-center gap-space-md text-on-surface-variant shrink-0 pl-7 sm:pl-0">
+<span class="font-code-sm text-code-sm text-outline">last touched 52d ago</span>
+<span class="px-2 py-0.5 rounded bg-surface-container font-code-sm text-code-sm font-semibold text-primary">1.1 GB</span>
+<button class="text-outline hover:text-primary transition-colors" title="Reveal in Finder" type="button">
+<span class="material-symbols-outlined text-[16px]">visibility</span>
+</button>
+</div>
+</div>
+<!-- Item 3 -->
+<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-space-sm rounded-lg bg-surface-container-lowest hover:bg-surface-bright transition-colors shadow-sm">
+<div class="flex items-center gap-space-sm min-w-0">
+<span class="material-symbols-outlined text-[18px] text-outline shrink-0">inventory_2</span>
+<span class="font-code-sm text-code-sm text-on-surface font-medium truncate">~/Developer/experiments/wasm-bundler/<span class="text-primary font-semibold">node_modules</span></span>
+</div>
+<div class="flex items-center gap-space-md text-on-surface-variant shrink-0 pl-7 sm:pl-0">
+<span class="font-code-sm text-code-sm text-outline">last touched 41d ago</span>
+<span class="px-2 py-0.5 rounded bg-surface-container font-code-sm text-code-sm font-semibold text-primary">620 MB</span>
+<button class="text-outline hover:text-primary transition-colors" title="Reveal in Finder" type="button">
+<span class="material-symbols-outlined text-[16px]">visibility</span>
+</button>
+</div>
+</div>
+</div>
+<!-- Preview Footer Note -->
+<div class="mt-space-md pt-space-xs flex items-center justify-between text-on-surface-variant font-body-sm text-body-sm">
+<span class="italic">Showing 3 of 8 candidates for review</span>
+<button class="font-label-md text-label-md text-primary font-semibold hover:underline" type="button">
+          View full dry-run manifest (8 targets)
+        </button>
+</div>
+</section>
+<!-- Bottom Action Bar (Fixed feel within pane bounds) -->
+<footer class="pt-space-md pb-space-lg flex flex-col sm:flex-row sm:items-center justify-between gap-space-md">
+<!-- Destructive Action -->
+<div>
+<button class="inline-flex items-center gap-1 font-body-sm text-body-sm text-error hover:text-on-error-container hover:underline transition-all" type="button">
+<span class="material-symbols-outlined text-[16px]">delete_forever</span>
+          Delete Rule
+        </button>
+</div>
+<!-- Primary Decision Buttons -->
+<div class="flex flex-wrap items-center gap-space-sm">
+<button class="px-space-md py-2 rounded-lg bg-surface-container text-on-surface font-label-md text-label-md font-semibold hover:bg-surface-container-high transition-colors shadow-sm" type="button">
+          Cancel
+        </button>
+<button class="px-space-md py-2 rounded-lg bg-surface-container-lowest text-primary font-label-md text-label-md font-semibold hover:bg-surface-container transition-colors shadow-sm" type="button">
+          Save as Preview Mode
+        </button>
+<button class="relative group px-space-lg py-2 rounded-lg bg-primary-container text-on-primary font-label-md text-label-md font-semibold shadow-md hover:bg-primary transition-all active:scale-[0.99] flex items-center gap-2" type="button">
+<span class="material-symbols-outlined text-[18px]">check_circle</span>
+<span>Activate Rule</span>
+<span class="absolute inset-0 rounded-lg bg-surface-tint/10 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"></span>
+</button>
+</div>
+</footer>
+</div>
+</div>
+<script>
+  (function initRuleEditor() {
+    const toggleBtn = document.getElementById('rule-master-toggle');
+    const toggleKnob = document.getElementById('rule-master-knob');
+    const toggleLabel = document.getElementById('toggle-label');
+
+    if (toggleBtn && toggleKnob && toggleLabel) {
+      let isActive = true;
+
+      toggleBtn.addEventListener('click', () => {
+        isActive = !isActive;
+        toggleBtn.setAttribute('aria-checked', String(isActive));
+
+        if (isActive) {
+          toggleBtn.classList.remove('bg-surface-container-highest');
+          toggleBtn.classList.add('bg-primary-container');
+          toggleKnob.classList.remove('translate-x-0');
+          toggleKnob.classList.add('translate-x-5');
+          toggleLabel.textContent = 'Rule Active';
+        } else {
+          toggleBtn.classList.remove('bg-primary-container');
+          toggleBtn.classList.add('bg-surface-container-highest');
+          toggleKnob.classList.remove('translate-x-5');
+          toggleKnob.classList.add('translate-x-0');
+          toggleLabel.textContent = 'Rule Paused';
+        }
+      });
+    }
+  })();
+</script></main></div></div></div></body></html>

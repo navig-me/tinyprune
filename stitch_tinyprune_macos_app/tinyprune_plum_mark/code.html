@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+  <defs>
+    <linearGradient id="plumGrad" x1="20%" y1="15%" x2="85%" y2="85%">
+      <stop offset="0%" stop-color="#6E2C58" />
+      <stop offset="55%" stop-color="#4A1C3C" />
+      <stop offset="100%" stop-color="#2D1125" />
+    </linearGradient>
+    <linearGradient id="leafGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#688F72" />
+      <stop offset="100%" stop-color="#3D5A44" />
+    </linearGradient>
+    <linearGradient id="sheen" x1="15%" y1="10%" x2="50%" y2="60%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.28" />
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0" />
+    </linearGradient>
+  </defs>
+  <!-- Stem -->
+  <path d="M 52 28 C 53 20, 58 14, 63 11 C 61 11, 56 16, 50 25 Z" fill="#3D5A44" />
+  <!-- Delicate Leaf -->
+  <path d="M 54 22 C 65 14, 76 18, 77 24 C 76 31, 65 31, 54 22 Z" fill="url(#leafGrad)" />
+  <!-- Leaf subtle vein -->
+  <path d="M 54 22 Q 66 23 74 23.5" stroke="#7DA687" stroke-width="0.8" fill="none" opacity="0.6"/>
+  <!-- Plum / Prune Fruit Body (asymmetric tactile silhouette) -->
+  <path d="M 50 26 C 65 26, 82 37, 81 58 C 80 77, 65 89, 49 89 C 32 89, 19 76, 20 56 C 21 38, 36 26, 50 26 Z" fill="url(#plumGrad)" />
+  <!-- Indentation / subtle crease of prune -->
+  <path d="M 50 26 C 51 38, 48 54, 46 68 C 45 77, 47 84, 49 89" stroke="#38132D" stroke-width="1.6" fill="none" opacity="0.45" stroke-linecap="round" />
+  <!-- Tactile Highlight Sheen -->
+  <ellipse cx="37" cy="45" rx="14" ry="19" transform="rotate(-22 37 45)" fill="url(#sheen)" />
+</svg>

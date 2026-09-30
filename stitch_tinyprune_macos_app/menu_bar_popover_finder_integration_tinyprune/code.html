@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+
+<html lang="en"><head><meta charset="utf-8"/><meta content="width=device-width, initial-scale=1.0" name="viewport"/><meta content="web_dashboard" name="shell-type"/><link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/><link href="https://fonts.googleapis.com" rel="preconnect"/><link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/><link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&amp;family=Manrope:wght@400;500;600&amp;family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/><style>@layer base{html,body{margin:0;padding:0;}body{overscroll-behavior:none;}main>:first-child{margin-top:0!important;}main>:last-child{margin-bottom:0!important;}}::-webkit-scrollbar{display:none;}</style><script src="https://cdn.tailwindcss.com"></script><script id="tailwind-config">tailwind.config={"darkMode":"class","theme":{"extend":{"colors":{"tertiary":"#2b1400","secondary-container":"#c3e9ca","tertiary-fixed":"#ffdcc0","on-secondary-container":"#486a51","on-background":"#1b1c1a","surface-container":"#efeeeb","outline":"#81737a","on-secondary-fixed-variant":"#2d4e37","surface-container-lowest":"#ffffff","on-tertiary-fixed-variant":"#6b3b00","surface-tint":"#814e6f","inverse-on-surface":"#f2f0ed","surface-bright":"#fbf9f6","background":"#fbf9f6","on-primary":"#ffffff","on-secondary-fixed":"#00210e","error-container":"#ffdad6","secondary":"#44664d","on-primary-fixed":"#340b29","inverse-primary":"#f3b4da","on-surface-variant":"#4f444a","on-error":"#ffffff","on-tertiary-fixed":"#2d1600","secondary-fixed-dim":"#aad0b1","on-tertiary":"#ffffff","surface-variant":"#e4e2df","on-primary-fixed-variant":"#663756","primary":"#310927","on-secondary":"#ffffff","on-primary-container":"#be85a8","surface-container-high":"#eae8e5","tertiary-fixed-dim":"#ffb875","surface-container-low":"#f5f3f0","on-tertiary-container":"#d28432","outline-variant":"#d3c2c9","on-surface":"#1b1c1a","surface-container-highest":"#e4e2df","surface-dim":"#dbdad7","primary-container":"#4a1f3d","surface":"#fbf9f6","tertiary-container":"#482600","error":"#ba1a1a","primary-fixed-dim":"#f3b4da","on-error-container":"#93000a","secondary-fixed":"#c6eccd","primary-fixed":"#ffd8ed","inverse-surface":"#30312f"},"borderRadius":{"DEFAULT":"0.25rem","lg":"0.5rem","xl":"0.75rem","full":"9999px"},"spacing":{"gutter":"1rem","space-sm":"0.5rem","space-xs":"0.25rem","space-xl":"1.75rem","space-lg":"1.25rem","margin":"1.5rem","margin-window":"1.25rem","space-md":"0.875rem","gutter-compact":"0.75rem"},"fontFamily":{"headline-lg":["Newsreader"],"body-sm":["Manrope"],"body-lg":["Manrope"],"body-md":["Manrope"],"headline-xl":["Newsreader"],"label-sm":["Manrope"],"headline-sm":["Newsreader"],"label-md":["Manrope"],"headline-md":["Newsreader"],"code-sm":["JetBrains Mono"]},"fontSize":{"headline-lg":["1.75rem",{"lineHeight":"2.25rem","letterSpacing":"-0.015em","fontWeight":"400"}],"body-sm":["0.8125rem",{"lineHeight":"1.25rem","letterSpacing":"0.005em","fontWeight":"400"}],"body-lg":["1rem",{"lineHeight":"1.5rem","letterSpacing":"-0.005em","fontWeight":"400"}],"body-md":["0.875rem",{"lineHeight":"1.375rem","letterSpacing":"0em","fontWeight":"400"}],"headline-xl":["2.25rem",{"lineHeight":"2.75rem","letterSpacing":"-0.02em","fontWeight":"400"}],"label-sm":["0.6875rem",{"lineHeight":"0.875rem","letterSpacing":"0.04em","fontWeight":"600"}],"headline-sm":["1.125rem",{"lineHeight":"1.5rem","letterSpacing":"0em","fontWeight":"500"}],"label-md":["0.75rem",{"lineHeight":"1rem","letterSpacing":"0.02em","fontWeight":"600"}],"headline-md":["1.375rem",{"lineHeight":"1.75rem","letterSpacing":"-0.01em","fontWeight":"500"}],"code-sm":["0.75rem",{"lineHeight":"1.125rem","letterSpacing":"0em","fontWeight":"400"}]}}}}</script></head><body class="bg-background font-body-md text-on-surface antialiased select-none"><div class="min-h-screen flex flex-col bg-background"><header class="fixed top-0 left-0 right-0 h-14 bg-surface-container-low/90 backdrop-blur-xl border-b border-outline-variant/40 z-50 flex items-center justify-between px-space-md"><div class="flex items-center gap-space-lg w-56 flex-shrink-0 pl-space-xs"><div class="flex items-center gap-space-xs"><div class="w-3 h-3 rounded-full bg-[#ff5f57] border border-[#e0443e]/50 cursor-pointer shadow-sm"></div><div class="w-3 h-3 rounded-full bg-[#febc2e] border border-[#d89e24]/50 cursor-pointer shadow-sm"></div><div class="w-3 h-3 rounded-full bg-[#28c840] border border-[#1aab29]/50 cursor-pointer shadow-sm"></div></div><div class="flex items-center gap-space-sm pl-space-xs"><span class="font-headline-sm text-headline-sm text-primary tracking-tight">TinyPrune</span></div></div><div class="flex items-center gap-space-md"><div class="flex items-center gap-space-xs px-space-sm py-1 bg-surface-container-highest/60 rounded-full border border-outline-variant/30 text-on-surface-variant"><span class="w-1.5 h-1.5 rounded-full bg-secondary animate-pulse"></span><span class="font-label-sm text-label-sm font-medium text-on-surface-variant">Running quietly</span></div></div><div class="flex items-center gap-space-md"><div class="flex items-center bg-surface-container px-space-sm py-1 rounded-lg border border-outline-variant/40 text-on-surface-variant"><span class="material-symbols-outlined text-[16px] mr-1">search</span><span class="font-code-sm text-code-sm text-outline">⌘K</span></div><img alt="Profile" class="w-8 h-8 rounded-full object-cover ring-1 ring-outline-variant/50" src="https://lh3.googleusercontent.com/aida/AEtjO1Vh698ienCxLqzEZU3ye2kAazFK4_nbqTAGXc2mKyRecg8ii22gVTWSWu4rwxmf3ynN-ahhONJllongmGM4bMkzyoU2Drz9Z4ZKo2x-mvg3tYww1gQ_by-eLXnEFtlCqt_X5Owaqi3Nc4pTCQqxFL5nxlnJlbed7ZJNwNQ8uXJFzL0GaQ_rEotsO5_C2G-r5bS8sp4Huf-g2xo3_4qDNT3ot7q_IWdHo3bxkOo8JH52Rry4cU46wn3jMW82"/></div></header><div class="flex flex-1 pt-14"><aside class="fixed left-0 top-14 bottom-0 w-60 bg-surface-container-low/80 backdrop-blur-xl border-r border-outline-variant/40 flex flex-col justify-between p-space-md z-40"><div class="space-y-space-md"><div class="px-space-xs"><span class="font-label-sm text-label-sm uppercase tracking-wider text-outline font-semibold">Library</span></div><nav class="flex flex-col gap-1" data-active-classes="bg-primary-container text-on-primary-container font-medium rounded-lg shadow-sm"><a class="flex items-center justify-between px-space-sm py-1.5 rounded-lg text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface transition-colors" data-path="overview" href="#"><div class="flex items-center gap-space-sm"><span class="material-symbols-outlined text-[18px]">space_dashboard</span><span class="font-body-md text-body-md">Overview</span></div></a><a class="flex items-center justify-between px-space-sm py-1.5 rounded-lg text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface transition-colors" data-path="rules" href="#"><div class="flex items-center gap-space-sm"><span class="material-symbols-outlined text-[18px]">tune</span><span class="font-body-md text-body-md">Rules</span></div></a><a class="flex items-center justify-between px-space-sm py-1.5 rounded-lg text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface transition-colors" data-path="upcoming" href="#"><div class="flex items-center gap-space-sm"><span class="material-symbols-outlined text-[18px]">schedule</span><span class="font-body-md text-body-md">Upcoming</span></div><span class="px-1.5 py-0.5 rounded-full bg-secondary-container text-on-secondary-container font-label-sm text-label-sm font-semibold">17</span></a><a class="flex items-center justify-between px-space-sm py-1.5 rounded-lg text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface transition-colors" data-path="activity" href="#"><div class="flex items-center gap-space-sm"><span class="material-symbols-outlined text-[18px]">history</span><span class="font-body-md text-body-md">Activity</span></div></a><a class="flex items-center justify-between px-space-sm py-1.5 rounded-lg text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface transition-colors" data-path="templates" href="#"><div class="flex items-center gap-space-sm"><span class="material-symbols-outlined text-[18px]">folder_supervised</span><span class="font-body-md text-body-md">Templates</span></div></a><a aria-current="page" class="flex items-center justify-between px-space-sm py-1.5 transition-colors bg-primary-container text-on-primary-container font-medium rounded-lg shadow-sm" data-path="settings" href="#"><div class="flex items-center gap-space-sm"><span class="material-symbols-outlined text-[18px]">settings</span><span class="font-body-md text-body-md">Settings</span></div></a></nav></div><div class="p-space-sm rounded-xl bg-surface-container border border-outline-variant/30 flex items-start gap-space-sm"><span class="material-symbols-outlined text-secondary text-[20px] mt-0.5">eco</span><div class="flex flex-col"><span class="font-label-md text-label-md font-semibold text-on-surface">Storage tidy</span><span class="font-body-sm text-body-sm text-on-surface-variant leading-tight mt-0.5">18.2 GB reclaimed this month</span></div></div></aside><div class="flex-1 pl-60"><main class="w-full px-margin-window py-margin-window bg-background min-h-[calc(100vh-3.5rem)]"><div class="flex flex-col w-full">
+<!-- Desktop Integration Stage / Top Bar Showcase Area -->
+<div class="relative w-full rounded-xl overflow-hidden bg-surface-container-high/60 p-space-md lg:p-space-xl flex flex-col gap-space-lg shadow-sm">
+<!-- Top Level Briefing Bar -->
+<div class="flex flex-col md:flex-row md:items-center justify-between gap-space-sm pb-space-sm border-b-0">
+<div class="flex items-center gap-space-sm">
+<span class="px-2.5 py-1 rounded-full bg-secondary-container text-on-secondary-container font-label-sm text-label-sm tracking-wide uppercase font-semibold">
+          Native System Surface
+        </span>
+<span class="font-body-sm text-body-sm text-on-surface-variant">macOS Sequoia (15.3) Menu Bar &amp; Finder Shell Extension</span>
+</div>
+<div class="flex items-center gap-space-sm self-start md:self-auto">
+<span class="font-code-sm text-code-sm text-on-surface-variant bg-surface-container px-space-sm py-1 rounded-lg">Target: /Applications/TinyPrune.app</span>
+</div>
+</div>
+<!-- Realistic macOS Desktop Environment Mockup -->
+<div class="relative w-full rounded-xl overflow-visible bg-[#f1ebe3] shadow-xl p-0 flex flex-col min-h-[780px]">
+<!-- macOS Menu Bar Strip -->
+<div class="h-7 w-full bg-surface-container-lowest/80 backdrop-blur-2xl rounded-t-xl px-space-md flex items-center justify-between z-30 select-none text-[13px] text-on-surface">
+<!-- Left: System Apple Menu & Active Host App -->
+<div class="flex items-center gap-4 text-on-surface font-medium text-xs">
+<span class="material-symbols-outlined text-[15px] cursor-pointer hover:opacity-70">file_download</span>
+<span class="font-semibold cursor-pointer">Finder</span>
+<span class="cursor-pointer hover:opacity-70">File</span>
+<span class="cursor-pointer hover:opacity-70">Edit</span>
+<span class="cursor-pointer hover:opacity-70">View</span>
+<span class="cursor-pointer hover:opacity-70">Go</span>
+<span class="cursor-pointer hover:opacity-70">Window</span>
+<span class="cursor-pointer hover:opacity-70">Help</span>
+</div>
+<!-- Right: Status Items & TinyPrune Anchor -->
+<div class="flex items-center gap-3.5 text-xs text-on-surface-variant font-medium">
+<!-- Ambient Status Elements -->
+<span class="material-symbols-outlined text-[14px]">wifi</span>
+<div class="flex items-center gap-1">
+<span class="font-code-sm text-[11px]">88%</span>
+<span class="material-symbols-outlined text-[15px]">battery_5_bar</span>
+</div>
+<span class="material-symbols-outlined text-[14px]">search</span>
+<span class="material-symbols-outlined text-[14px]">toggle_on</span>
+<!-- TinyPrune Popover Menu Bar Icon (Active state) -->
+<div class="relative flex items-center justify-center px-1.5 py-0.5 rounded bg-primary-container text-on-primary-container shadow-inner cursor-pointer" id="menubar-anchor">
+<img alt="TinyPrune Logo" class="w-4 h-4 rounded-xs object-contain" src="https://lh3.googleusercontent.com/aida/AEtjO1Vh698ienCxLqzEZU3ye2kAazFK4_nbqTAGXc2mKyRecg8ii22gVTWSWu4rwxmf3ynN-ahhONJllongmGM4bMkzyoU2Drz9Z4ZKo2x-mvg3tYww1gQ_by-eLXnEFtlCqt_X5Owaqi3Nc4pTCQqxFL5nxlnJlbed7ZJNwNQ8uXJFzL0GaQ_rEotsO5_C2G-r5bS8sp4Huf-g2xo3_4qDNT3ot7q_IWdHo3bxkOo8JH52Rry4cU46wn3jMW82"/>
+<!-- Anchored Popover Bubble -->
+<div class="absolute top-[26px] right-[-10px] w-[330px] rounded-xl bg-surface-container-lowest/95 backdrop-blur-2xl shadow-2xl p-space-md text-on-surface z-50 flex flex-col gap-space-sm text-left">
+<!-- Upward Anchor Bevel / Triangle -->
+<div class="absolute -top-1.5 right-4 w-3 h-3 bg-surface-container-lowest rotate-45"></div>
+<!-- Popover Header -->
+<div class="flex items-center justify-between pb-1">
+<div class="flex items-center gap-space-sm">
+<img alt="TinyPrune Logo" class="w-6 h-6 rounded-md shadow-sm" src="https://lh3.googleusercontent.com/aida/AEtjO1Vh698ienCxLqzEZU3ye2kAazFK4_nbqTAGXc2mKyRecg8ii22gVTWSWu4rwxmf3ynN-ahhONJllongmGM4bMkzyoU2Drz9Z4ZKo2x-mvg3tYww1gQ_by-eLXnEFtlCqt_X5Owaqi3Nc4pTCQqxFL5nxlnJlbed7ZJNwNQ8uXJFzL0GaQ_rEotsO5_C2G-r5bS8sp4Huf-g2xo3_4qDNT3ot7q_IWdHo3bxkOo8JH52Rry4cU46wn3jMW82"/>
+<div class="flex flex-col">
+<span class="font-headline-sm text-headline-sm text-primary leading-none">TinyPrune</span>
+<span class="font-code-sm text-[10px] text-outline mt-0.5">v2.4.1 (build 410)</span>
+</div>
+</div>
+<div class="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-secondary-container/60 text-on-secondary-container">
+<span class="w-1.5 h-1.5 rounded-full bg-secondary animate-pulse"></span>
+<span class="font-label-sm text-[11px] font-semibold">Running quietly</span>
+</div>
+</div>
+<!-- Stat Pill Banner -->
+<div class="grid grid-cols-2 gap-space-xs p-space-xs rounded-lg bg-surface-container-low text-on-surface-variant text-[11px]">
+<div class="flex flex-col px-space-xs py-1">
+<span class="font-label-sm text-[10px] uppercase text-outline">Upcoming</span>
+<span class="font-semibold text-on-surface text-body-sm">17 items queued</span>
+</div>
+<div class="flex flex-col px-space-xs py-1">
+<span class="font-label-sm text-[10px] uppercase text-outline">Reclaimed</span>
+<span class="font-semibold text-secondary text-body-sm">18.2 GB this mo</span>
+</div>
+</div>
+<!-- Next in Queue Card -->
+<div class="rounded-lg bg-surface-container p-space-sm flex flex-col gap-1.5">
+<div class="flex items-center justify-between text-outline text-[11px] font-medium">
+<span class="flex items-center gap-1">
+<span class="material-symbols-outlined text-[13px] text-tertiary-container">schedule</span>
+                    Next candidate
+                  </span>
+<span class="font-code-sm text-[10px] bg-surface-container-highest px-1.5 py-0.5 rounded text-on-surface-variant">in 42 mins</span>
+</div>
+<div class="flex items-center gap-space-xs">
+<span class="material-symbols-outlined text-primary text-[18px]">folder_zip</span>
+<div class="flex flex-col min-w-0">
+<span class="font-body-md text-[13px] font-semibold text-on-surface truncate">Chrome.dmg</span>
+<span class="font-code-sm text-[10px] text-outline">~/Downloads · 214.8 MB</span>
+</div>
+</div>
+<div class="flex items-center gap-space-xs mt-1">
+<button class="flex-1 py-1 rounded bg-primary-container hover:bg-primary text-on-primary font-label-md text-[11px] font-semibold transition-colors flex items-center justify-center gap-1">
+<span class="material-symbols-outlined text-[12px]">auto_delete</span>
+                    Prune Now
+                  </button>
+<button class="px-space-md py-1 rounded bg-surface-container-highest hover:bg-surface-dim text-on-surface-variant font-label-md text-[11px] transition-colors">
+                    Skip
+                  </button>
+</div>
+</div>
+<!-- Pause Automatic Pruning Segment -->
+<div class="flex flex-col gap-1 pt-1">
+<span class="font-label-sm text-[10px] uppercase text-outline font-semibold">Pause automatic pruning</span>
+<div class="grid grid-cols-3 gap-1 bg-surface-container-high p-0.5 rounded-lg text-center font-label-md text-[11px] text-on-surface-variant">
+<button class="py-1 rounded bg-surface-container-lowest text-on-surface shadow-sm font-semibold hover:opacity-90">1 hour</button>
+<button class="py-1 rounded hover:bg-surface-container-lowest/60 transition-colors">Today</button>
+<button class="py-1 rounded hover:bg-surface-container-lowest/60 transition-colors">Until Tomorrow</button>
+</div>
+</div>
+<!-- Menu Bar Navigation / Utility Links -->
+<div class="flex flex-col pt-1 gap-0.5 text-[12px] text-on-surface">
+<a class="flex items-center justify-between px-2 py-1 rounded hover:bg-surface-container-high transition-colors" href="#">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[15px] text-on-surface-variant">open_in_new</span>
+<span>Open TinyPrune...</span>
+</div>
+<span class="font-code-sm text-[10px] text-outline">⌘O</span>
+</a>
+<a class="flex items-center justify-between px-2 py-1 rounded hover:bg-surface-container-high transition-colors" href="#">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[15px] text-on-surface-variant">settings</span>
+<span>Preferences...</span>
+</div>
+<span class="font-code-sm text-[10px] text-outline">⌘,</span>
+</a>
+<div class="h-[1px] bg-surface-variant my-1"></div>
+<a class="flex items-center justify-between px-2 py-1 rounded text-error hover:bg-error-container/40 transition-colors" href="#">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[15px]">power_settings_new</span>
+<span>Quit TinyPrune</span>
+</div>
+<span class="font-code-sm text-[10px] text-error/70">⌘Q</span>
+</a>
+</div>
+</div>
+</div>
+<!-- Date/Time Display -->
+<span class="font-medium text-on-surface">Tue Oct 24   5:58 PM</span>
+</div>
+</div>
+<!-- Desktop Body Canvas: Wallpaper & Realistic Finder Window Container -->
+<div class="relative flex-1 p-space-lg lg:p-space-xl flex flex-col justify-start items-center overflow-hidden bg-gradient-to-br from-[#ebe3d7] via-[#f7f3ec] to-[#ded5c6]">
+<!-- Ambient Wall Art Watermark -->
+<div class="absolute -right-20 -bottom-20 w-96 h-96 rounded-full bg-primary/5 filter blur-3xl pointer-events-none"></div>
+<div class="absolute -left-20 top-20 w-80 h-80 rounded-full bg-secondary/5 filter blur-3xl pointer-events-none"></div>
+<!-- Banner for Native Finder Showcase -->
+<div class="w-full max-w-4xl flex items-center justify-between mb-space-md">
+<div class="flex items-center gap-space-sm">
+<span class="flex h-2.5 w-2.5 rounded-full bg-secondary"></span>
+<span class="font-headline-sm text-headline-sm text-primary">Finder Contextual Extension Active</span>
+</div>
+<span class="font-code-sm text-code-sm text-outline">NSExtensionPointIdentifier: com.apple.FinderSync</span>
+</div>
+<!-- The Finder Window (Simulated Native macOS Split-View) -->
+<div class="relative w-full max-w-4xl bg-surface-container-lowest/90 backdrop-blur-xl rounded-xl shadow-2xl flex flex-col overflow-visible">
+<!-- Finder Window Header Bar -->
+<div class="h-10 bg-surface-container-high/70 backdrop-blur-md px- space-md flex items-center justify-between select-none">
+<!-- Window Controls -->
+<div class="flex items-center gap-1.5 pl-3">
+<span class="w-3 h-3 rounded-full bg-[#ff5f57] inline-block shadow-xs"></span>
+<span class="w-3 h-3 rounded-full bg-[#febc2e] inline-block shadow-xs"></span>
+<span class="w-3 h-3 rounded-full bg-[#28c840] inline-block shadow-xs"></span>
+</div>
+<!-- Path Breadcrumbs / Segment Title -->
+<div class="flex items-center gap-1 text-on-surface-variant font-medium text-xs">
+<span class="material-symbols-outlined text-[15px]">folder</span>
+<span>Developer</span>
+<span class="text-outline">›</span>
+<span class="text-on-surface font-semibold">Workspace</span>
+</div>
+<!-- Finder Toolbar Actions -->
+<div class="flex items-center gap-2 pr-3 text-on-surface-variant">
+<div class="flex items-center bg-surface-container-highest/80 rounded px-1.5 py-0.5 gap-1">
+<span class="material-symbols-outlined text-[14px]">view_column</span>
+<span class="material-symbols-outlined text-[14px]">view_list</span>
+<span class="material-symbols-outlined text-[14px]">grid_view</span>
+</div>
+<span class="material-symbols-outlined text-[16px] cursor-pointer">share</span>
+<span class="material-symbols-outlined text-[16px] cursor-pointer">label</span>
+</div>
+</div>
+<!-- Finder Window Body: Sidebar + File List View -->
+<div class="flex flex-1 min-h-[380px] text-xs">
+<!-- Finder Sidebar -->
+<div class="w-44 bg-surface-container-low/70 backdrop-blur-md p-space-sm flex flex-col gap-3 text-on-surface-variant select-none">
+<div>
+<span class="font-label-sm text-[10px] uppercase text-outline font-semibold px-2">Favorites</span>
+<div class="flex flex-col gap-0.5 mt-1 font-body-sm text-[12px]">
+<div class="flex items-center gap-2 px-2 py-1 rounded hover:bg-surface-container-high cursor-pointer">
+<span class="material-symbols-outlined text-[15px] text-primary">cloud</span>
+<span>iCloud Drive</span>
+</div>
+<div class="flex items-center gap-2 px-2 py-1 rounded hover:bg-surface-container-high cursor-pointer">
+<span class="material-symbols-outlined text-[15px] text-primary">apps</span>
+<span>Applications</span>
+</div>
+<div class="flex items-center gap-2 px-2 py-1 rounded hover:bg-surface-container-high cursor-pointer">
+<span class="material-symbols-outlined text-[15px] text-primary">description</span>
+<span>Documents</span>
+</div>
+<div class="flex items-center gap-2 px-2 py-1 rounded hover:bg-surface-container-high cursor-pointer">
+<span class="material-symbols-outlined text-[15px] text-primary">download</span>
+<span>Downloads</span>
+</div>
+<div class="flex items-center gap-2 px-2 py-1 rounded bg-surface-container-highest text-on-surface font-semibold cursor-pointer">
+<span class="material-symbols-outlined text-[15px] text-primary">terminal</span>
+<span>Developer</span>
+</div>
+</div>
+</div>
+<div>
+<span class="font-label-sm text-[10px] uppercase text-outline font-semibold px-2">Tags</span>
+<div class="flex items-center gap-2 px-2 py-1 text-on-surface-variant text-[12px]">
+<span class="w-2 h-2 rounded-full bg-secondary"></span>
+<span>TinyPrune Rules</span>
+</div>
+</div>
+</div>
+<!-- Finder File Table & Open Context Menu Layer -->
+<div class="relative flex-1 bg-surface-container-lowest/60 p-space-xs flex flex-col">
+<!-- Column Titles -->
+<div class="grid grid-cols-12 px-space-sm py-1 text-outline font-label-sm text-[11px] select-none border-b-0">
+<span class="col-span-6 font-semibold">Name</span>
+<span class="col-span-3 font-semibold">Date Modified</span>
+<span class="col-span-1 font-semibold">Size</span>
+<span class="col-span-2 font-semibold text-right">Kind</span>
+</div>
+<!-- List Rows -->
+<div class="flex flex-col gap-0.5 select-none font-body-sm text-[12px]">
+<!-- Row 1: Normal Folder -->
+<div class="grid grid-cols-12 px-space-sm py-1 rounded hover:bg-surface-container-high items-center text-on-surface">
+<div class="col-span-6 flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px] text-primary-container">folder</span>
+<span>core-engine</span>
+</div>
+<span class="col-span-3 text-on-surface-variant font-code-sm text-[11px]">Yesterday at 3:12 PM</span>
+<span class="col-span-1 text-on-surface-variant font-code-sm text-[11px]">--</span>
+<span class="col-span-2 text-right text-on-surface-variant">Folder</span>
+</div>
+<!-- Row 2: Selected Folder (Right Clicked / Target of Context Menu) -->
+<div class="relative grid grid-cols-12 px-space-sm py-1 rounded bg-[#e8dfec] text-on-surface font-medium items-center shadow-xs">
+<div class="col-span-6 flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px] text-primary">folder</span>
+<span class="font-semibold text-primary">~/Developer/legacy-app</span>
+<span class="px-1.5 py-0.2 rounded bg-tertiary-fixed text-on-tertiary-fixed-variant font-code-sm text-[9px] uppercase tracking-wider font-bold">Unpruned</span>
+</div>
+<span class="col-span-3 text-on-surface-variant font-code-sm text-[11px]">Sep 14, 2023</span>
+<span class="col-span-1 text-on-surface-variant font-code-sm text-[11px]">1.42 GB</span>
+<span class="col-span-2 text-right text-on-surface-variant">Folder</span>
+<!-- NATIVE MACOS RIGHT-CLICK CONTEXT MENU -->
+<div class="absolute top-6 left-32 w-56 bg-surface-container-lowest/95 backdrop-blur-2xl rounded-xl shadow-2xl p-1 text-on-surface z-40 flex flex-col text-[12px]">
+<div class="px-3 py-1 rounded hover:bg-surface-container-high cursor-default">Open</div>
+<div class="px-3 py-1 rounded hover:bg-surface-container-high cursor-default">Open With</div>
+<div class="h-[1px] bg-surface-variant my-0.5"></div>
+<div class="px-3 py-1 rounded hover:bg-surface-container-high cursor-default">Rename</div>
+<div class="px-3 py-1 rounded hover:bg-surface-container-high cursor-default">Duplicate</div>
+<div class="px-3 py-1 rounded hover:bg-surface-container-high cursor-default">Compress "legacy-app"</div>
+<div class="h-[1px] bg-surface-variant my-0.5"></div>
+<div class="px-3 py-1 rounded hover:bg-surface-container-high cursor-default">Quick Look</div>
+<div class="px-3 py-1 rounded hover:bg-surface-container-high cursor-default">Copy "legacy-app"</div>
+<!-- Context Menu Highlighted Trigger for TinyPrune Submenu -->
+<div class="relative group px-2 py-1 rounded bg-primary-container text-on-primary-container flex items-center justify-between font-medium cursor-default shadow-xs">
+<div class="flex items-center gap-2">
+<img alt="TinyPrune Logo" class="w-4 h-4 rounded-xs" src="https://lh3.googleusercontent.com/aida/AEtjO1Vh698ienCxLqzEZU3ye2kAazFK4_nbqTAGXc2mKyRecg8ii22gVTWSWu4rwxmf3ynN-ahhONJllongmGM4bMkzyoU2Drz9Z4ZKo2x-mvg3tYww1gQ_by-eLXnEFtlCqt_X5Owaqi3Nc4pTCQqxFL5nxlnJlbed7ZJNwNQ8uXJFzL0GaQ_rEotsO5_C2G-r5bS8sp4Huf-g2xo3_4qDNT3ot7q_IWdHo3bxkOo8JH52Rry4cU46wn3jMW82"/>
+<span>TinyPrune</span>
+</div>
+<span class="material-symbols-outlined text-[14px]">arrow_right</span>
+<!-- SUBMENU (Expanded Rightward) -->
+<div class="absolute left-full top-[-4px] ml-1 w-60 bg-surface-container-lowest/98 backdrop-blur-2xl rounded-xl shadow-2xl p-1 text-on-surface z-50 flex flex-col text-[12px]">
+<!-- Keep Protect Action -->
+<div class="flex items-center justify-between px-2.5 py-1.5 rounded hover:bg-primary-container hover:text-on-primary-container cursor-pointer transition-colors group/item">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[15px] text-secondary">lock</span>
+<span class="font-semibold">Keep (Protect)</span>
+</div>
+<span class="font-code-sm text-[10px] text-outline group-hover/item:text-on-primary-container">⌘K</span>
+</div>
+<div class="h-[1px] bg-surface-variant my-0.5"></div>
+<!-- Pruning Lifetime Shortcuts -->
+<div class="px-2.5 py-1 rounded hover:bg-primary-container hover:text-on-primary-container cursor-pointer transition-colors">
+<span>Expire Tonight</span>
+</div>
+<div class="px-2.5 py-1 rounded hover:bg-primary-container hover:text-on-primary-container cursor-pointer transition-colors flex items-center justify-between">
+<span>Expire in 7 Days</span>
+<span class="font-code-sm text-[10px] text-outline">Oct 31</span>
+</div>
+<div class="px-2.5 py-1 rounded hover:bg-primary-container hover:text-on-primary-container cursor-pointer transition-colors flex items-center justify-between">
+<span>Expire in 30 Days</span>
+<span class="font-code-sm text-[10px] text-outline">Nov 23</span>
+</div>
+<div class="h-[1px] bg-surface-variant my-0.5"></div>
+<div class="px-2.5 py-1 rounded hover:bg-primary-container hover:text-on-primary-container cursor-pointer transition-colors flex items-center gap-2">
+<span class="material-symbols-outlined text-[14px]">hourglass_top</span>
+<span>Set Folder Lifetime...</span>
+</div>
+<div class="h-[1px] bg-surface-variant my-0.5"></div>
+<!-- Inspection & Automation Rules -->
+<div class="px-2.5 py-1 rounded hover:bg-primary-container hover:text-on-primary-container cursor-pointer transition-colors flex items-center gap-2">
+<span class="material-symbols-outlined text-[14px] text-outline">help_outline</span>
+<span>Why will this expire?</span>
+</div>
+<div class="px-2.5 py-1 rounded hover:bg-primary-container hover:text-on-primary-container cursor-pointer transition-colors flex items-center gap-2">
+<span class="material-symbols-outlined text-[14px] text-primary">add_circle</span>
+<span>Create Rule from Folder...</span>
+</div>
+</div>
+</div>
+<div class="h-[1px] bg-surface-variant my-0.5"></div>
+<div class="px-3 py-1 rounded hover:bg-surface-container-high cursor-default">Share...</div>
+</div>
+</div>
+<!-- Row 3: Regular File -->
+<div class="grid grid-cols-12 px-space-sm py-1 rounded hover:bg-surface-container-high items-center text-on-surface">
+<div class="col-span-6 flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px] text-on-surface-variant">description</span>
+<span>dataset-dump-2023.csv</span>
+</div>
+<span class="col-span-3 text-on-surface-variant font-code-sm text-[11px]">Aug 19, 2023</span>
+<span class="col-span-1 text-on-surface-variant font-code-sm text-[11px]">420.1 MB</span>
+<span class="col-span-2 text-right text-on-surface-variant">CSV Document</span>
+</div>
+<!-- Row 4: Regular File -->
+<div class="grid grid-cols-12 px-space-sm py-1 rounded hover:bg-surface-container-high items-center text-on-surface">
+<div class="col-span-6 flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px] text-primary-container">folder</span>
+<span>node_modules</span>
+<span class="w-1.5 h-1.5 rounded-full bg-secondary" title="Pruning protected"></span>
+</div>
+<span class="col-span-3 text-on-surface-variant font-code-sm text-[11px]">Jun 04, 2023</span>
+<span class="col-span-1 text-on-surface-variant font-code-sm text-[11px]">890 MB</span>
+<span class="col-span-2 text-right text-on-surface-variant">Folder</span>
+</div>
+<!-- Row 5: Regular File -->
+<div class="grid grid-cols-12 px-space-sm py-1 rounded hover:bg-surface-container-high items-center text-on-surface">
+<div class="col-span-6 flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px] text-on-surface-variant">folder_zip</span>
+<span>archive-q2-backup.tar.gz</span>
+</div>
+<span class="col-span-3 text-on-surface-variant font-code-sm text-[11px]">May 11, 2023</span>
+<span class="col-span-1 text-on-surface-variant font-code-sm text-[11px]">3.1 GB</span>
+<span class="col-span-2 text-right text-on-surface-variant">Gzip Archive</span>
+</div>
+</div>
+<!-- Finder Path Status Footer -->
+<div class="mt-auto pt-2 px-space-sm pb-1 text-outline font-code-sm text-[11px] flex items-center justify-between border-t-0">
+<span>5 items, 142.8 GB available on Macintosh HD</span>
+<span class="text-secondary font-medium">FinderSync: Watching ~/Developer</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Editorial Detail Row / Feature Callouts -->
+<div class="grid grid-cols-1 md:grid-cols-3 gap-space-md pt-space-xs">
+<!-- Card 1 -->
+<div class="p-space-md rounded-xl bg-surface-container-lowest shadow-sm flex flex-col gap-2">
+<div class="flex items-center gap-2 text-primary font-semibold">
+<span class="material-symbols-outlined text-[20px]">notifications_paused</span>
+<span class="font-headline-sm text-headline-sm">Unobtrusive Quietness</span>
+</div>
+<p class="font-body-sm text-body-sm text-on-surface-variant">
+          Lives comfortably inside the macOS menu bar popover without cluttering the Dock or interrupting active development flow.
+        </p>
+</div>
+<!-- Card 2 -->
+<div class="p-space-md rounded-xl bg-surface-container-lowest shadow-sm flex flex-col gap-2">
+<div class="flex items-center gap-2 text-secondary font-semibold">
+<span class="material-symbols-outlined text-[20px]">lock_clock</span>
+<span class="font-headline-sm text-headline-sm">Context-Driven Control</span>
+</div>
+<p class="font-body-sm text-body-sm text-on-surface-variant">
+          Right-click directly in Finder to lock directories forever with "Keep" or set discrete expiration dates right from macOS contextual menus.
+        </p>
+</div>
+<!-- Card 3 -->
+<div class="p-space-md rounded-xl bg-surface-container-lowest shadow-sm flex flex-col gap-2">
+<div class="flex items-center gap-2 text-tertiary-container font-semibold">
+<span class="material-symbols-outlined text-[20px]">troubleshoot</span>
+<span class="font-headline-sm text-headline-sm">Transparent Explanations</span>
+</div>
+<p class="font-body-sm text-body-sm text-on-surface-variant">
+          Ask "Why will this expire?" directly in Finder to inspect active criteria, matching pattern rules, and precise time horizons.
+        </p>
+</div>
+</div>
+</div>
+</div></main></div></div></div></body></html>
