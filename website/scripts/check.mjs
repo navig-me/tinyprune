@@ -5,6 +5,9 @@ const required = [
   '<!doctype html>',
   '<title>TinyPrune | File lifetimes for macOS</title>',
   'assets/tinyprune-plum.svg',
+  'assets/overview.png',
+  'assets/upcoming-inspector.png',
+  'assets/rule-editor.png',
   'https://docs.tinyprune.com',
   'https://github.com/navig-me/tinyprune',
 ];
