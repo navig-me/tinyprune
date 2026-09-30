@@ -3,7 +3,8 @@ import { readFile } from 'node:fs/promises';
 const html = await readFile(new URL('../index.html', import.meta.url), 'utf8');
 const required = [
   '<!doctype html>',
-  '<title>TinyPrune — File lifetimes for your Mac</title>',
+  '<title>TinyPrune | File lifetimes for macOS</title>',
+  'assets/tinyprune-plum.svg',
   'https://docs.tinyprune.com',
   'https://github.com/navig-me/tinyprune',
 ];
@@ -14,3 +15,4 @@ for (const value of required) {
 
 if ((html.match(/<main>/g) ?? []).length !== 1) throw new Error('website must contain one main landmark');
 if (!html.includes('<meta name="viewport"')) throw new Error('website must declare a viewport');
+if (/[—–]/.test(html)) throw new Error('website must not contain em or en dashes');

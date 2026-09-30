@@ -1,50 +1,32 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="description" content="TinyPrune documentation: safe local file lifetimes for macOS.">
-    <meta name="theme-color" content="#310927">
-    <title>TinyPrune documentation</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,400;6..72,500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="styles.css">
-  </head>
-  <body>
-    <header><a class="wordmark" href="https://tinyprune.com"><span aria-hidden="true">✦</span> TinyPrune</a><a class="site-link" href="https://tinyprune.com">tinyprune.com</a></header>
-    <div class="layout">
-      <aside><p>Documentation</p><nav aria-label="Documentation"><a href="#overview">Overview</a><a href="#safety">Safety model</a><a href="#rules">Rules</a><a href="#preview">Preview first</a><a href="#updates">Updates</a><a href="#development">Development</a></nav><a class="source" href="https://github.com/navig-me/tinyprune">View source on GitHub</a></aside>
-      <main>
-        <article>
-          <p class="eyebrow">TinyPrune documentation</p><h1 id="overview">File lifetimes, locally enforced.</h1>
-          <p class="intro">TinyPrune is a macOS utility for assigning lifecycle rules to files and folders. It exists to manage disposable material without becoming a generic system cleaner.</p>
-          <div class="notice"><b>Project status</b><p>TinyPrune is under active development. These docs describe the intended v1 behavior; download and installation instructions will be published with the first signed release.</p></div>
-
-          <h2 id="safety">Safety model</h2>
-          <p>TinyPrune only operates on folders you select. It records a stable filesystem identity for each managed root rather than trusting a path alone. Before an item moves, the agent evaluates the current filesystem state again.</p>
-          <ul><li><strong>Trash, not permanent deletion.</strong> Eligible items move through the standard macOS Trash path.</li><li><strong>Keep wins.</strong> An explicit Keep override takes precedence over every rule. A protected descendant blocks its parent from being moved.</li><li><strong>Preview has no side effects.</strong> Preview evaluates matching, scheduling, and audit records but never invokes the Trash executor.</li><li><strong>Local operation.</strong> Normal processing reads metadata only. TinyPrune does not require an account, cloud sync, or file-content inspection.</li></ul>
-
-          <h2 id="rules">Rules</h2>
-          <p>A rule answers four questions: where to look, what to match, when it expires, and what to do. Rules can match files or folders by scope, depth, exact name, glob, age, modification time, project inactivity, or an explicit override.</p>
-          <pre><code>WHERE  ~/Developer/**
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="TinyPrune documentation for safe, local file lifetimes on macOS.">
+  <meta name="theme-color" content="#fbf9f6">
+  <title>TinyPrune documentation</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header><a class="brand" href="https://tinyprune.com"><img src="assets/tinyprune-plum.svg" alt=""><span>TinyPrune</span></a><a class="home" href="https://tinyprune.com">Back to tinyprune.com</a></header>
+  <div class="shell">
+    <aside><p>Guide</p><nav aria-label="Documentation"><a href="#start">Getting started</a><a href="#safety">Safety model</a><a href="#rules">Rules</a><a href="#preview">Preview</a><a href="#updates">Updates</a></nav><a class="source" href="https://github.com/navig-me/tinyprune">View the source</a></aside>
+    <main>
+      <article>
+        <p class="eyebrow">Documentation</p>
+        <h1 id="start">A safer way to clear the things you no longer need.</h1>
+        <p class="intro">TinyPrune gives folders and files a lifetime. It works locally and moves eligible items to the Mac Trash.</p>
+        <div class="status"><strong>Project status</strong><p>TinyPrune is in active development. Installation instructions will arrive with the first signed release.</p></div>
+        <section id="safety"><h2>Safety is part of every rule.</h2><p>TinyPrune manages only the folders you choose. It records a stable filesystem identity for each root, then checks the current state again before any item moves.</p><div class="principles"><div><h3>Trash, not delete</h3><p>Eligible items use the standard macOS Trash path.</p></div><div><h3>Keep always wins</h3><p>A Keep override takes precedence over every rule.</p></div><div><h3>Local by design</h3><p>Normal operation reads metadata only, with no account or cloud sync.</p></div></div></section>
+        <section id="rules"><h2>Rules describe a clear boundary.</h2><p>Every rule establishes where to look, what to match, when it expires, and what happens next.</p><pre><code>WHERE  ~/Developer/**
 WHAT   Folder named node_modules
 WHEN   Project inactive for 30 days
-ACTION Move the folder to Trash</code></pre>
-          <p>Rules can apply to an entire folder or to matching children. More specific rules and explicit item overrides resolve predictably. The inspector shows the matched rule, expiry basis, resolved deadline, and any condition suppressing an action.</p>
-
-          <h2 id="preview">Preview first</h2>
-          <p>Start broad rules in Preview. This lets you inspect candidate items and explain why each one would be eligible without moving anything. TinyPrune uses this mode by default for broad developer-cleanup templates.</p>
-          <ol><li>Select a folder you control.</li><li>Choose a template or create a rule.</li><li>Leave it in Preview and review the upcoming list.</li><li>Add Keep or expiry overrides where needed.</li><li>Enable the rule only when the explanation matches your intent.</li></ol>
-
-          <h2 id="updates">Updates and distribution</h2>
-          <p>Direct downloads will use a signed, notarized DMG and Sparkle update feed. Sparkle updates are HTTPS-delivered and EdDSA-signed. The application will not install an update while it is actively processing a Trash operation.</p>
-          <p>Homebrew installs will use the TinyPrune cask. Homebrew is the sole updater for that channel; Sparkle automatic update checks are disabled in its build.</p>
-
-          <h2 id="development">Development</h2>
-          <p>The repository contains the product specification and staged implementation plan. Contributions must preserve the policy invariant: the database schedules candidates but never authorizes a Trash operation. See <a href="https://github.com/navig-me/tinyprune/blob/main/CLAUDE.md">CLAUDE.md</a> for contribution constraints and <a href="https://github.com/navig-me/tinyprune/blob/main/PLAN.md">PLAN.md</a> for the release architecture.</p>
-        </article>
-      </main>
-    </div>
-  </body>
+ACTION Move the folder to Trash</code></pre><p>A rule can match files or folders by scope, depth, exact name, glob, age, modification time, project inactivity, or an explicit override.</p></section>
+        <section id="preview"><h2>Start in Preview.</h2><p>Preview runs the same matching and scheduling logic, but does not invoke the Trash executor. It is the right way to test a broad rule before enabling it.</p><ol><li>Select a folder you control.</li><li>Choose a template or build a rule.</li><li>Review the upcoming items and their explanations.</li><li>Add Keep or expiry overrides where necessary.</li><li>Enable the rule when the result matches your intent.</li></ol></section>
+        <section id="updates"><h2>Updates follow the channel you choose.</h2><p>Direct downloads will use a signed, notarized DMG and Sparkle update feed. Homebrew installs will use the TinyPrune cask, with Homebrew as the only updater for that channel.</p><p>Read <a href="https://github.com/navig-me/tinyprune/blob/main/CLAUDE.md">CLAUDE.md</a> for engineering constraints and <a href="https://github.com/navig-me/tinyprune/blob/main/PLAN.md">PLAN.md</a> for release architecture.</p></section>
+      </article>
+    </main>
+  </div>
+</body>
 </html>
