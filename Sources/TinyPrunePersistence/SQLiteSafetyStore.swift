@@ -78,6 +78,11 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
             defer { sqlite3_finalize(statement) }
             try check(sqlite3_bind_int(statement, 1, snapshot.globallyPaused ? 1 : 0))
             try stepDone(statement)
+            try insertAuditEvent(TrashAuditEvent(
+                occurredAt: Date(),
+                kind: .policyReplaced,
+                detail: "rules=\(snapshot.rules.count); overrides=\(snapshot.overrides.count); globallyPaused=\(snapshot.globallyPaused)"
+            ))
             try execute("COMMIT")
         } catch {
             try? execute("ROLLBACK")
@@ -86,6 +91,10 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
     }
 
     public func append(_ event: TrashAuditEvent) async throws {
+        try insertAuditEvent(event)
+    }
+
+    private func insertAuditEvent(_ event: TrashAuditEvent) throws {
         let statement = try prepare("INSERT INTO audit_events(id, occurred_at, kind, payload) VALUES(?, ?, ?, ?)")
         defer { sqlite3_finalize(statement) }
         try bind(event.id.uuidString, to: statement, at: 1)
@@ -122,11 +131,19 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
         try stepDone(statement)
     }
 
-    public func nextDeadline() throws -> PersistedDeadline? {
-        let statement = try prepare("SELECT payload FROM deadlines ORDER BY scheduled_at ASC, identity_key ASC LIMIT 1")
+    public func upcomingDeadlines(limit: Int = 50) throws -> [PersistedDeadline] {
+        let statement = try prepare("SELECT payload FROM deadlines ORDER BY scheduled_at ASC, identity_key ASC LIMIT ?")
         defer { sqlite3_finalize(statement) }
-        guard try rowAvailable(statement) else { return nil }
-        return try decode(PersistedDeadline.self, from: columnData(statement, at: 0))
+        try check(sqlite3_bind_int64(statement, 1, Int64(max(0, limit))))
+        var result: [PersistedDeadline] = []
+        while try rowAvailable(statement) {
+            result.append(try decode(PersistedDeadline.self, from: columnData(statement, at: 0)))
+        }
+        return result
+    }
+
+    public func nextDeadline() throws -> PersistedDeadline? {
+        try upcomingDeadlines(limit: 1).first
     }
 
     private func loadPayloads<Value: Decodable>(table: String, as type: Value.Type) throws -> [Value] {

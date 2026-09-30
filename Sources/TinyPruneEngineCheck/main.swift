@@ -1,6 +1,8 @@
 import Foundation
+import TinyPruneAgentCore
 import TinyPruneDomain
 import TinyPruneEngine
+import TinyPruneIPC
 import TinyPrunePersistence
 
 @main
@@ -57,7 +59,7 @@ struct TinyPruneEngineCheck {
         let previewEvents = try await store.auditEvents()
         guard previewOutcome == .previewed,
               fileManager.fileExists(atPath: fixture.path),
-              previewEvents.map(\.kind) == [.previewSkipped] else {
+              Set(previewEvents.map(\.kind)) == Set([.policyReplaced, .previewSkipped]) else {
             throw SmokeFailure.previewMovedFixture
         }
 
@@ -97,11 +99,27 @@ struct TinyPruneEngineCheck {
               fileManager.fileExists(atPath: protectedFile.path) else {
             throw SmokeFailure.protectedDescendantNotChecked
         }
+        let handler = AgentRequestHandler(store: store)
+        let overviewRequest = AgentRequest(operation: .loadOverview)
+        let overviewData = try JSONEncoder().encode(overviewRequest)
+        let overviewReply = await handler.handle(overviewData)
+        let overviewResponse = try JSONDecoder().decode(AgentResponse.self, from: overviewReply)
+        guard case .overview(let overview) = overviewResponse.payload,
+              overview.policy.rules == [folderRule],
+              overview.upcoming.count == 1,
+              overview.upcoming[0].explanation.candidateIdentity == candidate.identity else {
+            throw SmokeFailure.agentRequestFailed
+        }
+        let malformedReply = await handler.handle(Data("not-json".utf8))
+        let malformedResponse = try JSONDecoder().decode(AgentResponse.self, from: malformedReply)
+        guard case .failure(.invalidRequest) = malformedResponse.payload else {
+            throw SmokeFailure.agentRequestFailed
+        }
         let activeEvents = try await store.auditEvents()
         guard originalPath == fixture.path,
               !fileManager.fileExists(atPath: fixture.path),
               fileManager.fileExists(atPath: movedPath),
-              Set(activeEvents.map(\.kind)) == Set([.previewSkipped, .trashAttempted, .movedToTrash, .safetySkipped]) else {
+              Set(activeEvents.map(\.kind)) == Set([.policyReplaced, .previewSkipped, .trashAttempted, .movedToTrash, .safetySkipped]) else {
             throw SmokeFailure.activeMoveDidNotComplete
         }
         print("TinyPrune safety smoke passed: Preview preserved; active cleanup trashed only the verified item; protected descendant was retained; SQLite audit recorded outcomes")
@@ -139,6 +157,7 @@ private enum SmokeFailure: Error {
     case deadlineIndexFailed
     case activeMoveDidNotComplete
     case protectedDescendantNotChecked
+    case agentRequestFailed
 }
 
 private struct FixedClock: SafetyClock {

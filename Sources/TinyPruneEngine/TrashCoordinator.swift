@@ -50,6 +50,7 @@ public struct TrashRequest: Hashable, Codable, Sendable {
 }
 
 public enum TrashAuditKind: String, Codable, Sendable {
+    case policyReplaced
     case previewSkipped
     case notDue
     case safetySkipped
@@ -62,11 +63,11 @@ public struct TrashAuditEvent: Hashable, Codable, Sendable, Identifiable {
     public let id: UUID
     public let occurredAt: Date
     public let kind: TrashAuditKind
-    public let identity: FilesystemIdentity
+    public let identity: FilesystemIdentity?
     public let ruleID: UUID?
     public let detail: String?
 
-    public init(id: UUID = UUID(), occurredAt: Date, kind: TrashAuditKind, identity: FilesystemIdentity, ruleID: UUID?, detail: String? = nil) {
+    public init(id: UUID = UUID(), occurredAt: Date, kind: TrashAuditKind, identity: FilesystemIdentity? = nil, ruleID: UUID? = nil, detail: String? = nil) {
         self.id = id
         self.occurredAt = occurredAt
         self.kind = kind

@@ -29,6 +29,9 @@ final class SQLiteSafetyStoreTests: XCTestCase {
         XCTAssertEqual(afterRollback.rules, [rule])
         XCTAssertEqual(afterRollback.overrides, [keep])
         XCTAssertTrue(afterRollback.globallyPaused)
+        let events = try await harness.store.auditEvents()
+        XCTAssertEqual(events.count, 1)
+        XCTAssertEqual(events.first?.kind, .policyReplaced)
     }
 
     func testAuditEventsAreDurableAndOrderedNewestFirst() async throws {
