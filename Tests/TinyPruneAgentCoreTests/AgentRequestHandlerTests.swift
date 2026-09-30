@@ -71,8 +71,8 @@ final class AgentRequestHandlerTests: XCTestCase {
         let duplicate = try makeRule(id: rule.id)
         let request = AgentRequest(operation: .replacePolicy(AgentPolicySnapshot(rules: [rule, duplicate], overrides: [], globallyPaused: true)))
 
-        let response = try await response(from: harness.handler, request: request)
-        guard case .failure(.invalidRequest) = response.payload else { return XCTFail("Duplicate rule IDs must be rejected") }
+        let invalidResponse = try await response(from: harness.handler, request: request)
+        guard case .failure(.invalidRequest) = invalidResponse.payload else { return XCTFail("Duplicate rule IDs must be rejected") }
         let loaded = try await response(from: harness.handler, request: AgentRequest(operation: .loadPolicy))
         guard case .policy(let snapshot) = loaded.payload else { return XCTFail("Expected policy response") }
         XCTAssertTrue(snapshot.rules.isEmpty)
