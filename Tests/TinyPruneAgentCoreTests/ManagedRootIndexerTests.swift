@@ -86,8 +86,18 @@ final class ManagedRootIndexerTests: XCTestCase {
         let root = try makeRoot(fixture.root)
         let rule = try makeRule(scope: root.path, state: .active)
         try await store.replaceSnapshot(PolicySnapshot(rules: [rule], overrides: [], managedRoots: [root], globallyPaused: false))
-        let indexer = ManagedRootIndexer(store: store)
+        let indexed = expectation(description: "active candidate persisted before due scheduling")
+        indexed.assertForOverFulfill = false
+        let indexer = ManagedRootIndexer(store: store) {
+            Task {
+                if let deadlines = try? await store.upcomingDeadlines(),
+                   deadlines.contains(where: { $0.identity.pathHint == candidateURL.path }) {
+                    indexed.fulfill()
+                }
+            }
+        }
         try await indexer.start()
+        await fulfillment(of: [indexed], timeout: 5)
 
         let fileAccess = LocalTrashFileAccess()
         let coordinator = TrashCoordinator(
