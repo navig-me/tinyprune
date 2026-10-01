@@ -62,6 +62,7 @@ private struct RootWatchSession: Sendable {
     let eventStream: ManagedRootEventStream
     let continuation: AsyncStream<ManagedRootEvent>.Continuation
     let consumer: Task<Void, Never>
+    let initialScan: Task<Void, Never>?
 }
 
 public actor ManagedRootIndexer {
@@ -98,12 +99,13 @@ public actor ManagedRootIndexer {
     private func stopSessions() {
         for session in sessions.values {
             session.consumer.cancel()
+            session.initialScan?.cancel()
             session.continuation.finish()
             session.eventStream.stop()
         }
         sessions.removeAll(keepingCapacity: false)
-    }
 
+    }
     public func reconfigure() async throws {
         await operationLock.acquire()
         defer { operationLock.release() }
@@ -117,7 +119,7 @@ public actor ManagedRootIndexer {
 
         for root in snapshot.managedRoots {
             try await store.removeDeadlines(atOrBelow: root.path)
-            do { try await startWatching(root, snapshot: snapshot) }
+            do { try await startWatching(root) }
             catch { await recordIndexFailure(root: root, error: error) }
         }
         onDeadlinesChanged()
@@ -158,7 +160,7 @@ public actor ManagedRootIndexer {
         onDeadlinesChanged()
     }
 
-    private func startWatching(_ root: ManagedRoot, snapshot: PolicySnapshot) async throws {
+    private func startWatching(_ root: ManagedRoot) async throws {
         var stale = false
         let resolvedURL = try URL(
             resolvingBookmarkData: root.bookmarkData,
@@ -170,6 +172,10 @@ public actor ManagedRootIndexer {
             throw ManagedRootIndexError.staleOrMovedBookmark(root.path)
         }
         let access = RootAccessToken(url: resolvedURL)
+        let rootValues = try resolvedURL.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+        guard rootValues.isDirectory == true, rootValues.isSymbolicLink != true else {
+            throw ManagedRootIndexError.unsafeRoot(root.path)
+        }
         let (events, continuation) = AsyncStream<ManagedRootEvent>.makeStream(bufferingPolicy: .bufferingNewest(512))
         let stream = try ManagedRootEventStream(rootPath: resolvedURL.path) { [weak self] event in
             switch continuation.yield(event) {
@@ -188,10 +194,28 @@ public actor ManagedRootIndexer {
                 catch { await self?.recordIndexFailure(root: root, error: error) }
             }
         }
-        sessions[root.id] = RootWatchSession(root: root, access: access, eventStream: stream, continuation: continuation, consumer: consumer)
-        try await scan(resolvedURL, root: root, snapshot: snapshot, includeRoot: false)
+        let session = RootWatchSession(root: root, access: access, eventStream: stream, continuation: continuation, consumer: consumer, initialScan: nil)
+        sessions[root.id] = session
+        let initialScan = Task { [weak self] in
+            guard let self else { return }
+            await self.scanRoot(rootID: root.id)
+        }
+        sessions[root.id] = RootWatchSession(root: root, access: access, eventStream: stream, continuation: continuation, consumer: consumer, initialScan: initialScan)
     }
 
+    private func scanRoot(rootID: UUID) async {
+        await operationLock.acquire()
+        defer { operationLock.release() }
+        guard !Task.isCancelled, let session = sessions[rootID] else { return }
+        do {
+            let snapshot = try await store.loadSnapshot()
+            try await scan(session.access.url, root: session.root, snapshot: snapshot, includeRoot: false)
+            onDeadlinesChanged()
+        } catch {
+            await recordIndexFailure(root: session.root, error: error)
+        }
+
+    }
     private func recover(rootID: UUID) async {
         guard recoveryRequests.insert(rootID).inserted else { return }
         await operationLock.acquire()
@@ -283,4 +307,5 @@ public actor ManagedRootIndexer {
 
 public enum ManagedRootIndexError: Error, Equatable, Sendable {
     case staleOrMovedBookmark(String)
+    case unsafeRoot(String)
 }

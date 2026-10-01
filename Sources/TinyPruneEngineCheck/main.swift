@@ -4,10 +4,12 @@ import TinyPruneDomain
 import TinyPruneEngine
 import TinyPruneIPC
 import TinyPrunePersistence
+import Dispatch
 
 @main
 struct TinyPruneEngineCheck {
     static func main() async throws {
+        try verifyFSEvents()
         let fileManager = FileManager.default
         let root = fileManager.temporaryDirectory.appendingPathComponent("TinyPrune-Engine-\(UUID().uuidString)", isDirectory: true)
         try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
@@ -125,6 +127,24 @@ struct TinyPruneEngineCheck {
         print("TinyPrune safety smoke passed: Preview preserved; active cleanup trashed only the verified item; protected descendant was retained; SQLite audit recorded outcomes")
     }
 
+    private static func verifyFSEvents() throws {
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory.appendingPathComponent("TinyPrune-FSEvents-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: root) }
+        let fixture = root.appendingPathComponent("created.tmp")
+        let latch = FSEventLatch()
+        let stream = try ManagedRootEventStream(rootPath: root.path, latency: 0.05) { event in
+            latch.record(event)
+        }
+        defer { stream.stop() }
+        try Data("FSEvents fixture".utf8).write(to: fixture)
+        guard latch.semaphore.wait(timeout: .now() + 5) == .success else {
+            throw SmokeFailure.eventPathsMissing(latch.receivedPaths)
+        }
+        print("FSEvents smoke passed: created-file event delivered")
+    }
+
     private static func makeRule(id: UUID = UUID(), scope: String, state: RuleState) throws -> LifetimeRule {
         try LifetimeRule(
             id: id,
@@ -158,6 +178,19 @@ private enum SmokeFailure: Error {
     case activeMoveDidNotComplete
     case protectedDescendantNotChecked
     case agentRequestFailed
+    case eventPathsMissing([String])
+}
+private final class FSEventLatch: @unchecked Sendable {
+    let semaphore = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var paths: [String] = []
+
+    var receivedPaths: [String] { lock.withLock { paths } }
+
+    func record(_ event: ManagedRootEvent) {
+        lock.withLock { paths.append(contentsOf: event.paths) }
+        if event.paths.contains(where: { $0.hasSuffix("/created.tmp") }) { semaphore.signal() }
+    }
 }
 
 private struct FixedClock: SafetyClock {

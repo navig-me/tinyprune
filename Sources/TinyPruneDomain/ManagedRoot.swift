@@ -14,6 +14,10 @@ public struct ManagedRoot: Hashable, Codable, Sendable, Identifiable {
         guard path.hasPrefix("/"), normalizedPath != "/", path == normalizedPath else {
             throw ManagedRootValidationError.invalidPath
         }
+        let protectedLocations = ["/Applications", "/System", "/Library", "/bin", "/sbin", "/usr", "/etc", "/var"]
+        guard !protectedLocations.contains(where: { normalizedPath == $0 || normalizedPath.hasPrefix($0 + "/") }) else {
+            throw ManagedRootValidationError.dangerousPath
+        }
         guard !bookmarkData.isEmpty else { throw ManagedRootValidationError.emptyBookmark }
         self.id = id
         self.displayName = displayName
@@ -26,4 +30,5 @@ public enum ManagedRootValidationError: Error, Equatable, Sendable {
     case emptyName
     case invalidPath
     case emptyBookmark
+    case dangerousPath
 }

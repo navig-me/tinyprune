@@ -16,7 +16,7 @@ final class ManagedRootIndexerTests: XCTestCase {
         let file = root.appendingPathComponent("created.tmp")
         let observed = expectation(description: "FSEvents reports a file created under the managed root")
         let stream = try ManagedRootEventStream(rootPath: root.path, latency: 0.05) { event in
-            if event.paths.contains(file.path) { observed.fulfill() }
+            if event.paths.contains(where: { $0.hasSuffix("/created.tmp") }) { observed.fulfill() }
         }
         defer { stream.stop() }
 
@@ -34,10 +34,19 @@ final class ManagedRootIndexerTests: XCTestCase {
         let root = try makeRoot(fixture.root)
         let rule = try makeRule(scope: root.path, state: .preview)
         try await store.replaceSnapshot(PolicySnapshot(rules: [rule], overrides: [], managedRoots: [root], globallyPaused: false))
-        let indexer = ManagedRootIndexer(store: store)
+        let initialIndexed = expectation(description: "initial root scan persisted candidate deadlines")
+        initialIndexed.assertForOverFulfill = false
+        let indexer = ManagedRootIndexer(store: store) {
+            Task {
+                if let deadlines = try? await store.upcomingDeadlines(), !deadlines.isEmpty {
+                    initialIndexed.fulfill()
+                }
+            }
+        }
         defer { Task { await indexer.stop() } }
 
         try await indexer.start()
+        await fulfillment(of: [initialIndexed], timeout: 5)
         let initial = try await store.upcomingDeadlines()
         XCTAssertEqual(initial.map(\.identity.pathHint), [original.standardizedFileURL.path])
         XCTAssertEqual(initial.first?.explanation.disposition, .preview)

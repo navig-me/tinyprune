@@ -40,7 +40,7 @@ public final class ManagedRootEventStream: @unchecked Sendable {
             copyDescription: nil
         )
         let watchedPaths = [rootPath] as CFArray
-        let flags = FSEventStreamCreateFlags(kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagUseCFTypes)
+        let flags = FSEventStreamCreateFlags(kFSEventStreamCreateFlagFileEvents)
         guard let stream = FSEventStreamCreate(
             kCFAllocatorDefault,
             Self.receiveEvents,
@@ -83,7 +83,7 @@ public final class ManagedRootEventStream: @unchecked Sendable {
     private static let receiveEvents: FSEventStreamCallback = { _, info, eventCount, eventPaths, eventFlags, eventIDs in
         guard let info else { return }
         let callback = Unmanaged<EventCallbackContext>.fromOpaque(info).takeUnretainedValue()
-        let pathsArray = Unmanaged<CFArray>.fromOpaque(eventPaths).takeUnretainedValue()
+        let rawPaths = eventPaths.assumingMemoryBound(to: UnsafePointer<CChar>.self)
         var paths: [String] = []
         var flags: [FSEventStreamEventFlags] = []
         var ids: [FSEventStreamEventId] = []
@@ -92,9 +92,7 @@ public final class ManagedRootEventStream: @unchecked Sendable {
         ids.reserveCapacity(eventCount)
 
         for index in 0..<eventCount {
-            let pathValue = CFArrayGetValueAtIndex(pathsArray, index)
-            let path = unsafeBitCast(pathValue, to: CFString.self) as String
-            paths.append(path)
+            paths.append(String(cString: rawPaths[index]))
             flags.append(eventFlags[index])
             ids.append(eventIDs[index])
         }

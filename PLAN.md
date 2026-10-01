@@ -84,7 +84,7 @@ Store explicit item policies redundantly in a versioned, minimal `com.tinyprune.
 
 On macOS, run `swift Scripts/package-app.swift` to build and ad-hoc sign the development `.app` bundle at `.build/package/TinyPrune.app`. Open it with `open .build/package/TinyPrune.app`; the app offers to register the embedded LaunchAgent through `SMAppService` and opens Login Items for approval when needed. Then use `swift run tinyprune status`, `rules`, or `upcoming` from the repository. The package is for local development only: Developer ID signing, notarization, and release packaging remain separate release steps.
 
-The Rules screen can add a user-selected managed root and an all-items rule that defaults to 30 days after modification in Preview; it can pause rules or resume them in Preview. Root bookmarks and policy updates are persisted transactionally. FSEvents indexing, resolving bookmarks in the agent, live match previews, and due-deadline scheduling are not active yet, so the editor does not claim to show live matches or perform automatic cleanup.
+The Rules screen can add a user-selected managed root and an all-items rule that defaults to 30 days after modification in Preview; it can pause rules or resume them in Preview. Root bookmarks and policy updates are persisted transactionally. The agent resolves bookmarks, registers FSEvents before starting a bounded background initial scan, persists candidate deadlines, and wakes the due-deadline scheduler. The editor still does not present live match previews, and indexing/scheduling remain separate from the editor's current claims.
 
 
 ### Phase 1 — safe core before UI
