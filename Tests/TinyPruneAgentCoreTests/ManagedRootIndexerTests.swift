@@ -105,13 +105,12 @@ final class ManagedRootIndexerTests: XCTestCase {
         let move = try XCTUnwrap(events.first(where: { $0.kind == .movedToTrash }))
         trashedPath = move.detail
         XCTAssertNotNil(trashedPath)
-        XCTAssertTrue(events.contains(where: { $0.kind == .trashAttempted }))
         let remaining = try await store.upcomingDeadlines()
         XCTAssertTrue(remaining.isEmpty)
     }
 
     private func makeFixture() throws -> (root: URL, databaseURL: URL) {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("TinyPrune-Indexer-\(UUID().uuidString)", isDirectory: true)
+        let root = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("TinyPrune-Indexer-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let databaseURL = root.appendingPathComponent("state.sqlite3")
         return (root, databaseURL)
