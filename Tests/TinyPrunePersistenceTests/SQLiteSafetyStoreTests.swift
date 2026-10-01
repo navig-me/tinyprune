@@ -124,6 +124,31 @@ final class SQLiteSafetyStoreTests: XCTestCase {
         XCTAssertEqual(remaining.first?.identity.pathHint, "/Developer/cache-old/keep.zip")
     }
 
+    func testObservedActivityPersistsAcrossInitialScansAndRemovesBySubtree() async throws {
+        let harness = try makeStore()
+        defer { try? FileManager.default.removeItem(at: harness.directory) }
+        let identity = makeIdentity(resource: Data([7]), path: "/Developer/project/node_modules")
+        let movedIdentity = makeIdentity(resource: Data([7]), path: "/Developer/archive/node_modules")
+        let neighbor = makeIdentity(resource: Data([8]), path: "/Developer/project-old/node_modules")
+        let initial = Date(timeIntervalSince1970: 100)
+        try await harness.store.recordInitialObservations([
+            PersistedObservedActivity(identity: identity, firstObservedAt: initial, lastObservedAt: initial),
+            PersistedObservedActivity(identity: neighbor, firstObservedAt: initial, lastObservedAt: initial)
+        ])
+        try await harness.store.recordObservedActivity(identity: identity, at: Date(timeIntervalSince1970: 200))
+        try await harness.store.recordInitialObservations([
+            PersistedObservedActivity(identity: movedIdentity, firstObservedAt: Date(timeIntervalSince1970: 300), lastObservedAt: Date(timeIntervalSince1970: 300))
+        ])
+
+        let preserved = try await harness.store.observedActivity(for: movedIdentity)
+        XCTAssertEqual(preserved?.firstObservedAt, initial)
+        XCTAssertEqual(preserved?.lastObservedAt, Date(timeIntervalSince1970: 200))
+        try await harness.store.removeObservedActivity(atOrBelow: "/Developer/archive")
+        let removed = try await harness.store.observedActivity(for: movedIdentity)
+        let remainingNeighbor = try await harness.store.observedActivity(for: neighbor)
+        XCTAssertNil(removed)
+        XCTAssertNotNil(remainingNeighbor)
+    }
 
     private func makeStore() throws -> (directory: URL, store: SQLiteSafetyStore) {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TinyPrune-SQLite-\(UUID().uuidString)", isDirectory: true)

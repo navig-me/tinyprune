@@ -71,6 +71,50 @@ final class ManagedRootIndexerTests: XCTestCase {
         await indexer.stop()
     }
 
+    func testObservedActivityResetsExpiryAfterFilesystemEvent() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let file = fixture.root.appendingPathComponent("idle.tmp")
+        try Data("metadata only".utf8).write(to: file)
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 10)], ofItemAtPath: file.path)
+
+        let store = try SQLiteSafetyStore(databaseURL: fixture.databaseURL)
+        let root = try makeRoot(fixture.root)
+        let rule = try makeRule(scope: root.path, state: .preview, basis: .observedActivity)
+        try await store.replaceSnapshot(PolicySnapshot(rules: [rule], overrides: [], managedRoots: [root], globallyPaused: false))
+        let clock = MutableClock(Date(timeIntervalSince1970: 1_000))
+        let indexed = expectation(description: "initial observed-activity deadline persisted")
+        indexed.assertForOverFulfill = false
+        let indexer = ManagedRootIndexer(store: store, clock: clock) {
+            Task {
+                if let deadlines = try? await store.upcomingDeadlines(), !deadlines.isEmpty {
+                    indexed.fulfill()
+                }
+            }
+        }
+        try await indexer.start()
+        await fulfillment(of: [indexed], timeout: 5)
+
+        let initialDeadlines = try await store.upcomingDeadlines()
+        let initial = try XCTUnwrap(initialDeadlines.first)
+        XCTAssertEqual(initial.explanation.basisDate, Date(timeIntervalSince1970: 1_000))
+        clock.set(Date(timeIntervalSince1970: 2_000))
+        try await indexer.processChanges(
+            ManagedRootEvent(paths: [file.path], flags: [UInt32(kFSEventStreamEventFlagItemModified)], eventIDs: [3]),
+            for: root.id
+        )
+
+        let updatedDeadlines = try await store.upcomingDeadlines()
+        let updated = try XCTUnwrap(updatedDeadlines.first)
+        XCTAssertEqual(updated.explanation.basisDate, Date(timeIntervalSince1970: 2_000))
+        XCTAssertEqual(updated.scheduledAt, Date(timeIntervalSince1970: 2_060))
+        let storedActivity = try await store.observedActivity(for: updated.identity)
+        let activity = try XCTUnwrap(storedActivity)
+        XCTAssertEqual(activity.firstObservedAt, Date(timeIntervalSince1970: 1_000))
+        XCTAssertEqual(activity.lastObservedAt, Date(timeIntervalSince1970: 2_000))
+        await indexer.stop()
+    }
+
     func testDueActiveDeadlineRunsFinalTrashPreflight() async throws {
         let fixture = try makeFixture()
         var trashedPath: String?
@@ -132,12 +176,12 @@ final class ManagedRootIndexerTests: XCTestCase {
         return try ManagedRoot(displayName: url.lastPathComponent, path: path, bookmarkData: bookmark)
     }
 
-    private func makeRule(scope: String, state: RuleState) throws -> LifetimeRule {
+    private func makeRule(scope: String, state: RuleState, basis: ExpiryBasis = .modified) throws -> LifetimeRule {
         try LifetimeRule(
             name: "Temporary files",
             scope: RuleScope(path: scope, recursive: false),
             matcher: ItemMatcher(itemKind: .file, exactNames: [], globPatterns: ["*.tmp"]),
-            expiryBasis: .modified,
+            expiryBasis: basis,
             lifetime: RuleDuration(seconds: 60),
             action: .trashItem,
             state: state
@@ -149,5 +193,20 @@ private struct FixedClock: SafetyClock {
     let instant: Date
     init(_ instant: Date) { self.instant = instant }
     func now() -> Date { instant }
+}
+
+private final class MutableClock: SafetyClock, @unchecked Sendable {
+    private let lock = NSLock()
+    private var instant: Date
+
+    init(_ instant: Date) { self.instant = instant }
+
+    func now() -> Date {
+        lock.withLock { instant }
+    }
+
+    func set(_ instant: Date) {
+        lock.withLock { self.instant = instant }
+    }
 }
 #endif

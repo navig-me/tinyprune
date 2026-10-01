@@ -14,6 +14,18 @@ public struct PersistedDeadline: Hashable, Codable, Sendable {
     }
 }
 
+public struct PersistedObservedActivity: Hashable, Sendable {
+    public let identity: FilesystemIdentity
+    public let firstObservedAt: Date
+    public let lastObservedAt: Date
+
+    public init(identity: FilesystemIdentity, firstObservedAt: Date, lastObservedAt: Date) {
+        self.identity = identity
+        self.firstObservedAt = firstObservedAt
+        self.lastObservedAt = lastObservedAt
+    }
+}
+
 public enum SQLiteSafetyStoreError: Error, Equatable, Sendable {
     case openFailed(String)
     case statementFailed(String)
@@ -160,6 +172,69 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
         try bind(root + "/", to: statement, at: 2)
         try bind(root + "0", to: statement, at: 3)
         try stepDone(statement)
+    }
+
+    public func observedActivity(for identity: FilesystemIdentity) throws -> PersistedObservedActivity? {
+        let statement = try prepare("SELECT first_observed_at, last_observed_at FROM observed_activity WHERE identity_key = ?")
+        defer { sqlite3_finalize(statement) }
+        try bind(Self.identityKey(identity), to: statement, at: 1)
+        guard try rowAvailable(statement) else { return nil }
+        return PersistedObservedActivity(
+            identity: identity,
+            firstObservedAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 0)),
+            lastObservedAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 1))
+        )
+    }
+
+
+    public func recordObservedActivity(identity: FilesystemIdentity, at date: Date) throws {
+        let statement = try prepare("""
+        INSERT INTO observed_activity(identity_key, path_hint, first_observed_at, last_observed_at) VALUES(?, ?, ?, ?)
+        ON CONFLICT(identity_key) DO UPDATE SET path_hint=excluded.path_hint, last_observed_at=excluded.last_observed_at
+        """)
+        defer { sqlite3_finalize(statement) }
+        try bind(Self.identityKey(identity), to: statement, at: 1)
+        try bind(identity.pathHint, to: statement, at: 2)
+        try check(sqlite3_bind_double(statement, 3, date.timeIntervalSince1970))
+        try check(sqlite3_bind_double(statement, 4, date.timeIntervalSince1970))
+        try stepDone(statement)
+    }
+
+    public func removeObservedActivity(atOrBelow path: String) throws {
+        let root = RuleScope.normalized(path)
+        let statement = try prepare("DELETE FROM observed_activity WHERE path_hint = ? OR (path_hint >= ? AND path_hint < ?)")
+        defer { sqlite3_finalize(statement) }
+        try bind(root, to: statement, at: 1)
+        try bind(root + "/", to: statement, at: 2)
+        try bind(root + "0", to: statement, at: 3)
+        try stepDone(statement)
+    }
+
+    public func recordInitialObservations(_ activities: [PersistedObservedActivity]) throws {
+        guard !activities.isEmpty else { return }
+        try execute("BEGIN IMMEDIATE")
+        do {
+            let statement = try prepare("""
+            INSERT INTO observed_activity(identity_key, path_hint, first_observed_at, last_observed_at)
+            VALUES(?, ?, ?, ?)
+            ON CONFLICT(identity_key) DO UPDATE SET path_hint=excluded.path_hint
+            WHERE observed_activity.path_hint <> excluded.path_hint
+            """)
+            defer { sqlite3_finalize(statement) }
+            for activity in activities {
+                sqlite3_reset(statement)
+                sqlite3_clear_bindings(statement)
+                try bind(Self.identityKey(activity.identity), to: statement, at: 1)
+                try bind(activity.identity.pathHint, to: statement, at: 2)
+                try check(sqlite3_bind_double(statement, 3, activity.firstObservedAt.timeIntervalSince1970))
+                try check(sqlite3_bind_double(statement, 4, activity.lastObservedAt.timeIntervalSince1970))
+                try stepDone(statement)
+            }
+            try execute("COMMIT")
+        } catch {
+            try? execute("ROLLBACK")
+            throw error
+        }
     }
 
     public func upcomingDeadlines(limit: Int = 50) throws -> [PersistedDeadline] {
@@ -342,6 +417,23 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
             CREATE INDEX deadline_path_idx ON deadlines(path_hint);
             INSERT INTO schema_migrations(version, applied_at) VALUES(3, strftime('%s', 'now'));
             PRAGMA user_version = 3;
+            COMMIT;
+            """
+            do { try Self.execute(database, migration) }
+            catch { sqlite3_exec(database, "ROLLBACK", nil, nil, nil); throw error }
+        }
+        if version < 4 {
+            let migration = """
+            BEGIN IMMEDIATE;
+            CREATE TABLE observed_activity(
+                identity_key TEXT PRIMARY KEY NOT NULL,
+                path_hint TEXT NOT NULL,
+                first_observed_at REAL NOT NULL,
+                last_observed_at REAL NOT NULL
+            );
+            CREATE INDEX observed_activity_path_idx ON observed_activity(path_hint);
+            INSERT INTO schema_migrations(version, applied_at) VALUES(4, strftime('%s', 'now'));
+            PRAGMA user_version = 4;
             COMMIT;
             """
             do { try Self.execute(database, migration) }

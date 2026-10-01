@@ -10,6 +10,7 @@ import Dispatch
 struct TinyPruneEngineCheck {
     static func main() async throws {
         try verifyFSEvents()
+        try await verifyObservedActivity()
         let fileManager = FileManager.default
         let root = fileManager.temporaryDirectory.appendingPathComponent("TinyPrune-Engine-\(UUID().uuidString)", isDirectory: true)
         try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
@@ -145,6 +146,71 @@ struct TinyPruneEngineCheck {
         print("FSEvents smoke passed: created-file event delivered")
     }
 
+    private static func verifyObservedActivity() async throws {
+        let fileManager = FileManager.default
+        let root = fileManager.homeDirectoryForCurrentUser.appendingPathComponent("TinyPrune-Activity-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: root) }
+        let file = root.appendingPathComponent("idle.tmp")
+        try Data("metadata only".utf8).write(to: file)
+
+        let bookmark = try root.bookmarkData(options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil)
+        let managedRoot = try ManagedRoot(displayName: root.lastPathComponent, path: root.standardizedFileURL.path, bookmarkData: bookmark)
+        let rule = try LifetimeRule(
+            name: "Observed activity",
+            scope: RuleScope(path: managedRoot.path, recursive: false),
+            matcher: ItemMatcher(itemKind: .file, exactNames: ["idle.tmp"]),
+            expiryBasis: .observedActivity,
+            lifetime: RuleDuration(seconds: 60),
+            action: .trashItem,
+            state: .preview
+        )
+        let store = try SQLiteSafetyStore(databaseURL: root.appendingPathComponent("state.sqlite3"))
+        try await store.replaceSnapshot(PolicySnapshot(rules: [rule], overrides: [], managedRoots: [managedRoot], globallyPaused: false))
+        let clock = MutableSmokeClock(Date(timeIntervalSince1970: 1_000))
+        let (updates, continuation) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(4))
+        let indexer = ManagedRootIndexer(store: store, clock: clock) { continuation.yield(()) }
+
+        do {
+            try await indexer.start()
+            let initial = await withTaskGroup(of: PersistedDeadline?.self) { group in
+                group.addTask {
+                    for await _ in updates {
+                        if let deadline = try? await store.upcomingDeadlines().first { return deadline }
+                    }
+                    return nil
+                }
+                group.addTask {
+                    try? await Task.sleep(for: .seconds(10))
+                    return nil
+                }
+                let result = await group.next() ?? nil
+                group.cancelAll()
+                return result
+            }
+            guard let initial, initial.explanation.basisDate == Date(timeIntervalSince1970: 1_000) else {
+                throw SmokeFailure.observedActivityDidNotInitialize
+            }
+            clock.set(Date(timeIntervalSince1970: 2_000))
+            try await indexer.processChanges(
+                ManagedRootEvent(paths: [file.path], flags: [UInt32(kFSEventStreamEventFlagItemModified)], eventIDs: [1]),
+                for: managedRoot.id
+            )
+            let updated = try await store.upcomingDeadlines().first
+            guard updated?.explanation.basisDate == Date(timeIntervalSince1970: 2_000),
+                  updated?.scheduledAt == Date(timeIntervalSince1970: 2_060) else {
+                throw SmokeFailure.observedActivityDidNotReset
+            }
+            await indexer.stop()
+            continuation.finish()
+        } catch {
+            await indexer.stop()
+            continuation.finish()
+            throw error
+        }
+        print("Observed-activity smoke passed: initial timestamp persisted and modified-file event reset the deadline")
+    }
+
     private static func makeRule(id: UUID = UUID(), scope: String, state: RuleState) throws -> LifetimeRule {
         try LifetimeRule(
             id: id,
@@ -179,6 +245,8 @@ private enum SmokeFailure: Error {
     case protectedDescendantNotChecked
     case agentRequestFailed
     case eventPathsMissing([String])
+    case observedActivityDidNotInitialize
+    case observedActivityDidNotReset
 }
 private final class FSEventLatch: @unchecked Sendable {
     let semaphore = DispatchSemaphore(value: 0)
@@ -197,5 +265,20 @@ private struct FixedClock: SafetyClock {
     let instant: Date
     init(_ instant: Date) { self.instant = instant }
     func now() -> Date { instant }
+}
+
+private final class MutableSmokeClock: SafetyClock, @unchecked Sendable {
+    private let lock = NSLock()
+    private var instant: Date
+
+    init(_ instant: Date) { self.instant = instant }
+
+    func now() -> Date {
+        lock.withLock { instant }
+    }
+
+    func set(_ instant: Date) {
+        lock.withLock { self.instant = instant }
+    }
 }
 
