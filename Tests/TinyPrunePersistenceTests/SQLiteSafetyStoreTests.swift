@@ -11,12 +11,14 @@ final class SQLiteSafetyStoreTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: harness.directory) }
         let rule = try makeRule(name: "Original")
         let keep = ItemPolicyOverride(path: "/Developer/safe", policy: .keep(protectDescendants: true))
-        let snapshot = PolicySnapshot(rules: [rule], overrides: [keep], globallyPaused: true)
+        let root = try ManagedRoot(displayName: "Developer", path: "/Developer", bookmarkData: Data([1, 2, 3]))
+        let snapshot = PolicySnapshot(rules: [rule], overrides: [keep], managedRoots: [root], globallyPaused: true)
         try await harness.store.replaceSnapshot(snapshot)
 
         let loaded = try await harness.store.loadSnapshot()
         XCTAssertEqual(loaded.rules, [rule])
         XCTAssertEqual(loaded.overrides, [keep])
+        XCTAssertEqual(loaded.managedRoots, [root])
         XCTAssertTrue(loaded.globallyPaused)
 
         let duplicate = try makeRule(id: rule.id, name: "Duplicate")
@@ -28,6 +30,7 @@ final class SQLiteSafetyStoreTests: XCTestCase {
         let afterRollback = try await harness.store.loadSnapshot()
         XCTAssertEqual(afterRollback.rules, [rule])
         XCTAssertEqual(afterRollback.overrides, [keep])
+        XCTAssertEqual(afterRollback.managedRoots, [root])
         XCTAssertTrue(afterRollback.globallyPaused)
         let events = try await harness.store.auditEvents()
         XCTAssertEqual(events.count, 1)

@@ -30,12 +30,12 @@ public actor AgentRequestHandler {
                 return encode(AgentResponse(payload: .health(AgentHealth(serviceVersion: serviceVersion))))
             case .loadPolicy:
                 let snapshot = try await store.loadSnapshot()
-                let policy = AgentPolicySnapshot(rules: snapshot.rules, overrides: snapshot.overrides, globallyPaused: snapshot.globallyPaused)
+                let policy = AgentPolicySnapshot(rules: snapshot.rules, overrides: snapshot.overrides, managedRoots: snapshot.managedRoots, globallyPaused: snapshot.globallyPaused)
                 return encode(AgentResponse(payload: .policy(policy)))
             case .loadOverview:
                 let snapshot = try await store.loadSnapshot()
                 let upcoming = try await store.upcomingDeadlines(limit: 20).map { AgentUpcomingItem(explanation: $0.explanation) }
-                let policy = AgentPolicySnapshot(rules: snapshot.rules, overrides: snapshot.overrides, globallyPaused: snapshot.globallyPaused)
+                let policy = AgentPolicySnapshot(rules: snapshot.rules, overrides: snapshot.overrides, managedRoots: snapshot.managedRoots, globallyPaused: snapshot.globallyPaused)
                 return encode(AgentResponse(payload: .overview(AgentOverviewSnapshot(policy: policy, upcoming: upcoming))))
             case .replacePolicy(let policy):
                 if let error = validationError(for: policy) {
@@ -44,6 +44,7 @@ public actor AgentRequestHandler {
                 try await store.replaceSnapshot(PolicySnapshot(
                     rules: policy.rules,
                     overrides: policy.overrides,
+                    managedRoots: policy.managedRoots,
                     globallyPaused: policy.globallyPaused
                 ))
                 return encode(AgentResponse(payload: .acknowledged))
@@ -54,6 +55,18 @@ public actor AgentRequestHandler {
     }
     private func validationError(for policy: AgentPolicySnapshot) -> String? {
         var ruleIDs = Set<UUID>()
+        var rootIDs = Set<UUID>()
+        var rootPaths = Set<String>()
+        for root in policy.managedRoots {
+            guard rootIDs.insert(root.id).inserted, rootPaths.insert(root.path).inserted else {
+                return "Managed root IDs and paths must be unique."
+            }
+            do {
+                _ = try ManagedRoot(id: root.id, displayName: root.displayName, path: root.path, bookmarkData: root.bookmarkData)
+            } catch {
+                return "Managed root \(root.displayName) is invalid: \(error)"
+            }
+        }
         for rule in policy.rules {
             guard ruleIDs.insert(rule.id).inserted else { return "Rule IDs must be unique." }
             do {
@@ -76,6 +89,10 @@ public actor AgentRequestHandler {
                 )
             } catch {
                 return "Rule \(rule.name) is invalid: \(error)"
+            }
+            if rule.matchMode != .template,
+               !policy.managedRoots.contains(where: { rule.scope.path == $0.path || rule.scope.path.hasPrefix($0.path + "/") }) {
+                return "Every non-template rule must be inside a bookmarked managed root."
             }
         }
 

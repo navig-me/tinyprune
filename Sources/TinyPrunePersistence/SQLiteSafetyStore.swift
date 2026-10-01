@@ -55,12 +55,13 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
     public func loadSnapshot() async throws -> PolicySnapshot {
         let rules = try loadPayloads(table: "rules", as: LifetimeRule.self)
         let overrides = try loadPayloads(table: "item_overrides", as: ItemPolicyOverride.self)
+        let managedRoots = try loadPayloads(table: "managed_roots", as: ManagedRoot.self)
         let statement = try prepare("SELECT globally_paused FROM settings WHERE id = 1")
         defer { sqlite3_finalize(statement) }
         guard sqlite3_step(statement) == SQLITE_ROW else {
             throw SQLiteSafetyStoreError.statementFailed("global pause setting is missing")
         }
-        return PolicySnapshot(rules: rules, overrides: overrides, globallyPaused: sqlite3_column_int(statement, 0) != 0)
+        return PolicySnapshot(rules: rules, overrides: overrides, managedRoots: managedRoots, globallyPaused: sqlite3_column_int(statement, 0) != 0)
     }
 
     public func replaceSnapshot(_ snapshot: PolicySnapshot) throws {
@@ -68,11 +69,15 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
         do {
             try execute("DELETE FROM rules")
             try execute("DELETE FROM item_overrides")
+            try execute("DELETE FROM managed_roots")
             for (position, rule) in snapshot.rules.enumerated() {
                 try insertPayload(table: "rules", id: rule.id.uuidString, position: position, value: rule)
             }
             for (position, override) in snapshot.overrides.enumerated() {
                 try insertPayload(table: "item_overrides", id: override.id.uuidString, position: position, value: override)
+            }
+            for (position, root) in snapshot.managedRoots.enumerated() {
+                try insertPayload(table: "managed_roots", id: root.id.uuidString, position: position, value: root)
             }
             let statement = try prepare("UPDATE settings SET globally_paused = ? WHERE id = 1")
             defer { sqlite3_finalize(statement) }
@@ -81,7 +86,7 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
             try insertAuditEvent(TrashAuditEvent(
                 occurredAt: Date(),
                 kind: .policyReplaced,
-                detail: "rules=\(snapshot.rules.count); overrides=\(snapshot.overrides.count); globallyPaused=\(snapshot.globallyPaused)"
+                detail: "rules=\(snapshot.rules.count); overrides=\(snapshot.overrides.count); roots=\(snapshot.managedRoots.count); globallyPaused=\(snapshot.globallyPaused)"
             ))
             try execute("COMMIT")
         } catch {
@@ -147,7 +152,7 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
     }
 
     private func loadPayloads<Value: Decodable>(table: String, as type: Value.Type) throws -> [Value] {
-        guard table == "rules" || table == "item_overrides" else {
+        guard table == "rules" || table == "item_overrides" || table == "managed_roots" else {
             throw SQLiteSafetyStoreError.statementFailed("invalid policy table")
         }
         let statement = try prepare("SELECT payload FROM \(table) ORDER BY position ASC, id ASC")
@@ -160,7 +165,7 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
     }
 
     private func insertPayload<Value: Encodable>(table: String, id: String, position: Int, value: Value) throws {
-        guard table == "rules" || table == "item_overrides" else {
+        guard table == "rules" || table == "item_overrides" || table == "managed_roots" else {
             throw SQLiteSafetyStoreError.statementFailed("invalid policy table")
         }
         let statement = try prepare("INSERT INTO \(table)(id, position, payload) VALUES(?, ?, ?)")
@@ -268,31 +273,40 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
             throw SQLiteSafetyStoreError.statementFailed(String(cString: sqlite3_errmsg(database)))
         }
         let step = sqlite3_step(versionStatement)
-        let version = step == SQLITE_ROW ? sqlite3_column_int(versionStatement, 0) : 0
+        var version = step == SQLITE_ROW ? sqlite3_column_int(versionStatement, 0) : 0
         sqlite3_finalize(versionStatement)
-        guard version < 1 else { return }
 
-        let migration = """
-        BEGIN IMMEDIATE;
-        CREATE TABLE rules(id TEXT PRIMARY KEY NOT NULL, position INTEGER NOT NULL, payload BLOB NOT NULL);
-        CREATE TABLE item_overrides(id TEXT PRIMARY KEY NOT NULL, position INTEGER NOT NULL, payload BLOB NOT NULL);
-        CREATE TABLE settings(id INTEGER PRIMARY KEY CHECK(id = 1), globally_paused INTEGER NOT NULL DEFAULT 0 CHECK(globally_paused IN (0, 1)));
-        INSERT INTO settings(id, globally_paused) VALUES(1, 0);
-        CREATE TABLE deadlines(identity_key TEXT PRIMARY KEY NOT NULL, scheduled_at REAL NOT NULL, payload BLOB NOT NULL);
-        CREATE INDEX deadline_due_idx ON deadlines(scheduled_at, identity_key);
-        CREATE TABLE audit_events(id TEXT PRIMARY KEY NOT NULL, occurred_at REAL NOT NULL, kind TEXT NOT NULL, payload BLOB NOT NULL);
-        CREATE INDEX audit_chronology_idx ON audit_events(occurred_at DESC, id DESC);
-        INSERT INTO schema_migrations(version, applied_at) VALUES(1, strftime('%s', 'now'));
-        PRAGMA user_version = 1;
-        COMMIT;
-        """
-        var migrationMessage: UnsafeMutablePointer<CChar>?
-        let migrationResult = sqlite3_exec(database, migration, nil, nil, &migrationMessage)
-        guard migrationResult == SQLITE_OK else {
-            let reason = migrationMessage.map { String(cString: $0) } ?? String(cString: sqlite3_errmsg(database))
-            sqlite3_free(migrationMessage)
-            sqlite3_exec(database, "ROLLBACK", nil, nil, nil)
-            throw SQLiteSafetyStoreError.statementFailed(reason)
+        if version < 1 {
+            let migration = """
+            BEGIN IMMEDIATE;
+            CREATE TABLE rules(id TEXT PRIMARY KEY NOT NULL, position INTEGER NOT NULL, payload BLOB NOT NULL);
+            CREATE TABLE item_overrides(id TEXT PRIMARY KEY NOT NULL, position INTEGER NOT NULL, payload BLOB NOT NULL);
+            CREATE TABLE settings(id INTEGER PRIMARY KEY CHECK(id = 1), globally_paused INTEGER NOT NULL DEFAULT 0 CHECK(globally_paused IN (0, 1)));
+            INSERT INTO settings(id, globally_paused) VALUES(1, 0);
+            CREATE TABLE deadlines(identity_key TEXT PRIMARY KEY NOT NULL, scheduled_at REAL NOT NULL, payload BLOB NOT NULL);
+            CREATE INDEX deadline_due_idx ON deadlines(scheduled_at, identity_key);
+            CREATE TABLE audit_events(id TEXT PRIMARY KEY NOT NULL, occurred_at REAL NOT NULL, kind TEXT NOT NULL, payload BLOB NOT NULL);
+            CREATE INDEX audit_chronology_idx ON audit_events(occurred_at DESC, id DESC);
+            INSERT INTO schema_migrations(version, applied_at) VALUES(1, strftime('%s', 'now'));
+            PRAGMA user_version = 1;
+            COMMIT;
+            """
+            do { try Self.execute(database, migration) }
+            catch { sqlite3_exec(database, "ROLLBACK", nil, nil, nil); throw error }
+            version = 1
         }
-    }
+
+        if version < 2 {
+            let migration = """
+            BEGIN IMMEDIATE;
+            CREATE TABLE managed_roots(id TEXT PRIMARY KEY NOT NULL, position INTEGER NOT NULL, payload BLOB NOT NULL);
+            CREATE INDEX managed_root_order_idx ON managed_roots(position, id);
+            INSERT INTO schema_migrations(version, applied_at) VALUES(2, strftime('%s', 'now'));
+            PRAGMA user_version = 2;
+            COMMIT;
+            """
+            do { try Self.execute(database, migration) }
+            catch { sqlite3_exec(database, "ROLLBACK", nil, nil, nil); throw error }
+        }
+}
 }

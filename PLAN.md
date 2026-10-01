@@ -80,16 +80,9 @@ Store explicit item policies redundantly in a versioned, minimal `com.tinyprune.
 
 **Exit proof:** all targets compile, app launches, the agent accepts a versioned XPC health request, and CLI receives that response.
 
-#### Local SwiftPM agent loop
+#### Local packaged-app loop
 
-For development on a macOS login session:
-
-1. `swift Scripts/manage-agent.swift preview` prints and validates the per-user LaunchAgent property list without changing the machine.
-2. `swift Scripts/manage-agent.swift install` builds the release agent and CLI, installs them under `~/Library/Application Support/TinyPrune/bin`, then bootstraps the current user's LaunchAgent.
-3. Run `swift run TinyPruneApp`, `swift run tinyprune rules`, or `swift run tinyprune upcoming` from the repository.
-4. `swift Scripts/manage-agent.swift uninstall` unloads the LaunchAgent and removes only the installed executables and plist. It retains `state.sqlite3` and audit data.
-
-This is a developer LaunchAgent setup, not release packaging. The SwiftPM app is not yet a signed `.app` bundle, and user-facing installation still requires the Xcode project, embedded helper, and `SMAppService` registration.
+On macOS, run `swift Scripts/package-app.swift` to build and ad-hoc sign the development `.app` bundle at `.build/package/TinyPrune.app`. Open it with `open .build/package/TinyPrune.app`; the app offers to register the embedded LaunchAgent through `SMAppService` and opens Login Items for approval when needed. Then use `swift run tinyprune status`, `rules`, or `upcoming` from the repository. The package is for local development only: Developer ID signing, notarization, and release packaging remain separate release steps.
 
 
 ### Phase 1 — safe core before UI

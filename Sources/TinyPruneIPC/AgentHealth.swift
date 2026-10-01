@@ -18,11 +18,13 @@ public struct AgentHealth: Codable, Equatable, Sendable {
 public struct AgentPolicySnapshot: Codable, Equatable, Sendable {
     public let rules: [LifetimeRule]
     public let overrides: [ItemPolicyOverride]
+    public let managedRoots: [ManagedRoot]
     public let globallyPaused: Bool
 
-    public init(rules: [LifetimeRule], overrides: [ItemPolicyOverride], globallyPaused: Bool) {
+    public init(rules: [LifetimeRule], overrides: [ItemPolicyOverride], managedRoots: [ManagedRoot] = [], globallyPaused: Bool) {
         self.rules = rules
         self.overrides = overrides
+        self.managedRoots = managedRoots
         self.globallyPaused = globallyPaused
     }
 }

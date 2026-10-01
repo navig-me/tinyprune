@@ -33,3 +33,5 @@ jobs:
         run: swift run TinyPruneEngineCheck
       - name: Build native products
         run: swift build --configuration release
+      - name: Package and verify development app
+        run: swift Scripts/package-app.swift

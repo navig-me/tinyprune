@@ -27,7 +27,8 @@ final class AgentRequestHandlerTests: XCTestCase {
         let harness = try makeHandler()
         defer { try? FileManager.default.removeItem(at: harness.directory) }
         let rule = try makeRule()
-        let replacement = AgentPolicySnapshot(rules: [rule], overrides: [], globallyPaused: true)
+        let root = try ManagedRoot(displayName: "Downloads", path: "/Downloads", bookmarkData: Data([1]))
+        let replacement = AgentPolicySnapshot(rules: [rule], overrides: [], managedRoots: [root], globallyPaused: true)
 
         let replaceResponse = try await response(from: harness.handler, request: AgentRequest(operation: .replacePolicy(replacement)))
 
@@ -35,6 +36,7 @@ final class AgentRequestHandlerTests: XCTestCase {
         let loaded = try await response(from: harness.handler, request: AgentRequest(operation: .loadPolicy))
         guard case .policy(let snapshot) = loaded.payload else { return XCTFail("Expected persisted policy response") }
         XCTAssertEqual(snapshot.rules, [rule])
+        XCTAssertEqual(snapshot.managedRoots, [root])
         XCTAssertTrue(snapshot.globallyPaused)
         let identity = FilesystemIdentity(volumeIdentifier: UUID(), resourceIdentifier: Data([3]), pathHint: "/Downloads/archive.zip")
         let candidate = RuleCandidate(identity: identity, name: "archive.zip", kind: .file, timestamps: CandidateTimestamps(modified: Date(timeIntervalSince1970: 100)))
@@ -69,7 +71,8 @@ final class AgentRequestHandlerTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: harness.directory) }
         let rule = try makeRule()
         let duplicate = try makeRule(id: rule.id)
-        let request = AgentRequest(operation: .replacePolicy(AgentPolicySnapshot(rules: [rule, duplicate], overrides: [], globallyPaused: true)))
+        let root = try ManagedRoot(displayName: "Downloads", path: "/Downloads", bookmarkData: Data([1]))
+        let request = AgentRequest(operation: .replacePolicy(AgentPolicySnapshot(rules: [rule, duplicate], overrides: [], managedRoots: [root], globallyPaused: true)))
 
         let invalidResponse = try await response(from: harness.handler, request: request)
         guard case .failure(.invalidRequest) = invalidResponse.payload else { return XCTFail("Duplicate rule IDs must be rejected") }
