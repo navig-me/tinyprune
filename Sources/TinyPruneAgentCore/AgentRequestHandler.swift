@@ -7,9 +7,11 @@ import TinyPrunePersistence
 public actor AgentRequestHandler {
     private let store: SQLiteSafetyStore
     private let serviceVersion: String
+    private let runtime: ManagedRootAgentRuntime?
 
-    public init(store: SQLiteSafetyStore, serviceVersion: String = "0.1.0") {
+    public init(store: SQLiteSafetyStore, runtime: ManagedRootAgentRuntime? = nil, serviceVersion: String = "0.1.0") {
         self.store = store
+        self.runtime = runtime
         self.serviceVersion = serviceVersion
     }
 
@@ -47,6 +49,10 @@ public actor AgentRequestHandler {
                     managedRoots: policy.managedRoots,
                     globallyPaused: policy.globallyPaused
                 ))
+                if let runtime {
+                    do { try await runtime.policyDidChange() }
+                    catch { return encode(AgentResponse(payload: .failure(.storageUnavailable("Policy was saved, but root indexing failed: \(error)")))) }
+                }
                 return encode(AgentResponse(payload: .acknowledged))
             }
         } catch {

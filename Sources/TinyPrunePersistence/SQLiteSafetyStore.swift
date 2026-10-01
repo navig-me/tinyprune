@@ -121,11 +121,28 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
     }
 
     public func saveDeadline(_ deadline: PersistedDeadline) throws {
-        let statement = try prepare("INSERT INTO deadlines(identity_key, scheduled_at, payload) VALUES(?, ?, ?) ON CONFLICT(identity_key) DO UPDATE SET scheduled_at=excluded.scheduled_at, payload=excluded.payload")
+        try persistDeadline(deadline)
+    }
+
+    public func saveDeadlines(_ deadlines: [PersistedDeadline]) throws {
+        guard !deadlines.isEmpty else { return }
+        try execute("BEGIN IMMEDIATE")
+        do {
+            for deadline in deadlines { try persistDeadline(deadline) }
+            try execute("COMMIT")
+        } catch {
+            try? execute("ROLLBACK")
+            throw error
+        }
+    }
+
+    private func persistDeadline(_ deadline: PersistedDeadline) throws {
+        let statement = try prepare("INSERT INTO deadlines(identity_key, scheduled_at, path_hint, payload) VALUES(?, ?, ?, ?) ON CONFLICT(identity_key) DO UPDATE SET scheduled_at=excluded.scheduled_at, path_hint=excluded.path_hint, payload=excluded.payload")
         defer { sqlite3_finalize(statement) }
         try bind(Self.identityKey(deadline.identity), to: statement, at: 1)
         try check(sqlite3_bind_double(statement, 2, deadline.scheduledAt.timeIntervalSince1970))
-        try bind(try encode(deadline), to: statement, at: 3)
+        try bind(deadline.identity.pathHint, to: statement, at: 3)
+        try bind(try encode(deadline), to: statement, at: 4)
         try stepDone(statement)
     }
 
@@ -133,6 +150,15 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
         let statement = try prepare("DELETE FROM deadlines WHERE identity_key = ?")
         defer { sqlite3_finalize(statement) }
         try bind(Self.identityKey(identity), to: statement, at: 1)
+        try stepDone(statement)
+    }
+    public func removeDeadlines(atOrBelow path: String) throws {
+        let root = RuleScope.normalized(path)
+        let statement = try prepare("DELETE FROM deadlines WHERE path_hint = ? OR (path_hint >= ? AND path_hint < ?)")
+        defer { sqlite3_finalize(statement) }
+        try bind(root, to: statement, at: 1)
+        try bind(root + "/", to: statement, at: 2)
+        try bind(root + "0", to: statement, at: 3)
         try stepDone(statement)
     }
 
@@ -303,6 +329,19 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
             CREATE INDEX managed_root_order_idx ON managed_roots(position, id);
             INSERT INTO schema_migrations(version, applied_at) VALUES(2, strftime('%s', 'now'));
             PRAGMA user_version = 2;
+            COMMIT;
+            """
+            do { try Self.execute(database, migration) }
+            catch { sqlite3_exec(database, "ROLLBACK", nil, nil, nil); throw error }
+        }
+        if version < 3 {
+            let migration = """
+            BEGIN IMMEDIATE;
+            ALTER TABLE deadlines ADD COLUMN path_hint TEXT NOT NULL DEFAULT '';
+            UPDATE deadlines SET path_hint = json_extract(CAST(payload AS TEXT), '$.identity.pathHint') WHERE path_hint = '';
+            CREATE INDEX deadline_path_idx ON deadlines(path_hint);
+            INSERT INTO schema_migrations(version, applied_at) VALUES(3, strftime('%s', 'now'));
+            PRAGMA user_version = 3;
             COMMIT;
             """
             do { try Self.execute(database, migration) }

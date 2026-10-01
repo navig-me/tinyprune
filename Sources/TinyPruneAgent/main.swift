@@ -1,4 +1,5 @@
 import Foundation
+import Dispatch
 import TinyPruneAgentCore
 import TinyPruneEngine
 import TinyPruneIPC
@@ -22,7 +23,7 @@ private final class AgentListenerDelegate: NSObject, NSXPCListenerDelegate {
 
 @main
 struct TinyPruneAgentMain {
-    static func main() throws {
+    static func main() async throws {
         let applicationSupport = try FileManager.default.url(
             for: .applicationSupportDirectory,
             in: .userDomainMask,
@@ -32,11 +33,13 @@ struct TinyPruneAgentMain {
         let store = try SQLiteSafetyStore(databaseURL: applicationSupport
             .appendingPathComponent("TinyPrune", isDirectory: true)
             .appendingPathComponent("state.sqlite3"))
-        let service = AgentXPCService(handler: AgentRequestHandler(store: store))
+        let runtime = ManagedRootAgentRuntime(store: store)
+        try await runtime.start()
+        let service = AgentXPCService(handler: AgentRequestHandler(store: store, runtime: runtime))
         let delegate = AgentListenerDelegate(service: service)
         let listener = NSXPCListener(machServiceName: TinyPruneAgentXPC.machServiceName)
         listener.delegate = delegate
         listener.resume()
-        RunLoop.current.run()
+        dispatchMain()
     }
 }

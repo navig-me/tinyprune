@@ -99,6 +99,32 @@ final class SQLiteSafetyStoreTests: XCTestCase {
         XCTAssertEqual(nextAfterRemoval?.scheduledAt, Date(timeIntervalSince1970: 33))
     }
 
+    func testRemovingPathClearsOnlyThatSubtree() async throws {
+        let harness = try makeStore()
+        defer { try? FileManager.default.removeItem(at: harness.directory) }
+        let rule = try makeRule(name: "Downloads archives")
+        let paths = [
+            "/Developer/cache/build/output.zip",
+            "/Developer/cache/old.zip",
+            "/Developer/cache-old/keep.zip",
+        ]
+        for (index, path) in paths.enumerated() {
+            let identity = makeIdentity(resource: Data([UInt8(index + 1)]), path: path)
+            let observedAt = Date(timeIntervalSince1970: TimeInterval(index + 1))
+            let candidate = RuleCandidate(identity: identity, name: URL(fileURLWithPath: path).lastPathComponent, kind: .file, timestamps: CandidateTimestamps(modified: observedAt))
+            let deadline = observedAt.addingTimeInterval(60)
+            let explanation = CandidateExplanation(candidate: candidate, rule: rule, basisDate: observedAt, eligibleAt: deadline, scheduledAt: deadline, disposition: .preview)
+            try await harness.store.saveDeadline(PersistedDeadline(identity: identity, scheduledAt: deadline, explanation: explanation))
+        }
+
+        try await harness.store.removeDeadlines(atOrBelow: "/Developer/cache")
+
+        let remaining = try await harness.store.upcomingDeadlines()
+        XCTAssertEqual(remaining.count, 1)
+        XCTAssertEqual(remaining.first?.identity.pathHint, "/Developer/cache-old/keep.zip")
+    }
+
+
     private func makeStore() throws -> (directory: URL, store: SQLiteSafetyStore) {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TinyPrune-SQLite-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
