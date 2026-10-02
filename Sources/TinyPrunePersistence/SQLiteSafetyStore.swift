@@ -7,6 +7,10 @@ public struct PersistedDeadline: Hashable, Codable, Sendable {
     public let identity: FilesystemIdentity
     public let scheduledAt: Date
     public let explanation: CandidateExplanation
+    public var source: ScheduledSource {
+        if let overrideID = explanation.customOverrideID { return .customOverride(overrideID) }
+        return .rule(explanation.matchedRuleID)
+    }
     public init(identity: FilesystemIdentity, scheduledAt: Date, explanation: CandidateExplanation) {
         self.identity = identity
         self.scheduledAt = scheduledAt
@@ -26,6 +30,36 @@ public struct PersistedObservedActivity: Hashable, Sendable {
     }
 }
 
+public struct PersistedProjectActivity: Hashable, Sendable {
+    public let identity: FilesystemIdentity
+    public let lastActivityAt: Date
+
+    public init(identity: FilesystemIdentity, lastActivityAt: Date) {
+        self.identity = identity
+        self.lastActivityAt = lastActivityAt
+    }
+}
+
+public struct ProjectActivityObservation: Hashable, Sendable {
+    public let path: String
+    public let modifiedAt: Date
+
+    public init(path: String, modifiedAt: Date) {
+        self.path = RuleScope.normalized(path)
+        self.modifiedAt = modifiedAt
+    }
+}
+
+public struct PersistedDeadlinePage: Sendable {
+    public let deadlines: [PersistedDeadline]
+    public let nextCursor: String?
+
+    public init(deadlines: [PersistedDeadline], nextCursor: String?) {
+        self.deadlines = deadlines
+        self.nextCursor = nextCursor
+    }
+}
+
 public enum SQLiteSafetyStoreError: Error, Equatable, Sendable {
     case openFailed(String)
     case statementFailed(String)
@@ -37,9 +71,11 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
     nonisolated(unsafe) private var database: OpaquePointer?
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
+    private let clock: any SafetyClock
 
-    public init(databaseURL: URL) throws {
+    public init(databaseURL: URL, clock: any SafetyClock = SystemSafetyClock()) throws {
         self.databaseURL = databaseURL
+        self.clock = clock
         try FileManager.default.createDirectory(at: databaseURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         encoder.outputFormatting = [.sortedKeys]
         let result = sqlite3_open_v2(
@@ -65,18 +101,110 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
     }
 
     public func loadSnapshot() async throws -> PolicySnapshot {
+        try lapseExpiredPause()
         let rules = try loadPayloads(table: "rules", as: LifetimeRule.self)
         let overrides = try loadPayloads(table: "item_overrides", as: ItemPolicyOverride.self)
         let managedRoots = try loadPayloads(table: "managed_roots", as: ManagedRoot.self)
-        let statement = try prepare("SELECT globally_paused FROM settings WHERE id = 1")
+        let state = try loadSettingsRow()
+        let now = clock.now()
+        let pausedUntil = state.pausedUntil.flatMap { $0 > now ? $0 : nil }
+        let effectivelyPaused = state.globallyPaused && (state.pausedUntil == nil || pausedUntil != nil)
+        return PolicySnapshot(
+            rules: rules,
+            overrides: overrides,
+            managedRoots: managedRoots,
+            globallyPaused: effectivelyPaused,
+            pausedUntil: effectivelyPaused ? pausedUntil : nil,
+            settings: state.settings
+        )
+    }
+
+    public func loadSettings() async throws -> AgentSettings {
+        try loadSettingsRow().settings
+    }
+
+    /// Persists settings and audits the change in one transaction, then applies retention (keeping the new event).
+    public func updateSettings(_ settings: AgentSettings, auditEvent: TrashAuditEvent) throws {
+        try execute("BEGIN IMMEDIATE")
+        do {
+            let statement = try prepare("UPDATE settings SET default_grace_seconds = ?, protect_hidden_files = ?, activity_retention_days = ? WHERE id = 1")
+            defer { sqlite3_finalize(statement) }
+            try check(sqlite3_bind_double(statement, 1, settings.defaultGracePeriodSeconds))
+            try check(sqlite3_bind_int(statement, 2, settings.protectHiddenFiles ? 1 : 0))
+            try check(sqlite3_bind_int64(statement, 3, Int64(settings.activityRetentionDays)))
+            try stepDone(statement)
+            try insertAuditEvent(auditEvent)
+            try pruneAuditEvents(retentionDays: settings.activityRetentionDays, keeping: auditEvent.id)
+            try execute("COMMIT")
+        } catch {
+            try? execute("ROLLBACK")
+            throw error
+        }
+    }
+
+    private struct SettingsRow {
+        let globallyPaused: Bool
+        let pausedUntil: Date?
+        let settings: AgentSettings
+    }
+
+    private func loadSettingsRow() throws -> SettingsRow {
+        let statement = try prepare("SELECT globally_paused, pause_until, default_grace_seconds, protect_hidden_files, activity_retention_days FROM settings WHERE id = 1")
         defer { sqlite3_finalize(statement) }
         guard sqlite3_step(statement) == SQLITE_ROW else {
             throw SQLiteSafetyStoreError.statementFailed("global pause setting is missing")
         }
-        return PolicySnapshot(rules: rules, overrides: overrides, managedRoots: managedRoots, globallyPaused: sqlite3_column_int(statement, 0) != 0)
+        let until = sqlite3_column_type(statement, 1) == SQLITE_NULL ? nil : Date(timeIntervalSince1970: sqlite3_column_double(statement, 1))
+        return SettingsRow(
+            globallyPaused: sqlite3_column_int(statement, 0) != 0,
+            pausedUntil: until,
+            settings: AgentSettings(
+                defaultGracePeriodSeconds: sqlite3_column_double(statement, 2),
+                protectHiddenFiles: sqlite3_column_int(statement, 3) != 0,
+                activityRetentionDays: Int(sqlite3_column_int64(statement, 4))
+            )
+        )
     }
 
-    public func replaceSnapshot(_ snapshot: PolicySnapshot) throws {
+    /// Clears a timed pause whose end has passed and records one `globalPauseChanged` event for it.
+    /// The conditional UPDATE inside the transaction makes the lapse (and its audit) happen exactly once.
+    private func lapseExpiredPause() throws {
+        let now = clock.now()
+        let probe = try prepare("SELECT 1 FROM settings WHERE id = 1 AND globally_paused = 1 AND pause_until IS NOT NULL AND pause_until <= ?")
+        let lapsed: Bool
+        do {
+            defer { sqlite3_finalize(probe) }
+            try check(sqlite3_bind_double(probe, 1, now.timeIntervalSince1970))
+            lapsed = try rowAvailable(probe)
+        }
+        guard lapsed else { return }
+        try execute("BEGIN IMMEDIATE")
+        do {
+            let statement = try prepare("UPDATE settings SET globally_paused = 0, pause_until = NULL WHERE id = 1 AND globally_paused = 1 AND pause_until IS NOT NULL AND pause_until <= ?")
+            defer { sqlite3_finalize(statement) }
+            try check(sqlite3_bind_double(statement, 1, now.timeIntervalSince1970))
+            try stepDone(statement)
+            if sqlite3_changes(database) == 1 {
+                try insertAuditEvent(TrashAuditEvent(occurredAt: now, kind: .globalPauseChanged, detail: "resumed automatically"))
+            }
+            try execute("COMMIT")
+        } catch {
+            try? execute("ROLLBACK")
+            throw error
+        }
+    }
+
+    private func pruneAuditEvents(retentionDays: Int, keeping keptID: UUID? = nil) throws {
+        guard retentionDays > 0 else { return }
+        let cutoff = clock.now().addingTimeInterval(-Double(retentionDays) * 86_400)
+        let statement = try prepare("DELETE FROM audit_events WHERE occurred_at < ? AND id <> ?")
+        defer { sqlite3_finalize(statement) }
+        try check(sqlite3_bind_double(statement, 1, cutoff.timeIntervalSince1970))
+        try bind(keptID?.uuidString ?? "", to: statement, at: 2)
+        try stepDone(statement)
+    }
+
+    public func replaceSnapshot(_ snapshot: PolicySnapshot, auditEvents: [TrashAuditEvent] = []) throws {
         try execute("BEGIN IMMEDIATE")
         do {
             try execute("DELETE FROM rules")
@@ -91,15 +219,92 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
             for (position, root) in snapshot.managedRoots.enumerated() {
                 try insertPayload(table: "managed_roots", id: root.id.uuidString, position: position, value: root)
             }
-            let statement = try prepare("UPDATE settings SET globally_paused = ? WHERE id = 1")
+            let statement = try prepare("UPDATE settings SET globally_paused = ?, pause_until = ? WHERE id = 1")
             defer { sqlite3_finalize(statement) }
             try check(sqlite3_bind_int(statement, 1, snapshot.globallyPaused ? 1 : 0))
+            if snapshot.globallyPaused, let until = snapshot.pausedUntil {
+                try check(sqlite3_bind_double(statement, 2, until.timeIntervalSince1970))
+            } else {
+                try check(sqlite3_bind_null(statement, 2))
+            }
             try stepDone(statement)
             try insertAuditEvent(TrashAuditEvent(
                 occurredAt: Date(),
                 kind: .policyReplaced,
                 detail: "rules=\(snapshot.rules.count); overrides=\(snapshot.overrides.count); roots=\(snapshot.managedRoots.count); globallyPaused=\(snapshot.globallyPaused)"
             ))
+            for event in auditEvents { try insertAuditEvent(event) }
+            try execute("COMMIT")
+        } catch {
+            try? execute("ROLLBACK")
+            throw error
+        }
+    }
+
+    public func setOverride(_ override: ItemPolicyOverride, auditEvent: TrashAuditEvent) throws {
+        var overrides = try loadPayloads(table: "item_overrides", as: ItemPolicyOverride.self)
+        overrides.removeAll { $0.path == override.path }
+        overrides.append(override)
+        try replaceOverrides(overrides, auditEvent: auditEvent)
+    }
+
+    public func removeOverrides(at path: String, auditEvent: TrashAuditEvent) throws {
+        let normalizedPath = RuleScope.normalized(path)
+        var overrides = try loadPayloads(table: "item_overrides", as: ItemPolicyOverride.self)
+        overrides.removeAll { $0.path == normalizedPath }
+        try replaceOverrides(overrides, auditEvent: auditEvent)
+    }
+
+    private func replaceOverrides(_ overrides: [ItemPolicyOverride], auditEvent: TrashAuditEvent) throws {
+        try execute("BEGIN IMMEDIATE")
+        do {
+            try execute("DELETE FROM item_overrides")
+            for (position, override) in overrides.enumerated() {
+                try insertPayload(table: "item_overrides", id: override.id.uuidString, position: position, value: override)
+            }
+            try insertAuditEvent(auditEvent)
+            try execute("COMMIT")
+        } catch {
+            try? execute("ROLLBACK")
+            throw error
+        }
+    }
+
+    public func setGlobalPause(_ isPaused: Bool, until: Date? = nil, auditEvent: TrashAuditEvent) throws {
+        try execute("BEGIN IMMEDIATE")
+        do {
+            let statement = try prepare("UPDATE settings SET globally_paused = ?, pause_until = ? WHERE id = 1")
+            defer { sqlite3_finalize(statement) }
+            try check(sqlite3_bind_int(statement, 1, isPaused ? 1 : 0))
+            if isPaused, let until {
+                try check(sqlite3_bind_double(statement, 2, until.timeIntervalSince1970))
+            } else {
+                try check(sqlite3_bind_null(statement, 2))
+            }
+            try stepDone(statement)
+            try insertAuditEvent(auditEvent)
+            try execute("COMMIT")
+        } catch {
+            try? execute("ROLLBACK")
+            throw error
+        }
+    }
+
+    public func deleteRule(_ ruleID: UUID, auditEvent: TrashAuditEvent) throws {
+        try execute("BEGIN IMMEDIATE")
+        do {
+            let statement = try prepare("DELETE FROM rules WHERE id = ?")
+            defer { sqlite3_finalize(statement) }
+            try bind(ruleID.uuidString, to: statement, at: 1)
+            try stepDone(statement)
+            guard sqlite3_changes(database) == 1 else {
+                throw SQLiteSafetyStoreError.statementFailed("rule does not exist")
+            }
+            let deadlines = try prepare("DELETE FROM deadlines WHERE json_extract(CAST(payload AS TEXT), '$.explanation.matchedRuleID') = ? AND json_extract(CAST(payload AS TEXT), '$.explanation.customOverrideID') IS NULL")
+            defer { sqlite3_finalize(deadlines) }
+            try bind(ruleID.uuidString, to: deadlines, at: 1)
+            try stepDone(deadlines)
+            try insertAuditEvent(auditEvent)
             try execute("COMMIT")
         } catch {
             try? execute("ROLLBACK")
@@ -237,6 +442,230 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
         }
     }
 
+    public func eventCursor(for rootID: UUID) throws -> UInt64? {
+        let statement = try prepare("SELECT event_id FROM event_cursors WHERE root_id = ?")
+        defer { sqlite3_finalize(statement) }
+        try bind(rootID.uuidString, to: statement, at: 1)
+        guard try rowAvailable(statement) else { return nil }
+        let text = String(cString: sqlite3_column_text(statement, 0))
+        guard let eventID = UInt64(text) else {
+            throw SQLiteSafetyStoreError.statementFailed("invalid FSEvents cursor for \(rootID)")
+        }
+        return eventID
+    }
+
+    public func saveEventCursor(for rootID: UUID, eventID: UInt64) throws {
+        let statement = try prepare("""
+        INSERT INTO event_cursors(root_id, event_id) VALUES(?, ?)
+        ON CONFLICT(root_id) DO UPDATE SET event_id=excluded.event_id
+        """)
+        defer { sqlite3_finalize(statement) }
+        try bind(rootID.uuidString, to: statement, at: 1)
+        try bind(String(eventID), to: statement, at: 2)
+        try stepDone(statement)
+    }
+
+    public func reconcileObservedActivity(identity: FilesystemIdentity, through date: Date) throws {
+        let statement = try prepare("""
+        UPDATE observed_activity
+        SET last_observed_at=MAX(last_observed_at, ?)
+        WHERE identity_key = ?
+        """)
+        defer { sqlite3_finalize(statement) }
+        try check(sqlite3_bind_double(statement, 1, date.timeIntervalSince1970))
+        try bind(Self.identityKey(identity), to: statement, at: 2)
+        try stepDone(statement)
+    }
+
+    public func removeEventCursor(for rootID: UUID) throws {
+        let statement = try prepare("DELETE FROM event_cursors WHERE root_id = ?")
+        defer { sqlite3_finalize(statement) }
+        try bind(rootID.uuidString, to: statement, at: 1)
+        try stepDone(statement)
+    }
+
+    public func performMaintenance() throws {
+        try execute("PRAGMA wal_checkpoint(PASSIVE)")
+        try pruneAuditEvents(retentionDays: loadSettingsRow().settings.activityRetentionDays)
+        try execute("PRAGMA optimize")
+    }
+
+    public func beginProjectActivityScan() throws -> String {
+        try execute("DELETE FROM project_activity_observations")
+        return UUID().uuidString
+    }
+
+    public func recordProjectActivities(_ projects: [PersistedProjectActivity], scanID: String) throws {
+        guard !projects.isEmpty else { return }
+        try execute("BEGIN IMMEDIATE")
+        do {
+            let statement = try prepare("""
+            INSERT INTO project_activity(identity_key, path_hint, last_activity_at, last_scan_id)
+            VALUES(?, ?, ?, ?)
+            ON CONFLICT(identity_key) DO UPDATE SET
+                path_hint=excluded.path_hint,
+                last_activity_at=MAX(project_activity.last_activity_at, excluded.last_activity_at),
+                last_scan_id=excluded.last_scan_id
+            """)
+            defer { sqlite3_finalize(statement) }
+            for project in projects {
+                sqlite3_reset(statement)
+                sqlite3_clear_bindings(statement)
+                try bind(Self.identityKey(project.identity), to: statement, at: 1)
+                try bind(project.identity.pathHint, to: statement, at: 2)
+                try check(sqlite3_bind_double(statement, 3, project.lastActivityAt.timeIntervalSince1970))
+                try bind(scanID, to: statement, at: 4)
+                try stepDone(statement)
+            }
+            try execute("COMMIT")
+        } catch {
+            try? execute("ROLLBACK")
+            throw error
+        }
+    }
+
+    public func recordProjectObservations(_ observations: [ProjectActivityObservation], scanID: String) throws {
+        guard !observations.isEmpty else { return }
+        try execute("BEGIN IMMEDIATE")
+        do {
+            let statement = try prepare("INSERT INTO project_activity_observations(scan_id, path_hint, modified_at) VALUES(?, ?, ?)")
+            defer { sqlite3_finalize(statement) }
+            for observation in observations {
+                sqlite3_reset(statement)
+                sqlite3_clear_bindings(statement)
+                try bind(scanID, to: statement, at: 1)
+                try bind(observation.path, to: statement, at: 2)
+                try check(sqlite3_bind_double(statement, 3, observation.modifiedAt.timeIntervalSince1970))
+                try stepDone(statement)
+            }
+            try execute("COMMIT")
+        } catch {
+            try? execute("ROLLBACK")
+            throw error
+        }
+    }
+
+    public func finishProjectActivityScan(scanID: String, atOrBelow path: String) throws {
+        let root = RuleScope.normalized(path)
+        try execute("BEGIN IMMEDIATE")
+        do {
+            let observations = try prepare("SELECT id, path_hint, modified_at FROM project_activity_observations WHERE scan_id = ? AND id > ? ORDER BY id LIMIT 256")
+            let nearestProject = try prepare("""
+            SELECT identity_key FROM project_activity
+            WHERE path_hint = ? OR substr(?, 1, length(path_hint) + 1) = path_hint || '/'
+            ORDER BY length(path_hint) DESC LIMIT 1
+            """)
+            let updateProject = try prepare("UPDATE project_activity SET last_activity_at=MAX(last_activity_at, ?) WHERE identity_key = ?")
+            defer {
+                sqlite3_finalize(observations)
+                sqlite3_finalize(nearestProject)
+                sqlite3_finalize(updateProject)
+            }
+            var cursor: Int64 = 0
+            while true {
+                sqlite3_reset(observations)
+                sqlite3_clear_bindings(observations)
+                try bind(scanID, to: observations, at: 1)
+                try check(sqlite3_bind_int64(observations, 2, cursor))
+                var batch: [(id: Int64, path: String, date: Date)] = []
+                while try rowAvailable(observations) {
+                    let id = sqlite3_column_int64(observations, 0)
+                    batch.append((
+                        id,
+                        String(cString: sqlite3_column_text(observations, 1)),
+                        Date(timeIntervalSince1970: sqlite3_column_double(observations, 2))
+                    ))
+                }
+                guard !batch.isEmpty else { break }
+                for observation in batch {
+                    cursor = observation.id
+                    sqlite3_reset(nearestProject)
+                    sqlite3_clear_bindings(nearestProject)
+                    try bind(observation.path, to: nearestProject, at: 1)
+                    try bind(observation.path, to: nearestProject, at: 2)
+                    guard try rowAvailable(nearestProject) else { continue }
+                    let identityKey = String(cString: sqlite3_column_text(nearestProject, 0))
+                    sqlite3_reset(updateProject)
+                    sqlite3_clear_bindings(updateProject)
+                    try check(sqlite3_bind_double(updateProject, 1, observation.date.timeIntervalSince1970))
+                    try bind(identityKey, to: updateProject, at: 2)
+                    try stepDone(updateProject)
+                }
+            }
+
+            let deleteStale = try prepare("""
+            DELETE FROM project_activity
+            WHERE (path_hint = ? OR (path_hint >= ? AND path_hint < ?))
+              AND last_scan_id <> ?
+            """)
+            defer { sqlite3_finalize(deleteStale) }
+            try bind(root, to: deleteStale, at: 1)
+            try bind(root + "/", to: deleteStale, at: 2)
+            try bind(root + "0", to: deleteStale, at: 3)
+            try bind(scanID, to: deleteStale, at: 4)
+            try stepDone(deleteStale)
+
+            let clearObservations = try prepare("DELETE FROM project_activity_observations WHERE scan_id = ?")
+            defer { sqlite3_finalize(clearObservations) }
+            try bind(scanID, to: clearObservations, at: 1)
+            try stepDone(clearObservations)
+            try execute("COMMIT")
+        } catch {
+            try? execute("ROLLBACK")
+            throw error
+        }
+    }
+
+    public func projectActivity(for path: String) throws -> Date? {
+        let statement = try prepare("""
+        SELECT last_activity_at FROM project_activity
+        WHERE path_hint = ? OR substr(?, 1, length(path_hint) + 1) = path_hint || '/'
+        ORDER BY length(path_hint) DESC LIMIT 1
+        """)
+        defer { sqlite3_finalize(statement) }
+        let normalizedPath = RuleScope.normalized(path)
+        try bind(normalizedPath, to: statement, at: 1)
+        try bind(normalizedPath, to: statement, at: 2)
+        guard try rowAvailable(statement) else { return nil }
+        return Date(timeIntervalSince1970: sqlite3_column_double(statement, 0))
+    }
+
+    public func recordProjectActivity(at path: String, date: Date) throws -> String? {
+        do {
+            let statement = try prepare("""
+            SELECT identity_key, path_hint FROM project_activity
+            WHERE path_hint = ? OR substr(?, 1, length(path_hint) + 1) = path_hint || '/'
+            ORDER BY length(path_hint) DESC LIMIT 1
+            """)
+            defer { sqlite3_finalize(statement) }
+            let normalizedPath = RuleScope.normalized(path)
+            try bind(normalizedPath, to: statement, at: 1)
+            try bind(normalizedPath, to: statement, at: 2)
+            guard try rowAvailable(statement) else { return nil }
+            let identityKey = String(cString: sqlite3_column_text(statement, 0))
+            let projectPath = String(cString: sqlite3_column_text(statement, 1))
+            sqlite3_reset(statement)
+            let update = try prepare("UPDATE project_activity SET last_activity_at=MAX(last_activity_at, ?) WHERE identity_key = ?")
+            defer { sqlite3_finalize(update) }
+            try check(sqlite3_bind_double(update, 1, date.timeIntervalSince1970))
+            try bind(identityKey, to: update, at: 2)
+            try stepDone(update)
+            return projectPath
+        } catch {
+            throw SQLiteSafetyStoreError.statementFailed("record project activity for \(path): \(error)")
+        }
+    }
+
+    public func removeProjectActivity(atOrBelow path: String) throws {
+        let root = RuleScope.normalized(path)
+        let statement = try prepare("DELETE FROM project_activity WHERE path_hint = ? OR (path_hint >= ? AND path_hint < ?)")
+        defer { sqlite3_finalize(statement) }
+        try bind(root, to: statement, at: 1)
+        try bind(root + "/", to: statement, at: 2)
+        try bind(root + "0", to: statement, at: 3)
+        try stepDone(statement)
+    }
+
     public func upcomingDeadlines(limit: Int = 50) throws -> [PersistedDeadline] {
         let statement = try prepare("SELECT payload FROM deadlines ORDER BY scheduled_at ASC, identity_key ASC LIMIT ?")
         defer { sqlite3_finalize(statement) }
@@ -250,6 +679,76 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
 
     public func nextDeadline() throws -> PersistedDeadline? {
         try upcomingDeadlines(limit: 1).first
+    }
+
+    /// Per-rule counts of scheduled candidates, read from the persisted deadline index only.
+    public func deadlineCountsByRule(now: Date) throws -> [UUID: (matches: Int, due: Int)] {
+        let statement = try prepare("""
+        SELECT json_extract(CAST(payload AS TEXT), '$.explanation.matchedRuleID') AS rule_id,
+               COUNT(*), SUM(CASE WHEN scheduled_at <= ? THEN 1 ELSE 0 END)
+        FROM deadlines WHERE json_extract(CAST(payload AS TEXT), '$.explanation.customOverrideID') IS NULL GROUP BY rule_id
+        """)
+        defer { sqlite3_finalize(statement) }
+        try check(sqlite3_bind_double(statement, 1, now.timeIntervalSince1970))
+        var result: [UUID: (matches: Int, due: Int)] = [:]
+        while try rowAvailable(statement) {
+            guard let text = sqlite3_column_text(statement, 0), let id = UUID(uuidString: String(cString: text)) else { continue }
+            result[id] = (Int(sqlite3_column_int64(statement, 1)), Int(sqlite3_column_int64(statement, 2)))
+        }
+        return result
+    }
+
+    public func indexedDeadlineCount() throws -> Int {
+        let statement = try prepare("SELECT COUNT(*) FROM deadlines")
+        defer { sqlite3_finalize(statement) }
+        guard try rowAvailable(statement) else { return 0 }
+        return Int(sqlite3_column_int64(statement, 0))
+    }
+
+    public func databaseSizeBytes() -> Int64 {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: databaseURL.path)
+        return (attributes?[.size] as? NSNumber)?.int64Value ?? 0
+    }
+
+    public func deadlinePage(atOrBelow path: String, afterIdentityKey cursor: String? = nil, limit: Int = 256) throws -> PersistedDeadlinePage {
+        let root = RuleScope.normalized(path)
+        let statement: OpaquePointer
+        if cursor == nil {
+            statement = try prepare("""
+            SELECT identity_key, payload FROM deadlines
+            WHERE path_hint = ? OR (path_hint >= ? AND path_hint < ?)
+            ORDER BY identity_key LIMIT ?
+            """)
+        } else {
+            statement = try prepare("""
+            SELECT identity_key, payload FROM deadlines
+            WHERE (path_hint = ? OR (path_hint >= ? AND path_hint < ?))
+              AND identity_key > ?
+            ORDER BY identity_key LIMIT ?
+            """)
+        }
+        defer { sqlite3_finalize(statement) }
+        try bind(root, to: statement, at: 1)
+        try bind(root + "/", to: statement, at: 2)
+        try bind(root + "0", to: statement, at: 3)
+        let pageLimit = min(256, max(1, limit))
+        if let cursor {
+            try bind(cursor, to: statement, at: 4)
+            try check(sqlite3_bind_int64(statement, 5, Int64(pageLimit)))
+        } else {
+            try check(sqlite3_bind_int64(statement, 4, Int64(pageLimit)))
+        }
+        var rows: [(String, PersistedDeadline)] = []
+        while try rowAvailable(statement) {
+            rows.append((
+                String(cString: sqlite3_column_text(statement, 0)),
+                try decode(PersistedDeadline.self, from: columnData(statement, at: 1))
+            ))
+        }
+        return PersistedDeadlinePage(
+            deadlines: rows.map(\.1),
+            nextCursor: rows.count == pageLimit ? rows.last?.0 : nil
+        )
     }
 
     private func loadPayloads<Value: Decodable>(table: String, as type: Value.Type) throws -> [Value] {
@@ -434,6 +933,55 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
             CREATE INDEX observed_activity_path_idx ON observed_activity(path_hint);
             INSERT INTO schema_migrations(version, applied_at) VALUES(4, strftime('%s', 'now'));
             PRAGMA user_version = 4;
+            COMMIT;
+            """
+            do { try Self.execute(database, migration) }
+            catch { sqlite3_exec(database, "ROLLBACK", nil, nil, nil); throw error }
+        }
+        if version < 5 {
+            let migration = """
+            BEGIN IMMEDIATE;
+            CREATE TABLE event_cursors(root_id TEXT PRIMARY KEY NOT NULL, event_id TEXT NOT NULL);
+            INSERT INTO schema_migrations(version, applied_at) VALUES(5, strftime('%s', 'now'));
+            PRAGMA user_version = 5;
+            COMMIT;
+            """
+            do { try Self.execute(database, migration) }
+            catch { sqlite3_exec(database, "ROLLBACK", nil, nil, nil); throw error }
+        }
+        if version < 6 {
+            let migration = """
+            BEGIN IMMEDIATE;
+            CREATE TABLE project_activity(
+                identity_key TEXT PRIMARY KEY NOT NULL,
+                path_hint TEXT NOT NULL,
+                last_activity_at REAL NOT NULL,
+                last_scan_id TEXT NOT NULL
+            );
+            CREATE INDEX project_activity_path_idx ON project_activity(path_hint);
+            CREATE TABLE project_activity_observations(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                scan_id TEXT NOT NULL,
+                path_hint TEXT NOT NULL,
+                modified_at REAL NOT NULL
+            );
+            CREATE INDEX project_activity_observation_scan_idx ON project_activity_observations(scan_id, id);
+            INSERT INTO schema_migrations(version, applied_at) VALUES(6, strftime('%s', 'now'));
+            PRAGMA user_version = 6;
+            COMMIT;
+            """
+            do { try Self.execute(database, migration) }
+            catch { sqlite3_exec(database, "ROLLBACK", nil, nil, nil); throw error }
+        }
+        if version < 7 {
+            let migration = """
+            BEGIN IMMEDIATE;
+            ALTER TABLE settings ADD COLUMN pause_until REAL;
+            ALTER TABLE settings ADD COLUMN default_grace_seconds REAL NOT NULL DEFAULT 0;
+            ALTER TABLE settings ADD COLUMN protect_hidden_files INTEGER NOT NULL DEFAULT 0 CHECK(protect_hidden_files IN (0, 1));
+            ALTER TABLE settings ADD COLUMN activity_retention_days INTEGER NOT NULL DEFAULT 0 CHECK(activity_retention_days >= 0);
+            INSERT INTO schema_migrations(version, applied_at) VALUES(7, strftime('%s', 'now'));
+            PRAGMA user_version = 7;
             COMMIT;
             """
             do { try Self.execute(database, migration) }

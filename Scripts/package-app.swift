@@ -12,6 +12,24 @@ let resourcesURL = contentsURL.appendingPathComponent("Resources", isDirectory: 
 let launchAgentsURL = contentsURL.appendingPathComponent("Library/LaunchAgents", isDirectory: true)
 let appIdentifier = "com.navig-me.tinyprune"
 let agentLabel = "com.navig-me.tinyprune.agent"
+let finderExtensionIdentifier = "com.navig-me.tinyprune.finder"
+let extensionURL = contentsURL.appendingPathComponent("PlugIns/TinyPruneFinderExtension.appex", isDirectory: true)
+let extensionContentsURL = extensionURL.appendingPathComponent("Contents", isDirectory: true)
+let extensionMacOSURL = extensionContentsURL.appendingPathComponent("MacOS", isDirectory: true)
+let finderEntitlementsURL = repositoryRoot.appendingPathComponent("Resources/Entitlements/FinderExtension.entitlements")
+
+// Signing configuration. Default is an ad-hoc development build. Release builds set
+// TINYPRUNE_SIGN_IDENTITY to a Developer ID Application identity (name or SHA-1), which
+// additionally enables the secure timestamp and builds a universal binary.
+let environment = ProcessInfo.processInfo.environment
+let signIdentity = environment["TINYPRUNE_SIGN_IDENTITY"].flatMap { $0.isEmpty ? nil : $0 } ?? "-"
+let isAdHoc = signIdentity == "-"
+let marketingVersion = environment["TINYPRUNE_VERSION"].flatMap { $0.isEmpty ? nil : $0 } ?? "0.1.0"
+let buildNumber = environment["TINYPRUNE_BUILD"].flatMap { $0.isEmpty ? nil : $0 } ?? "1"
+let universal = environment["TINYPRUNE_UNIVERSAL"] == "1" || !isAdHoc
+var buildArguments = ["build", "--configuration", "release"]
+if universal { buildArguments += ["--arch", "arm64", "--arch", "x86_64"] }
+let binDirectory = repositoryRoot.appendingPathComponent(universal ? ".build/apple/Products/Release" : ".build/release", isDirectory: true)
 
 func run(_ executable: String, _ arguments: [String]) throws {
     let process = Process()
@@ -28,7 +46,7 @@ func run(_ executable: String, _ arguments: [String]) throws {
 }
 
 func copyExecutable(_ name: String) throws {
-    let source = repositoryRoot.appendingPathComponent(".build/release/\(name)")
+    let source = binDirectory.appendingPathComponent(name)
     let destination = macOSURL.appendingPathComponent(name)
     try fileManager.copyItem(at: source, to: destination)
     try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: destination.path)
@@ -40,7 +58,7 @@ func writePropertyList(_ value: [String: Any], to url: URL) throws {
 }
 
 do {
-    try run("/usr/bin/swift", ["build", "--configuration", "release"])
+    try run("/usr/bin/swift", buildArguments)
     try fileManager.createDirectory(at: packageDirectory, withIntermediateDirectories: true)
     if fileManager.fileExists(atPath: appURL.path) { try fileManager.removeItem(at: appURL) }
     try fileManager.createDirectory(at: macOSURL, withIntermediateDirectories: true)
@@ -52,6 +70,15 @@ do {
     try copyExecutable("tinyprune")
     try Data("APPLTPRN".utf8).write(to: contentsURL.appendingPathComponent("PkgInfo"))
 
+    let fontsSourceURL = repositoryRoot.appendingPathComponent("Resources/Fonts", isDirectory: true)
+    let fontsURL = resourcesURL.appendingPathComponent("Fonts", isDirectory: true)
+    try fileManager.copyItem(at: fontsSourceURL, to: fontsURL)
+
+    try fileManager.createDirectory(at: extensionMacOSURL, withIntermediateDirectories: true)
+    let extensionBinary = extensionMacOSURL.appendingPathComponent("TinyPruneFinderExtension")
+    try fileManager.copyItem(at: binDirectory.appendingPathComponent("TinyPruneFinderExtension"), to: extensionBinary)
+    try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: extensionBinary.path)
+
     try writePropertyList([
         "CFBundleDevelopmentRegion": "en",
         "CFBundleExecutable": "TinyPruneApp",
@@ -59,11 +86,16 @@ do {
         "CFBundleInfoDictionaryVersion": "6.0",
         "CFBundleName": "TinyPrune",
         "CFBundlePackageType": "APPL",
-        "CFBundleShortVersionString": "0.1.0",
-        "CFBundleVersion": "1",
+        "CFBundleShortVersionString": marketingVersion,
+        "CFBundleVersion": buildNumber,
         "LSMinimumSystemVersion": "14.0",
         "NSHighResolutionCapable": true,
+        "ATSApplicationFontsPath": "Fonts",
         "NSPrincipalClass": "NSApplication",
+        "CFBundleURLTypes": [[
+            "CFBundleURLName": appIdentifier,
+            "CFBundleURLSchemes": ["tinyprune"],
+        ]],
     ], to: contentsURL.appendingPathComponent("Info.plist"))
 
     try writePropertyList([
@@ -74,10 +106,47 @@ do {
         "KeepAlive": true,
     ], to: launchAgentsURL.appendingPathComponent("\(agentLabel).plist"))
 
-    try run("/usr/bin/codesign", ["--force", "--deep", "--sign", "-", appURL.path])
+    try writePropertyList([
+        "CFBundleDevelopmentRegion": "en",
+        "CFBundleDisplayName": "TinyPrune Finder Extension",
+        "CFBundleExecutable": "TinyPruneFinderExtension",
+        "CFBundleIdentifier": finderExtensionIdentifier,
+        "CFBundleInfoDictionaryVersion": "6.0",
+        "CFBundleName": "TinyPruneFinderExtension",
+        "CFBundlePackageType": "XPC!",
+        "CFBundleShortVersionString": marketingVersion,
+        "CFBundleVersion": buildNumber,
+        "LSMinimumSystemVersion": "14.0",
+        "NSExtension": [
+            "NSExtensionPointIdentifier": "com.apple.FinderSync",
+            "NSExtensionPrincipalClass": "TinyPruneFinderExtension.FinderSync",
+        ],
+    ], to: extensionContentsURL.appendingPathComponent("Info.plist"))
+
+    try run("/usr/bin/plutil", ["-lint", extensionContentsURL.appendingPathComponent("Info.plist").path])
+    // Every component uses hardened runtime; release builds add a secure timestamp.
+    // The Finder extension keeps its own bundle identifier and the sandbox entitlements
+    // (App Sandbox is mandatory for Finder Sync). It is signed before its container.
+    func sign(_ path: URL, identifier: String? = nil, entitlements: URL? = nil) throws {
+        var arguments = ["--force", "--sign", signIdentity, "--options", "runtime", isAdHoc ? "--timestamp=none" : "--timestamp"]
+        if let identifier { arguments += ["--identifier", identifier] }
+        if let entitlements { arguments += ["--entitlements", entitlements.path] }
+        try run("/usr/bin/codesign", arguments + [path.path])
+    }
+    try sign(extensionURL, identifier: finderExtensionIdentifier, entitlements: finderEntitlementsURL)
+    // Security-scoped bookmarks created by the app must resolve in the agent, so every
+    // executable that touches them shares the app's signing identifier (ADR 0004).
+    for name in ["TinyPruneAgent", "tinyprune"] {
+        try sign(macOSURL.appendingPathComponent(name), identifier: appIdentifier)
+    }
+    try sign(appURL, identifier: appIdentifier)
     try run("/usr/bin/codesign", ["--verify", "--deep", "--strict", appURL.path])
-    print("Packaged unsigned-for-distribution development app: \(appURL.path)")
-    print("Build uses an ad-hoc signature; Developer ID signing and notarization remain release steps.")
+    if isAdHoc {
+        print("Packaged development app (ad-hoc signature, hardened runtime): \(appURL.path)")
+        print("Developer ID signing and notarization require TINYPRUNE_SIGN_IDENTITY; see ADR 0004.")
+    } else {
+        print("Packaged release app signed as '\(signIdentity)': \(appURL.path)")
+    }
 } catch {
     FileHandle.standardError.write(Data("TinyPrune app packaging failed: \(error)\n".utf8))
     exit(1)

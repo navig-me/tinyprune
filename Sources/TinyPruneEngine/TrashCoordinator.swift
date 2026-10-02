@@ -5,13 +5,25 @@ public struct PolicySnapshot: Sendable {
     public let rules: [LifetimeRule]
     public let overrides: [ItemPolicyOverride]
     public let managedRoots: [ManagedRoot]
+    /// Effective pause state: already `false` once `pausedUntil` has passed (resolved at read time).
     public let globallyPaused: Bool
+    public let pausedUntil: Date?
+    public let settings: AgentSettings
 
-    public init(rules: [LifetimeRule], overrides: [ItemPolicyOverride], managedRoots: [ManagedRoot] = [], globallyPaused: Bool) {
+    public init(
+        rules: [LifetimeRule],
+        overrides: [ItemPolicyOverride],
+        managedRoots: [ManagedRoot] = [],
+        globallyPaused: Bool,
+        pausedUntil: Date? = nil,
+        settings: AgentSettings = .default
+    ) {
         self.rules = rules
         self.overrides = overrides
         self.managedRoots = managedRoots
         self.globallyPaused = globallyPaused
+        self.pausedUntil = pausedUntil
+        self.settings = settings
     }
 }
 
@@ -53,12 +65,21 @@ public struct TrashRequest: Hashable, Codable, Sendable {
 
 public enum TrashAuditKind: String, Codable, Sendable {
     case policyReplaced
+    case ruleCreated
+    case ruleEdited
+    case rulePaused
+    case ruleDeleted
+    case itemProtected
+    case itemUnprotected
+    case expiryChanged
+    case globalPauseChanged
     case previewSkipped
     case notDue
     case safetySkipped
     case trashAttempted
     case movedToTrash
     case trashFailed
+    case settingsChanged
 }
 
 public struct TrashAuditEvent: Hashable, Codable, Sendable, Identifiable {
@@ -161,7 +182,8 @@ public actor TrashCoordinator {
             candidate: currentCandidate,
             rules: snapshot.rules,
             overrides: snapshot.overrides,
-            globallyPaused: snapshot.globallyPaused
+            globallyPaused: snapshot.globallyPaused,
+            settings: snapshot.settings
         )
         guard let initialAuthorization = authorization(for: request.source, resolution: resolution, snapshot: snapshot) else {
             return try await recordSkip("candidate is no longer eligible", request: request, at: now)
@@ -206,7 +228,8 @@ public actor TrashCoordinator {
             candidate: finalCandidate,
             rules: finalSnapshot.rules,
             overrides: finalSnapshot.overrides,
-            globallyPaused: finalSnapshot.globallyPaused
+            globallyPaused: finalSnapshot.globallyPaused,
+            settings: finalSnapshot.settings
         )
         guard let finalAuthorization = authorization(for: request.source, resolution: finalResolution, snapshot: finalSnapshot) else {
             return try await recordSkip("current policy no longer authorizes this move", request: request, at: clock.now(), ruleID: applicableRule?.id)
@@ -258,7 +281,8 @@ public actor TrashCoordinator {
             candidate: committedCandidate,
             rules: committedSnapshot.rules,
             overrides: committedSnapshot.overrides,
-            globallyPaused: committedSnapshot.globallyPaused
+            globallyPaused: committedSnapshot.globallyPaused,
+            settings: committedSnapshot.settings
         )
         guard let committedAuthorization = authorization(for: request.source, resolution: committedResolution, snapshot: committedSnapshot),
               committedAuthorization.disposition == .active,

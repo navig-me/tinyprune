@@ -100,7 +100,8 @@ The Rules screen can add a user-selected managed root and an all-items rule that
 
 - Add streaming initial index/recovery, FSEvents watch management, event coalescing/reconciliation, project detection/activity, deadline invalidation, scheduler wake/sleep, mount lifecycle, and database maintenance.
 - Bound every queue and batch. Instrument only local diagnostics needed to verify idle CPU, memory, database writes, backlog, and recovery—not user telemetry.
-- Run a 100k-entry benchmark fixture and an idle soak scenario; define acceptance thresholds from the spec before optimising.
+- Acceptance thresholds on the macOS 15 benchmark runner: `swift test -c release -Xswiftc -enable-testing --filter PhaseTwoBenchmarkTests` (Swift Testing; on a CommandLineTools-only Mac add the framework flags in AGENTS.md) indexes 100,000 files within 5 minutes with peak RSS at or below 512 MiB; its 60-second idle soak uses at most 0.5 CPU-seconds and triggers no full-tree scan; each root event buffer remains at most 512 batches and persistence batches at most 256 rows. Observed locally (release): 48.5 s scan, 56 MiB peak RSS, 0.0013 idle CPU-s, persistence batches 256.
+- Exit fixtures must cover create, rename, modify, event-overflow recovery, crash/restart, one final preflight for each due candidate, and Keep preservation. Report scan duration, peak RSS, CPU time, queue/batch high-water marks, and recovery count as local diagnostics only.
 
 **Exit proof:** create/rename/modify events update only affected candidates; due candidates run one preflight; idle agent has no periodic full-tree traversal; crash/restart reconstructs operational state without violating Keep policies.
 
@@ -113,6 +114,16 @@ The Rules screen can add a user-selected managed root and an all-items rule that
 - Build CLI commands in the specification, including schema-versioned JSON (`--json`) and config `validate`, `preview`, and `apply`; all mutations route through XPC.
 
 **Exit proof:** manual smoke through onboarding → Preview rule → inspector explanation → Keep → active rule → Trash → Activity; Finder and CLI call the same agent and show the same resolved policy.
+
+#### Phase 3 implementation notes
+
+- **Agent contract.** `TinyPruneIPC` adds `loadActivity`, `explainItem`, `setItemOverride`, `clearItemOverride`, `setGlobalPause`, `deleteRule`, and `rebuildIndex`. Every mutation writes its audit event in the same SQLite transaction (`ruleCreated/Edited/Paused/Deleted`, `itemProtected/Unprotected`, `expiryChanged`, `globalPauseChanged`). Item overrides are accepted only for paths inside an available managed root and are identity-bound.
+- **Impact preview is an explicit dry run.** Saving as Preview indexes a rule and counts come from the persisted deadline index. The editor's "Preview matches" button additionally runs a user-initiated, bounded, read-only dry run (`previewRule`, ADR 0003) that never writes or trashes.
+- **Templates** (`RuleTemplate`) produce ordinary `LifetimeRule`s. Developer templates and very broad folders (home, `/Users`, `/Volumes`) are forced into Preview.
+- **Finder.** `TinyPruneFinderExtension` is a sandboxed thin XPC client (mach-lookup exception for the agent only, see `Resources/Entitlements`). Set Folder Lifetime, Create Rule, and Custom… hand off to the app through `tinyprune://folder|rule|expire?path=`. Locally the ad-hoc appex registered with pluginkit, was enabled, and ran sandboxed without denials; the menu itself could not be clicked because Accessibility automation is not granted, so the action paths were exercised through a sandboxed XPC harness instead.
+- **CLI.** Every `--json` document carries `schemaVersion: 1`. `config validate|preview|apply|export` reads a restricted YAML subset (`ConfigDocument`); `apply` only works inside folders already managed in the app because only the app creates security-scoped bookmarks.
+- **Signing identity.** Security-scoped bookmarks created by the app only resolve in the agent when both share a signing identifier. `Scripts/package-app.swift` signs app, agent, and CLI with `com.navig-me.tinyprune` and the appex with its own id and entitlements; `Scripts/verify-signing.sh` enforces this (ADR 0004). Developer ID signing, notarization, and universal builds are unverified until run with a certificate on a runner with Xcode.
+- **Timed pause and settings** are enforced by the agent: pause-until lapses from a clock, default grace, hidden-file protection, and activity retention apply to every client.
 
 ### Phase 4 — hardening, accessibility, and release readiness
 

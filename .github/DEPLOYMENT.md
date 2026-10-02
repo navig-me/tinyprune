@@ -15,14 +15,17 @@ The repository uses Cloudflare Pages Direct Upload from GitHub Actions. This kee
 
 ## macOS release setup
 
-Create a protected GitHub Environment named `release` and store only these environment secrets:
+Create a protected GitHub Environment named `release` (required reviewers, restricted to `v*` tags and `main`) and store these **environment secrets** (nothing else; never repository-level):
 
-- `DEVELOPER_ID_CERTIFICATE_P12_BASE64`
-- `DEVELOPER_ID_CERTIFICATE_PASSWORD`
-- `APPLE_NOTARY_KEY_ID`
-- `APPLE_NOTARY_ISSUER_ID`
-- `APPLE_NOTARY_PRIVATE_KEY_BASE64`
+| Secret | Value |
+| --- | --- |
+| `DEVELOPER_ID_CERTIFICATE_P12_BASE64` | `base64 -i DeveloperID.p12` of the *Developer ID Application* certificate and private key |
+| `DEVELOPER_ID_CERTIFICATE_PASSWORD` | Password used when exporting the `.p12` |
+| `APPLE_TEAM_ID` | 10-character Apple Developer Team ID; the workflow refuses a certificate from another team |
+| `APPLE_NOTARY_KEY_ID` | App Store Connect API key ID (Developer access or higher) |
+| `APPLE_NOTARY_ISSUER_ID` | App Store Connect issuer UUID |
+| `APPLE_NOTARY_PRIVATE_KEY_BASE64` | `base64 -i AuthKey_<ID>.p8` |
 
-The release workflow intentionally refuses to run until the native Xcode project and its `scripts/release/verify-version.sh` and `scripts/release/create-dmg.sh` packaging scripts exist. That prevents a tag from publishing an unsigned or un-notarized placeholder artifact.
+`release.yml` builds a universal binary with `swift Scripts/package-app.swift`, signs every component with the Developer ID identity (`TINYPRUNE_SIGN_IDENTITY`), hardened runtime and a secure timestamp, runs `Scripts/verify-signing.sh --release --pre-notarize`, notarizes and staples the app, re-verifies with Gatekeeper/stapler checks, builds and notarizes the DMG, and verifies the app inside the mounted DMG. The identifier and Team ID policy is in `ADRs/0004-signing-identifier-policy.md`. Locally, `swift Scripts/package-app.swift && Scripts/verify-signing.sh .build/package/TinyPrune.app` checks the ad-hoc development build.
 
-After Phase 0 creates the native package, add the Sparkle appcast signing key as a separately protected environment secret and publish the generated appcast to the website deployment. The Homebrew cask release remains a separate protected workflow because it must ship a build with Sparkle automatic checks disabled.
+After the signed DMG exists, add the Sparkle appcast signing key as a separately protected environment secret and publish the generated appcast to the website deployment. Sparkle may only be linked into the app, never the agent, CLI, or Finder extension (`verify-signing.sh` enforces this). The Homebrew cask release remains a separate protected workflow because it must ship a build with Sparkle automatic checks disabled.

@@ -6,6 +6,7 @@ public actor DeadlineScheduler {
     private let store: SQLiteSafetyStore
     private let coordinator: TrashCoordinator
     private let clock: any SafetyClock
+    private let onWaitingForDeadline: @Sendable () -> Void
     private var worker: Task<Void, Never>?
     private var sleeper: Task<Void, Never>?
     private var waiter: CheckedContinuation<Void, Never>?
@@ -16,6 +17,19 @@ public actor DeadlineScheduler {
         self.store = store
         self.coordinator = coordinator
         self.clock = clock
+        self.onWaitingForDeadline = {}
+    }
+
+    init(
+        store: SQLiteSafetyStore,
+        coordinator: TrashCoordinator,
+        clock: any SafetyClock,
+        onWaitingForDeadline: @escaping @Sendable () -> Void
+    ) {
+        self.store = store
+        self.coordinator = coordinator
+        self.clock = clock
+        self.onWaitingForDeadline = onWaitingForDeadline
     }
 
     public func start() {
@@ -40,10 +54,11 @@ public actor DeadlineScheduler {
     }
 
     public func runDueNow() async throws {
+        if try await store.loadSnapshot().globallyPaused { return }
         while let deadline = try await store.nextDeadline(), deadline.scheduledAt <= clock.now() {
             let request = TrashRequest(
                 candidateIdentity: deadline.identity,
-                source: .rule(deadline.explanation.matchedRuleID),
+                source: deadline.source,
                 scheduledAt: deadline.scheduledAt
             )
             let outcome = try await coordinator.execute(request)
@@ -56,6 +71,15 @@ public actor DeadlineScheduler {
         while !Task.isCancelled {
             let observedVersion = changeVersion
             do {
+                let snapshot = try await store.loadSnapshot()
+                if snapshot.globallyPaused {
+                    if let until = snapshot.pausedUntil {
+                        await waitForChangeOrDeadline(until.timeIntervalSince(clock.now()), version: observedVersion)
+                    } else {
+                        await waitForChange(version: observedVersion)
+                    }
+                    continue
+                }
                 if let deadline = try await store.nextDeadline() {
                     let delay = deadline.scheduledAt.timeIntervalSince(clock.now())
                     if delay <= 0 {
@@ -94,6 +118,7 @@ public actor DeadlineScheduler {
                     catch { return }
                     await self?.deadlineReached(generation)
                 }
+                onWaitingForDeadline()
             }
         }
     }

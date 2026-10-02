@@ -7,6 +7,7 @@ on:
       - Sources/**
       - Tests/**
       - Scripts/**
+      - Resources/**
       - .github/workflows/native-package.yml
   push:
     branches: [main]
@@ -15,6 +16,7 @@ on:
       - Sources/**
       - Tests/**
       - Scripts/**
+      - Resources/**
       - .github/workflows/native-package.yml
 
 permissions:
@@ -35,3 +37,5 @@ jobs:
         run: swift build --configuration release
       - name: Package and verify development app
         run: swift Scripts/package-app.swift
+      - name: Verify development signing design
+        run: Scripts/verify-signing.sh .build/package/TinyPrune.app

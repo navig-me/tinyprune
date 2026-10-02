@@ -5,11 +5,18 @@ public struct ManagedRootEvent: Sendable {
     public let paths: [String]
     public let flags: [FSEventStreamEventFlags]
     public let eventIDs: [FSEventStreamEventId]
+    public let requiresRecovery: Bool
 
-    public init(paths: [String], flags: [FSEventStreamEventFlags], eventIDs: [FSEventStreamEventId]) {
+    public init(
+        paths: [String],
+        flags: [FSEventStreamEventFlags],
+        eventIDs: [FSEventStreamEventId],
+        requiresRecovery: Bool = false
+    ) {
         self.paths = paths
         self.flags = flags
         self.eventIDs = eventIDs
+        self.requiresRecovery = requiresRecovery
     }
 }
 
@@ -80,9 +87,20 @@ public final class ManagedRootEventStream: @unchecked Sendable {
 
     deinit { stop() }
 
+    private static let maximumEventsPerCallback = 512
+
     private static let receiveEvents: FSEventStreamCallback = { _, info, eventCount, eventPaths, eventFlags, eventIDs in
         guard let info else { return }
         let callback = Unmanaged<EventCallbackContext>.fromOpaque(info).takeUnretainedValue()
+        if eventCount > maximumEventsPerCallback {
+            callback.handler(ManagedRootEvent(
+                paths: [],
+                flags: [],
+                eventIDs: [eventIDs[eventCount - 1]],
+                requiresRecovery: true
+            ))
+            return
+        }
         let rawPaths = eventPaths.assumingMemoryBound(to: UnsafePointer<CChar>.self)
         var paths: [String] = []
         var flags: [FSEventStreamEventFlags] = []

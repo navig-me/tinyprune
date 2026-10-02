@@ -81,6 +81,7 @@ public enum EvaluationSuppression: String, Codable, Sendable {
     case pausedRule
     case globalPause
     case previewOnly
+    case hiddenProtected
 }
 
 public enum ScheduledDisposition: String, Codable, Sendable {
@@ -97,6 +98,20 @@ public struct CandidateExplanation: Hashable, Codable, Sendable {
     public let eligibleAt: Date
     public let scheduledAt: Date
     public let disposition: ScheduledDisposition
+    /// Set for an explicit item expiry rather than an inherited lifetime rule.
+    public let customOverrideID: UUID?
+
+    public init(customExpiry: CustomExpiryExplanation) {
+        candidateIdentity = customExpiry.candidateIdentity
+        matchedRuleID = customExpiry.overrideID
+        matchedRuleName = "Custom expiry"
+        expiryBasis = .explicitDate
+        basisDate = customExpiry.expiresAt
+        eligibleAt = customExpiry.expiresAt
+        scheduledAt = customExpiry.expiresAt
+        disposition = customExpiry.disposition
+        customOverrideID = customExpiry.overrideID
+    }
 
     public init(candidate: RuleCandidate, rule: LifetimeRule, basisDate: Date, eligibleAt: Date, scheduledAt: Date, disposition: ScheduledDisposition) {
         self.candidateIdentity = candidate.identity
@@ -107,6 +122,7 @@ public struct CandidateExplanation: Hashable, Codable, Sendable {
         self.eligibleAt = eligibleAt
         self.scheduledAt = scheduledAt
         self.disposition = disposition
+        self.customOverrideID = nil
     }
 }
 
@@ -116,7 +132,7 @@ public enum CandidateEvaluation: Hashable, Codable, Sendable {
 }
 
 public enum RuleEvaluator {
-    public static func evaluate(candidate: RuleCandidate, against rule: LifetimeRule) -> CandidateEvaluation {
+    public static func evaluate(candidate: RuleCandidate, against rule: LifetimeRule, settings: AgentSettings = .default) -> CandidateEvaluation {
         guard rule.state != .paused else { return .suppressed(.pausedRule) }
         let path = RuleScope.normalized(candidate.identity.pathHint)
         let matches: Bool
@@ -129,12 +145,16 @@ public enum RuleEvaluator {
             matches = rule.matcher.matches(name: candidate.name, relativePath: candidate.name, kind: candidate.kind)
         }
         guard matches else { return .suppressed(.itemDoesNotMatch) }
+        if settings.protectHiddenFiles, isHiddenProtected(path: path, candidate: candidate, rule: rule) {
+            return .suppressed(.hiddenProtected)
+        }
         guard let basisDate = candidate.timestamps.value(for: rule.expiryBasis) else {
             return .suppressed(.missingExpiryTimestamp)
         }
 
         let eligibleAt = basisDate.addingTimeInterval(rule.lifetime.seconds)
-        let scheduledAt = eligibleAt.addingTimeInterval(rule.gracePeriod?.seconds ?? 0)
+        let grace = rule.gracePeriod?.seconds ?? settings.defaultGracePeriodSeconds
+        let scheduledAt = eligibleAt.addingTimeInterval(grace)
         let disposition: ScheduledDisposition = rule.state == .preview ? .preview : .active
         return .scheduled(CandidateExplanation(
             candidate: candidate,
@@ -144,5 +164,18 @@ public enum RuleEvaluator {
             scheduledAt: scheduledAt,
             disposition: disposition
         ))
+    }
+
+    private static func isHiddenProtected(path: String, candidate: RuleCandidate, rule: LifetimeRule) -> Bool {
+        if rule.matcher.explicitlyTargetsDotName { return false }
+        let components: [Substring]
+        switch rule.matchMode {
+        case .scoped:
+            guard let relative = rule.scope.relativePath(of: path) else { return false }
+            components = relative.split(separator: "/")
+        case .itemSpecific, .exactPath, .template:
+            components = [Substring(candidate.name)]
+        }
+        return components.contains { $0.hasPrefix(".") }
     }
 }

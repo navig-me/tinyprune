@@ -61,7 +61,8 @@ public enum RuleResolver {
         candidate: RuleCandidate,
         rules: [LifetimeRule],
         overrides: [ItemPolicyOverride] = [],
-        globallyPaused: Bool = false
+        globallyPaused: Bool = false,
+        settings: AgentSettings = .default
     ) -> RuleResolution {
         var protection: ItemPolicyOverride?
         for override in overrides where override.protects(candidate) {
@@ -133,7 +134,7 @@ public enum RuleResolver {
             return .ambiguousRules(tied.map { $0.rule.id }.sorted { $0.uuidString < $1.uuidString })
         }
 
-        switch RuleEvaluator.evaluate(candidate: candidate, against: selected.rule) {
+        switch RuleEvaluator.evaluate(candidate: candidate, against: selected.rule, settings: settings) {
         case .scheduled(let explanation): return .scheduled(explanation)
         case .suppressed(let reason): return .suppressed(reason)
         }

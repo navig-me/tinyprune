@@ -10,8 +10,9 @@ let package = Package(
         .executable(name: "TinyPruneApp", targets: ["TinyPruneApp"]),
         .executable(name: "TinyPruneAgent", targets: ["TinyPruneAgent"]),
         .executable(name: "tinyprune", targets: ["tinyprune"]),
+        .executable(name: "TinyPruneUISnapshots", targets: ["TinyPruneUISnapshots"]),
+        .executable(name: "TinyPruneFinderExtension", targets: ["TinyPruneFinderExtension"]),
         .executable(name: "TinyPruneDomainCheck", targets: ["TinyPruneDomainCheck"]),
-        .library(name: "TinyPruneEngine", targets: ["TinyPruneEngine"]),
         .executable(name: "TinyPruneEngineCheck", targets: ["TinyPruneEngineCheck"]),
         .library(name: "TinyPrunePersistence", targets: ["TinyPrunePersistence"]),
     ],
@@ -19,8 +20,18 @@ let package = Package(
         .target(name: "TinyPruneDomain"),
         .target(name: "TinyPruneIPC", dependencies: ["TinyPruneDomain"]),
         .executableTarget(name: "TinyPruneAgent", dependencies: ["TinyPruneIPC", "TinyPrunePersistence", "TinyPruneAgentCore"]),
-        .executableTarget(name: "TinyPruneApp", dependencies: ["TinyPruneDomain", "TinyPruneIPC"]),
+        .target(name: "TinyPruneUI", dependencies: ["TinyPruneDomain", "TinyPruneIPC"]),
+        .executableTarget(name: "TinyPruneApp", dependencies: ["TinyPruneUI", "TinyPruneDomain", "TinyPruneIPC"]),
+        .executableTarget(
+            name: "TinyPruneUISnapshots",
+            dependencies: ["TinyPruneUI", "TinyPruneAgentCore", "TinyPrunePersistence", "TinyPruneEngine", "TinyPruneDomain", "TinyPruneIPC"]
+        ),
         .executableTarget(name: "tinyprune", dependencies: ["TinyPruneIPC", "TinyPruneDomain"]),
+        .executableTarget(
+            name: "TinyPruneFinderExtension",
+            dependencies: ["TinyPruneIPC", "TinyPruneDomain"],
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
         .executableTarget(name: "TinyPruneDomainCheck", dependencies: ["TinyPruneDomain"]),
         .target(name: "TinyPruneEngine", dependencies: ["TinyPruneDomain"]),
         .systemLibrary(name: "CSQLite"),

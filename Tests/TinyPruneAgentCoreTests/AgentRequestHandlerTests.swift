@@ -1,29 +1,28 @@
-#if canImport(XCTest)
 import Foundation
-import XCTest
+import Testing
 @testable import TinyPruneAgentCore
 import TinyPruneDomain
 import TinyPruneEngine
 import TinyPruneIPC
 import TinyPrunePersistence
 
-final class AgentRequestHandlerTests: XCTestCase {
-    func testHealthAndPolicyRequestsUseProtocolVersion() async throws {
+@Suite struct AgentRequestHandlerTests {
+    @Test func testHealthAndPolicyRequestsUseProtocolVersion() async throws {
         let harness = try makeHandler()
         defer { try? FileManager.default.removeItem(at: harness.directory) }
 
         let health = try await response(from: harness.handler, request: AgentRequest(operation: .health))
-        XCTAssertEqual(health.protocolVersion, TinyPruneAgentXPC.protocolVersion)
-        guard case .health(let healthDTO) = health.payload else { return XCTFail("Expected health response") }
-        XCTAssertEqual(healthDTO.serviceVersion, "0.1.0")
+        #expect(health.protocolVersion == TinyPruneAgentXPC.protocolVersion)
+        guard case .health(let healthDTO) = health.payload else { Issue.record("Expected health response"); return }
+        #expect(healthDTO.serviceVersion == "0.1.0")
 
         let policy = try await response(from: harness.handler, request: AgentRequest(operation: .loadPolicy))
-        guard case .policy(let snapshot) = policy.payload else { return XCTFail("Expected policy response") }
-        XCTAssertTrue(snapshot.rules.isEmpty)
-        XCTAssertFalse(snapshot.globallyPaused)
+        guard case .policy(let snapshot) = policy.payload else { Issue.record("Expected policy response"); return }
+        #expect(snapshot.rules.isEmpty)
+        #expect(!(snapshot.globallyPaused))
     }
 
-    func testPolicyReplacementIsPersistedAndAudited() async throws {
+    @Test func testPolicyReplacementIsPersistedAndAudited() async throws {
         let harness = try makeHandler()
         defer { try? FileManager.default.removeItem(at: harness.directory) }
         let rule = try makeRule()
@@ -32,41 +31,42 @@ final class AgentRequestHandlerTests: XCTestCase {
 
         let replaceResponse = try await response(from: harness.handler, request: AgentRequest(operation: .replacePolicy(replacement)))
 
-        XCTAssertEqual(replaceResponse.payload, .acknowledged)
+        #expect(replaceResponse.payload == .acknowledged)
         let loaded = try await response(from: harness.handler, request: AgentRequest(operation: .loadPolicy))
-        guard case .policy(let snapshot) = loaded.payload else { return XCTFail("Expected persisted policy response") }
-        XCTAssertEqual(snapshot.rules, [rule])
-        XCTAssertEqual(snapshot.managedRoots, [root])
-        XCTAssertTrue(snapshot.globallyPaused)
+        guard case .policy(let snapshot) = loaded.payload else { Issue.record("Expected persisted policy response"); return }
+        #expect(snapshot.rules == [rule])
+        #expect(snapshot.managedRoots == [root])
+        #expect(snapshot.globallyPaused)
         let identity = FilesystemIdentity(volumeIdentifier: UUID(), resourceIdentifier: Data([3]), pathHint: "/Downloads/archive.zip")
         let candidate = RuleCandidate(identity: identity, name: "archive.zip", kind: .file, timestamps: CandidateTimestamps(modified: Date(timeIntervalSince1970: 100)))
         let explanation = CandidateExplanation(candidate: candidate, rule: rule, basisDate: Date(timeIntervalSince1970: 100), eligibleAt: Date(timeIntervalSince1970: 200), scheduledAt: Date(timeIntervalSince1970: 200), disposition: .preview)
         try await harness.store.saveDeadline(PersistedDeadline(identity: identity, scheduledAt: explanation.scheduledAt, explanation: explanation))
         let overview = try await response(from: harness.handler, request: AgentRequest(operation: .loadOverview))
-        guard case .overview(let overviewDTO) = overview.payload else { return XCTFail("Expected Overview response") }
-        XCTAssertEqual(overviewDTO.upcoming.map(\.explanation), [explanation])
+        guard case .overview(let overviewDTO) = overview.payload else { Issue.record("Expected Overview response"); return }
+        #expect(overviewDTO.upcoming.map(\.explanation) == [explanation])
         let events = try await harness.store.auditEvents()
-        XCTAssertEqual(events.map(\.kind), [.policyReplaced])
+        #expect(Set(events.map(\.kind)) == [.policyReplaced, .globalPauseChanged, .ruleCreated])
+        #expect(events.count == 3)
     }
 
-    func testMalformedAndUnsupportedRequestsReturnStructuredFailures() async throws {
+    @Test func testMalformedAndUnsupportedRequestsReturnStructuredFailures() async throws {
         let harness = try makeHandler()
         defer { try? FileManager.default.removeItem(at: harness.directory) }
 
         let malformed = await harness.handler.handle(Data("not-json".utf8))
         let malformedResponse = try JSONDecoder().decode(AgentResponse.self, from: malformed)
-        guard case .failure(.invalidRequest) = malformedResponse.payload else { return XCTFail("Malformed request was not rejected") }
+        guard case .failure(.invalidRequest) = malformedResponse.payload else { Issue.record("Malformed request was not rejected"); return }
 
         let unsupportedRequest = AgentRequest(protocolVersion: TinyPruneAgentXPC.protocolVersion + 1, operation: .health)
         let unsupported = try await response(from: harness.handler, request: unsupportedRequest)
         guard case .failure(.unsupportedProtocol(let expected, let received)) = unsupported.payload else {
-            return XCTFail("Unsupported protocol was not reported")
+            Issue.record("Unsupported protocol was not reported"); return
         }
-        XCTAssertEqual(expected, TinyPruneAgentXPC.protocolVersion)
-        XCTAssertEqual(received, TinyPruneAgentXPC.protocolVersion + 1)
+        #expect(expected == TinyPruneAgentXPC.protocolVersion)
+        #expect(received == TinyPruneAgentXPC.protocolVersion + 1)
     }
 
-    func testInvalidPolicyMutationIsRejectedWithoutPersistence() async throws {
+    @Test func testInvalidPolicyMutationIsRejectedWithoutPersistence() async throws {
         let harness = try makeHandler()
         defer { try? FileManager.default.removeItem(at: harness.directory) }
         let rule = try makeRule()
@@ -75,13 +75,35 @@ final class AgentRequestHandlerTests: XCTestCase {
         let request = AgentRequest(operation: .replacePolicy(AgentPolicySnapshot(rules: [rule, duplicate], overrides: [], managedRoots: [root], globallyPaused: true)))
 
         let invalidResponse = try await response(from: harness.handler, request: request)
-        guard case .failure(.invalidRequest) = invalidResponse.payload else { return XCTFail("Duplicate rule IDs must be rejected") }
+        guard case .failure(.invalidRequest) = invalidResponse.payload else { Issue.record("Duplicate rule IDs must be rejected"); return }
         let loaded = try await response(from: harness.handler, request: AgentRequest(operation: .loadPolicy))
-        guard case .policy(let snapshot) = loaded.payload else { return XCTFail("Expected policy response") }
-        XCTAssertTrue(snapshot.rules.isEmpty)
-        XCTAssertFalse(snapshot.globallyPaused)
+        guard case .policy(let snapshot) = loaded.payload else { Issue.record("Expected policy response"); return }
+        #expect(snapshot.rules.isEmpty)
+        #expect(!(snapshot.globallyPaused))
         let events = try await harness.store.auditEvents()
-        XCTAssertTrue(events.isEmpty)
+        #expect(events.isEmpty)
+    }
+
+    @Test func testSettingsRoundTripAndPauseUntilRejectsPastDates() async throws {
+        let harness = try makeHandler()
+        defer { try? FileManager.default.removeItem(at: harness.directory) }
+        let settings = AgentSettings(defaultGracePeriodSeconds: 300, protectHiddenFiles: true, activityRetentionDays: 14)
+
+        let updated = try await response(from: harness.handler, request: AgentRequest(operation: .updateSettings(settings)))
+        #expect(updated.payload == .settings(settings))
+        let loaded = try await response(from: harness.handler, request: AgentRequest(operation: .loadSettings))
+        #expect(loaded.payload == .settings(settings))
+        let events = try await harness.store.auditEvents()
+        #expect(events.contains { $0.kind == .settingsChanged })
+
+        let past = try await response(from: harness.handler, request: AgentRequest(operation: .pauseUntil(Date(timeIntervalSinceNow: -60))))
+        guard case .failure(.invalidRequest) = past.payload else { Issue.record("Past pause end must be rejected"); return }
+        let future = try await response(from: harness.handler, request: AgentRequest(operation: .pauseUntil(Date(timeIntervalSinceNow: 3_600))))
+        #expect(future.payload == .acknowledged)
+        let policy = try await response(from: harness.handler, request: AgentRequest(operation: .loadPolicy))
+        guard case .policy(let snapshot) = policy.payload else { Issue.record("Expected policy response"); return }
+        #expect(snapshot.globallyPaused)
+        #expect(snapshot.pausedUntil != nil)
     }
 
     private func makeHandler() throws -> (directory: URL, store: SQLiteSafetyStore, handler: AgentRequestHandler) {
@@ -109,4 +131,3 @@ final class AgentRequestHandlerTests: XCTestCase {
         )
     }
 }
-#endif

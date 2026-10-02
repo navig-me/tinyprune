@@ -1,38 +1,38 @@
-#if canImport(XCTest)
-import XCTest
+import Testing
+import Foundation
 @testable import TinyPruneDomain
 @testable import TinyPruneEngine
 
-final class TrashCoordinatorTests: XCTestCase {
-    func testPreviewNeverCallsTrashAndRecordsPreviewEvent() async throws {
+@Suite struct TrashCoordinatorTests {
+    @Test func testPreviewNeverCallsTrashAndRecordsPreviewEvent() async throws {
         let candidate = makeCandidate()
         let rule = try makeRule(state: .preview)
         let harness = makeCoordinator(candidate: candidate, rules: [rule])
 
         let outcome = try await harness.coordinator.execute(request(for: candidate, rule: rule))
 
-        XCTAssertEqual(outcome, .previewed)
+        #expect(outcome == .previewed)
         let previewMoves = await harness.fileAccess.moveCount()
         let previewEvents = await harness.audit.events()
-        XCTAssertEqual(previewMoves, 0)
-        XCTAssertEqual(previewEvents.map(\.kind), [.previewSkipped])
+        #expect(previewMoves == 0)
+        #expect(previewEvents.map(\.kind) == [.previewSkipped])
     }
 
-    func testActiveDueCandidateMovesOnlyAfterFinalPreflight() async throws {
+    @Test func testActiveDueCandidateMovesOnlyAfterFinalPreflight() async throws {
         let candidate = makeCandidate()
         let rule = try makeRule(state: .active)
         let harness = makeCoordinator(candidate: candidate, rules: [rule])
 
         let outcome = try await harness.coordinator.execute(request(for: candidate, rule: rule))
 
-        XCTAssertEqual(outcome, .movedToTrash(originalPath: candidate.identity.pathHint, trashedPath: "/.Trash/node_modules"))
+        #expect(outcome == .movedToTrash(originalPath: candidate.identity.pathHint, trashedPath: "/.Trash/node_modules"))
         let activeMoves = await harness.fileAccess.moveCount()
         let activeEvents = await harness.audit.events()
-        XCTAssertEqual(activeMoves, 1)
-        XCTAssertEqual(activeEvents.map(\.kind), [.trashAttempted, .movedToTrash])
+        #expect(activeMoves == 1)
+        #expect(activeEvents.map(\.kind) == [.trashAttempted, .movedToTrash])
     }
 
-    func testCurrentKeepOverrideBlocksPreviouslyScheduledMove() async throws {
+    @Test func testCurrentKeepOverrideBlocksPreviouslyScheduledMove() async throws {
         let candidate = makeCandidate()
         let rule = try makeRule(state: .active)
         let keep = ItemPolicyOverride(identity: candidate.identity, path: candidate.identity.pathHint, policy: .keep(protectDescendants: false))
@@ -40,12 +40,12 @@ final class TrashCoordinatorTests: XCTestCase {
 
         let outcome = try await harness.coordinator.execute(request(for: candidate, rule: rule))
 
-        guard case .skipped = outcome else { return XCTFail("Expected final preflight to skip the newly protected candidate") }
+        guard case .skipped = outcome else { Issue.record("Expected final preflight to skip the newly protected candidate"); return }
         let moves = await harness.fileAccess.moveCount()
-        XCTAssertEqual(moves, 0)
+        #expect(moves == 0)
     }
 
-    func testReplacementAtSamePathCannotBeMoved() async throws {
+    @Test func testReplacementAtSamePathCannotBeMoved() async throws {
         let scheduledCandidate = makeCandidate(resource: Data([1]))
         let replacement = makeCandidate(resource: Data([2]))
         let rule = try makeRule(state: .active)
@@ -53,24 +53,24 @@ final class TrashCoordinatorTests: XCTestCase {
 
         let outcome = try await harness.coordinator.execute(request(for: scheduledCandidate, rule: rule))
 
-        XCTAssertEqual(outcome, .skipped("filesystem identity changed"))
+        #expect(outcome == .skipped("filesystem identity changed"))
         let moves = await harness.fileAccess.moveCount()
-        XCTAssertEqual(moves, 0)
+        #expect(moves == 0)
     }
 
-    func testProtectedDescendantPreventsParentTrash() async throws {
+    @Test func testProtectedDescendantPreventsParentTrash() async throws {
         let candidate = makeCandidate()
         let rule = try makeRule(state: .active)
         let harness = makeCoordinator(candidate: candidate, rules: [rule], protectedDescendant: true)
 
         let outcome = try await harness.coordinator.execute(request(for: candidate, rule: rule))
 
-        XCTAssertEqual(outcome, .skipped("folder contains a protected descendant"))
+        #expect(outcome == .skipped("folder contains a protected descendant"))
         let moves = await harness.fileAccess.moveCount()
-        XCTAssertEqual(moves, 0)
+        #expect(moves == 0)
     }
 
-    func testKeepAddedDuringTrashAuditClosesFinalPreflightRace() async throws {
+    @Test func testKeepAddedDuringTrashAuditClosesFinalPreflightRace() async throws {
         let candidate = makeCandidate()
         let rule = try makeRule(state: .active)
         let keep = ItemPolicyOverride(identity: candidate.identity, path: candidate.identity.pathHint, policy: .keep(protectDescendants: false))
@@ -81,58 +81,58 @@ final class TrashCoordinatorTests: XCTestCase {
 
         let outcome = try await coordinator.execute(request(for: candidate, rule: rule))
 
-        XCTAssertEqual(outcome, .skipped("policy changed at the Trash boundary"))
+        #expect(outcome == .skipped("policy changed at the Trash boundary"))
         let moves = await fileAccess.moveCount()
         let events = await audit.events()
-        XCTAssertEqual(moves, 0)
-        XCTAssertEqual(events.map(\.kind), [.trashAttempted, .safetySkipped])
+        #expect(moves == 0)
+        #expect(events.map(\.kind) == [.trashAttempted, .safetySkipped])
     }
 
-    func testGlobalPauseAtExecutionTimeBlocksMove() async throws {
+    @Test func testGlobalPauseAtExecutionTimeBlocksMove() async throws {
         let candidate = makeCandidate()
         let rule = try makeRule(state: .active)
         let harness = makeCoordinator(candidate: candidate, rules: [rule], globallyPaused: true)
 
         let outcome = try await harness.coordinator.execute(request(for: candidate, rule: rule))
 
-        XCTAssertEqual(outcome, .skipped("candidate is no longer eligible"))
+        #expect(outcome == .skipped("candidate is no longer eligible"))
         let moves = await harness.fileAccess.moveCount()
-        XCTAssertEqual(moves, 0)
+        #expect(moves == 0)
     }
 
-    func testChangedDeadlineAndFutureDeadlineBlockMove() async throws {
+    @Test func testChangedDeadlineAndFutureDeadlineBlockMove() async throws {
         let candidate = makeCandidate()
         let rule = try makeRule(state: .active, lifetime: 200)
         let staleRequest = TrashRequest(candidateIdentity: candidate.identity, source: .rule(rule.id), scheduledAt: Date(timeIntervalSinceReferenceDate: 100))
         let staleHarness = makeCoordinator(candidate: candidate, rules: [rule])
         let staleOutcome = try await staleHarness.coordinator.execute(staleRequest)
-        XCTAssertEqual(staleOutcome, .skipped("scheduled deadline changed"))
+        #expect(staleOutcome == .skipped("scheduled deadline changed"))
         let staleMoves = await staleHarness.fileAccess.moveCount()
-        XCTAssertEqual(staleMoves, 0)
+        #expect(staleMoves == 0)
 
         let dueRequest = TrashRequest(candidateIdentity: candidate.identity, source: .rule(rule.id), scheduledAt: Date(timeIntervalSinceReferenceDate: 200))
         let futureHarness = makeCoordinator(candidate: candidate, rules: [rule], now: Date(timeIntervalSinceReferenceDate: 150))
         let futureOutcome = try await futureHarness.coordinator.execute(dueRequest)
-        XCTAssertEqual(futureOutcome, .notDue(Date(timeIntervalSinceReferenceDate: 200)))
+        #expect(futureOutcome == .notDue(Date(timeIntervalSinceReferenceDate: 200)))
         let futureMoves = await futureHarness.fileAccess.moveCount()
-        XCTAssertEqual(futureMoves, 0)
+        #expect(futureMoves == 0)
     }
 
-    func testTrashFailureIsAuditedAndReturnedAsFailure() async throws {
+    @Test func testTrashFailureIsAuditedAndReturnedAsFailure() async throws {
         let candidate = makeCandidate()
         let rule = try makeRule(state: .active)
         let harness = makeCoordinator(candidate: candidate, rules: [rule], trashError: StubError.failed)
 
         do {
             _ = try await harness.coordinator.execute(request(for: candidate, rule: rule))
-            XCTFail("Expected Trash failure")
+            Issue.record("Expected Trash failure")
         } catch let error as TrashExecutionError {
-            guard case .filesystemOperationFailed = error else { return XCTFail("Unexpected error: \(error)") }
+            guard case .filesystemOperationFailed = error else { Issue.record("Unexpected error: \(error)"); return }
         }
         let failureMoves = await harness.fileAccess.moveCount()
         let failureEvents = await harness.audit.events()
-        XCTAssertEqual(failureMoves, 1)
-        XCTAssertEqual(failureEvents.map(\.kind), [.trashAttempted, .trashFailed])
+        #expect(failureMoves == 1)
+        #expect(failureEvents.map(\.kind) == [.trashAttempted, .trashFailed])
     }
 
     private func makeCoordinator(
@@ -247,4 +247,3 @@ private actor PolicyFlipAudit: TrashAuditRecording {
 
     func events() -> [TrashAuditEvent] { recorded }
 }
-#endif

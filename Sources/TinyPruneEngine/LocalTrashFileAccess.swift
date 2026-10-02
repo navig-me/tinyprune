@@ -81,7 +81,6 @@ public final class LocalTrashFileAccess: TrashFileAccess, @unchecked Sendable {
             let childPath = RuleScope.normalized(childURL.path)
             let isSymbolicLink = try childURL.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink ?? false
             guard !isSymbolicLink else {
-                enumerator.skipDescendants()
                 continue
             }
             if !identityKeepOverrides.isEmpty,

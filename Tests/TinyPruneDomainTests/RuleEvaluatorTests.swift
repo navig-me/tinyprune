@@ -1,9 +1,9 @@
-#if canImport(XCTest)
-import XCTest
+import Testing
+import Foundation
 @testable import TinyPruneDomain
 
-final class RuleEvaluatorTests: XCTestCase {
-    func testPreviewRuleSchedulesAnExplainablePreviewWithoutActiveDisposition() throws {
+@Suite struct RuleEvaluatorTests {
+    @Test func testPreviewRuleSchedulesAnExplainablePreviewWithoutActiveDisposition() throws {
         let rule = try makeRule(state: .preview, gracePeriod: try RuleDuration(seconds: 3_600))
         let modified = Date(timeIntervalSinceReferenceDate: 500_000)
         let candidate = makeCandidate(name: "node_modules", modified: modified)
@@ -11,42 +11,86 @@ final class RuleEvaluatorTests: XCTestCase {
         let result = RuleEvaluator.evaluate(candidate: candidate, against: rule)
 
         guard case .scheduled(let explanation) = result else {
-            return XCTFail("Expected a scheduled preview candidate")
+            Issue.record("Expected a scheduled preview candidate"); return
         }
-        XCTAssertEqual(explanation.matchedRuleID, rule.id)
-        XCTAssertEqual(explanation.matchedRuleName, "Old Node Modules")
-        XCTAssertEqual(explanation.expiryBasis, .modified)
-        XCTAssertEqual(explanation.basisDate, modified)
-        XCTAssertEqual(explanation.eligibleAt, modified.addingTimeInterval(30 * 86_400))
-        XCTAssertEqual(explanation.scheduledAt, modified.addingTimeInterval(30 * 86_400 + 3_600))
-        XCTAssertEqual(explanation.disposition, .preview)
+        #expect(explanation.matchedRuleID == rule.id)
+        #expect(explanation.matchedRuleName == "Old Node Modules")
+        #expect(explanation.expiryBasis == .modified)
+        #expect(explanation.basisDate == modified)
+        #expect(explanation.eligibleAt == modified.addingTimeInterval(30 * 86_400))
+        #expect(explanation.scheduledAt == modified.addingTimeInterval(30 * 86_400 + 3_600))
+        #expect(explanation.disposition == .preview)
     }
 
-    func testPausedRuleNeverSchedulesCandidate() throws {
+    @Test func testPausedRuleNeverSchedulesCandidate() throws {
         let result = RuleEvaluator.evaluate(candidate: makeCandidate(name: "node_modules"), against: try makeRule(state: .paused))
-        XCTAssertEqual(result, .suppressed(.pausedRule))
+        #expect(result == .suppressed(.pausedRule))
     }
 
-    func testCandidateWithoutRequiredBasisIsSuppressed() throws {
+    @Test func testCandidateWithoutRequiredBasisIsSuppressed() throws {
         let candidate = RuleCandidate(
             identity: FilesystemIdentity(volumeIdentifier: UUID(), resourceIdentifier: Data([1]), pathHint: "/Developer/project/node_modules"),
             name: "node_modules",
             kind: .directory,
             timestamps: CandidateTimestamps()
         )
-        XCTAssertEqual(RuleEvaluator.evaluate(candidate: candidate, against: try makeRule(state: .active)), .suppressed(.missingExpiryTimestamp))
+        #expect(RuleEvaluator.evaluate(candidate: candidate, against: try makeRule(state: .active)) == .suppressed(.missingExpiryTimestamp))
     }
 
-    func testMatcherRejectsWrongNameAndKind() throws {
+    @Test func testMatcherRejectsWrongNameAndKind() throws {
         let rule = try makeRule(state: .active)
-        XCTAssertEqual(RuleEvaluator.evaluate(candidate: makeCandidate(name: "dist"), against: rule), .suppressed(.itemDoesNotMatch))
-        XCTAssertEqual(RuleEvaluator.evaluate(candidate: makeCandidate(name: "node_modules", kind: .file), against: rule), .suppressed(.itemDoesNotMatch))
+        #expect(RuleEvaluator.evaluate(candidate: makeCandidate(name: "dist"), against: rule) == .suppressed(.itemDoesNotMatch))
+        #expect(RuleEvaluator.evaluate(candidate: makeCandidate(name: "node_modules", kind: .file), against: rule) == .suppressed(.itemDoesNotMatch))
     }
 
-    func testInvalidRuleInputsAreRejected() throws {
-        XCTAssertThrowsError(try RuleDuration(seconds: 0))
-        XCTAssertThrowsError(try RuleScope(path: "  ", recursive: true))
-        XCTAssertThrowsError(try ItemMatcher(itemKind: .directory, exactNames: [""]))
+    @Test func testInvalidRuleInputsAreRejected() throws {
+        #expect(throws: (any Error).self) { _ = try RuleDuration(seconds: 0) }
+        #expect(throws: (any Error).self) { _ = try RuleScope(path: "  ", recursive: true) }
+        #expect(throws: (any Error).self) { _ = try ItemMatcher(itemKind: .directory, exactNames: [""]) }
+    }
+
+    @Test func testDefaultGraceAppliesOnlyWhenRuleHasNoGraceOfItsOwn() throws {
+        let modified = Date(timeIntervalSinceReferenceDate: 500_000)
+        let settings = AgentSettings(defaultGracePeriodSeconds: 600)
+        let candidate = makeCandidate(name: "node_modules", modified: modified)
+        guard case .scheduled(let inherited) = RuleEvaluator.evaluate(candidate: candidate, against: try makeRule(state: .active), settings: settings),
+              case .scheduled(let own) = RuleEvaluator.evaluate(candidate: candidate, against: try makeRule(state: .active, gracePeriod: try RuleDuration(seconds: 60)), settings: settings) else {
+            Issue.record("Expected scheduled candidates"); return
+        }
+        #expect(inherited.scheduledAt == modified.addingTimeInterval(30 * 86_400 + 600))
+        #expect(own.scheduledAt == modified.addingTimeInterval(30 * 86_400 + 60))
+    }
+
+    @Test func testHiddenProtectionSuppressesDotComponentsUnlessRuleTargetsDotNames() throws {
+        let settings = AgentSettings(protectHiddenFiles: true)
+        let hiddenParent = RuleCandidate(
+            identity: FilesystemIdentity(volumeIdentifier: UUID(), resourceIdentifier: Data([4]), pathHint: "/Developer/.hidden/node_modules"),
+            name: "node_modules",
+            kind: .directory,
+            timestamps: CandidateTimestamps(modified: Date(timeIntervalSinceReferenceDate: 500_000))
+        )
+        #expect(RuleEvaluator.evaluate(candidate: hiddenParent, against: try makeRule(state: .active), settings: settings) == .suppressed(.hiddenProtected))
+        guard case .scheduled = RuleEvaluator.evaluate(candidate: hiddenParent, against: try makeRule(state: .active)) else {
+            Issue.record("Hidden protection must be off by default"); return
+        }
+        let dotRule = try LifetimeRule(
+            name: "Dot items",
+            scope: try RuleScope(path: "/Developer", recursive: true),
+            matcher: try ItemMatcher(itemKind: .file, exactNames: [".DS_Store"]),
+            expiryBasis: .modified,
+            lifetime: try RuleDuration(seconds: 60),
+            action: .trashItem,
+            state: .active
+        )
+        let dotItem = RuleCandidate(
+            identity: FilesystemIdentity(volumeIdentifier: UUID(), resourceIdentifier: Data([5]), pathHint: "/Developer/project/.DS_Store"),
+            name: ".DS_Store",
+            kind: .file,
+            timestamps: CandidateTimestamps(modified: Date(timeIntervalSinceReferenceDate: 500_000))
+        )
+        guard case .scheduled = RuleEvaluator.evaluate(candidate: dotItem, against: dotRule, settings: settings) else {
+            Issue.record("Explicit dot-name rules are exempt from hidden protection"); return
+        }
     }
 
     private func makeRule(state: RuleState, gracePeriod: RuleDuration? = nil) throws -> LifetimeRule {
@@ -72,4 +116,3 @@ final class RuleEvaluatorTests: XCTestCase {
         )
     }
 }
-#endif

@@ -1,24 +1,21 @@
-#if canImport(XCTest)
-import XCTest
+import Testing
+import Foundation
 @testable import TinyPruneDomain
 
-final class ManagedRootTests: XCTestCase {
-    func testRejectsProtectedSystemLocationsAndDescendants() {
+@Suite struct ManagedRootTests {
+    @Test func testRejectsProtectedSystemLocationsAndDescendants() {
         for path in ["/Applications", "/Applications/TinyPrune", "/System/Library", "/usr/local"] {
-            XCTAssertThrowsError(try ManagedRoot(displayName: "Protected", path: path, bookmarkData: Data([1]))) {
-                XCTAssertEqual($0 as? ManagedRootValidationError, .dangerousPath)
-            }
+            #expect(throws: ManagedRootValidationError.dangerousPath) { _ = try ManagedRoot(displayName: "Protected", path: path, bookmarkData: Data([1])) }
         }
     }
 
-    func testAcceptsUserManagedWorkspace() throws {
+    @Test func testAcceptsUserManagedWorkspace() throws {
         let root = try ManagedRoot(
             displayName: "Projects",
             path: "/Users/example/Developer",
             bookmarkData: Data([1])
         )
 
-        XCTAssertEqual(root.path, "/Users/example/Developer")
+        #expect(root.path == "/Users/example/Developer")
     }
 }
-#endif

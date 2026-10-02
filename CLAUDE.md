@@ -11,7 +11,7 @@ Read `spec.md` and `PLAN.md` before changing product behavior. `spec.md` is the 
 - `Keep` takes precedence over every other policy. Do not trash a folder that contains a protected descendant.
 - Preview runs matching and scheduling but must never invoke the Trash executor.
 - Normal operation may read filesystem metadata only. Do not inspect file contents or require network access.
-- Scale with FSEvents and scheduled deadlines. Initial indexing and recovery are the only full traversals; they must enumerate in bounded batches.
+- Scale with FSEvents and scheduled deadlines. Initial indexing, recovery, and a user-initiated rule Preview dry run (which is read-only, bounded, cancellable, and never persists or trashes; see ADR 0003) are the only full traversals; they must enumerate in bounded batches.
 - CLI and Finder extension are clients of the agent through XPC. Do not duplicate rule evaluation or cleanup logic in frontends.
 - Do not add V2 agentic features, cloud sync, telemetry, subscriptions, system optimization, or content analysis.
 
@@ -59,3 +59,14 @@ Use the Stitch references in `stitch_tinyprune_macos_app/` as visual direction, 
 2. Run the narrow test/fixture scenario for the changed behavior, then the repository’s prescribed quality command.
 3. State the exact verification command and observed result in the PR.
 4. Keep scope aligned with `spec.md`; record material architecture decisions as ADRs.
+
+## Running tests
+
+Tests use Swift Testing. On a runner with Xcode: `swift test`. On a CommandLineTools-only Mac, SwiftPM does not wire up `Testing.framework`, so run:
+
+```sh
+F=/Library/Developer/CommandLineTools/Library/Developer/Frameworks
+swift test --disable-xctest --enable-swift-testing -Xswiftc -F -Xswiftc $F -Xswiftc -Xfrontend -Xswiftc -disable-cross-import-overlays -Xlinker -F -Xlinker $F -Xlinker -rpath -Xlinker $F
+```
+
+Add `-c release -Xswiftc -enable-testing --filter PhaseTwoBenchmarkTests` for the 100k benchmark. Also run `swift run TinyPruneDomainCheck`, `swift run TinyPruneEngineCheck`, and `swift run TinyPruneUISnapshots` (offscreen UI render and flow check).

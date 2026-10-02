@@ -40,6 +40,8 @@ struct TinyPruneAgentMain {
         let listener = NSXPCListener(machServiceName: TinyPruneAgentXPC.machServiceName)
         listener.delegate = delegate
         listener.resume()
-        dispatchMain()
+        // `dispatchMain()` traps when called from the async entry point's task thread,
+        // so suspend forever and let XPC deliver requests on its own queues.
+        await withUnsafeContinuation { (_: UnsafeContinuation<Void, Never>) in }
     }
 }

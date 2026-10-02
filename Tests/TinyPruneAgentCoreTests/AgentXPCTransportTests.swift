@@ -1,13 +1,12 @@
-#if canImport(XCTest)
 import Foundation
-import XCTest
+import Testing
 @testable import TinyPruneAgentCore
 import TinyPruneEngine
 import TinyPruneIPC
 import TinyPrunePersistence
 
-final class AgentXPCTransportTests: XCTestCase {
-    func testVersionedHealthRequestCrossesAnonymousXPCConnection() async throws {
+@Suite struct AgentXPCTransportTests {
+    @Test func testVersionedHealthRequestCrossesAnonymousXPCConnection() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TinyPrune-XPC-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -40,9 +39,9 @@ final class AgentXPCTransportTests: XCTestCase {
         }
 
         let response = try JSONDecoder().decode(AgentResponse.self, from: replyData)
-        XCTAssertEqual(response.protocolVersion, TinyPruneAgentXPC.protocolVersion)
-        guard case .health(let health) = response.payload else { return XCTFail("Expected health response over XPC") }
-        XCTAssertEqual(health.serviceVersion, "0.1.0")
+        #expect(response.protocolVersion == TinyPruneAgentXPC.protocolVersion)
+        guard case .health(let health) = response.payload else { Issue.record("Expected health response over XPC"); return }
+        #expect(health.serviceVersion == "0.1.0")
     }
 }
 
@@ -60,4 +59,3 @@ private final class TestListenerDelegate: NSObject, NSXPCListenerDelegate {
         return true
     }
 }
-#endif

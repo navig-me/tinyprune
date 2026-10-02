@@ -1,17 +1,16 @@
-#if canImport(XCTest)
-import XCTest
+import Testing
+import Foundation
 @testable import TinyPruneIPC
 
-final class AgentHealthTests: XCTestCase {
-    func testHealthPayloadRoundTripsAcrossTheIPCEncoding() throws {
+@Suite struct AgentHealthTests {
+    @Test func testHealthPayloadRoundTripsAcrossTheIPCEncoding() throws {
         let health = AgentHealth(serviceVersion: "0.1.0")
         let payload = try JSONEncoder().encode(health)
-        XCTAssertEqual(try JSONDecoder().decode(AgentHealth.self, from: payload), health)
+        #expect(try JSONDecoder().decode(AgentHealth.self, from: payload) == health)
     }
 
-    func testProtocolVersionIsExplicit() {
-        XCTAssertEqual(TinyPruneAgentXPC.protocolVersion, 1)
-        XCTAssertEqual(TinyPruneAgentXPC.machServiceName, "com.navig-me.tinyprune.agent")
+    @Test func testProtocolVersionIsExplicit() {
+        #expect(TinyPruneAgentXPC.protocolVersion == 1)
+        #expect(TinyPruneAgentXPC.machServiceName == "com.navig-me.tinyprune.agent")
     }
 }
-#endif
