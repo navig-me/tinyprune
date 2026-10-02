@@ -11,7 +11,7 @@
 <body>
   <header><a class="brand" href="https://tinyprune.com"><img src="assets/tinyprune-plum.svg" alt=""><span>TinyPrune</span></a><a class="home" href="https://tinyprune.com">Back to tinyprune.com</a></header>
   <div class="shell">
-    <aside><p>Guide</p><nav aria-label="Documentation"><a href="#start">Getting started</a><a href="#safety">Safety model</a><a href="#rules">Rules</a><a href="#preview">Preview</a><a href="#updates">Updates</a></nav><a class="source" href="https://github.com/navig-me/tinyprune">View the source</a></aside>
+    <aside><p>Guide</p><nav aria-label="Documentation"><a href="#start">Getting started</a><a href="#safety">Safety model</a><a href="#rules">Rules</a><a href="#preview">Preview</a><a href="#templates">Templates</a><a href="#finder">Finder</a><a href="#cli">Command line</a><a href="#updates">Updates</a></nav><a class="source" href="https://github.com/navig-me/tinyprune">View the source</a></aside>
     <main>
       <article>
         <p class="eyebrow">Documentation</p>
@@ -24,6 +24,15 @@ WHAT   Folder named node_modules
 WHEN   Project inactive for 30 days
 ACTION Move the folder to Trash</code></pre><p>A rule can match files or folders by scope, depth, exact name, glob, age, modification time, project inactivity, or an explicit override.</p></section>
         <section id="preview"><h2>Start in Preview.</h2><p>Preview runs the same matching and scheduling logic, but does not invoke the Trash executor. It is the right way to test a broad rule before enabling it.</p><ol><li>Select a folder you control.</li><li>Choose a template or build a rule.</li><li>Review the upcoming items and their explanations.</li><li>Add Keep or expiry overrides where necessary.</li><li>Enable the rule when the result matches your intent.</li></ol></section>
+        <section id="templates"><h2>Templates create ordinary rules.</h2><p>Developer Cleanup, Downloads, Screenshots, Temporary Workspace, and Build Artifacts each create normal rules that you can edit, pause, duplicate, or delete. Developer templates and very broad folders such as your home folder always start in Preview. TinyPrune does not scan on demand: a new rule's matches appear in Upcoming after the agent indexes it, and the Rules screen shows scheduled matches and how many are already eligible.</p></section>
+        <section id="finder" aria-labelledby="finder-title"><h2 id="finder-title">Act from Finder.</h2><p>The TinyPrune Finder menu can Keep an item, set an expiry (tonight, tomorrow, 7 days, 30 days, or a custom date), return an item to its folder rules, and explain why it will expire. Folders add Protect Folder, Set Folder Lifetime, and Create Rule. Each action is sent to the same background agent used by the app and CLI, so they always show the same resolved policy. The extension must be enabled in System Settings, and it only acts inside folders you have chosen to manage.</p></section>
+        <section id="cli"><h2>Inspect and script from the terminal.</h2><p>The <code>tinyprune</code> command talks to the background agent. It has no cleanup engine of its own.</p><pre><code>tinyprune status | rules | upcoming | activity
+tinyprune keep invoice.pdf [--descendants]
+tinyprune expire video.mov 7d        # also 12h, 30m, tonight, tomorrow
+tinyprune inherit foo.zip
+tinyprune why node_modules
+tinyprune pause | resume
+tinyprune config validate|preview|apply|export tinyprune.yml</code></pre><p>Add <code>--json</code> for stable output; every document carries a <code>schemaVersion</code>. Config files are checked locally by <code>validate</code>, diffed against current rules by <code>preview</code>, and applied by <code>apply</code> only inside folders already managed in the app. Rules created from a config start in Preview unless you pass <code>--active</code>.</p></section>
         <section id="updates"><h2>Updates follow the channel you choose.</h2><p>Direct downloads will use a signed, notarized DMG and Sparkle update feed. Homebrew installs will use the TinyPrune cask, with Homebrew as the only updater for that channel.</p><p>Read <a href="https://github.com/navig-me/tinyprune/blob/main/CLAUDE.md">CLAUDE.md</a> for engineering constraints and <a href="https://github.com/navig-me/tinyprune/blob/main/PLAN.md">PLAN.md</a> for release architecture.</p></section>
       </article>
     </main>

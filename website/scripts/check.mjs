@@ -10,6 +10,11 @@ const required = [
   'assets/rule-editor.png',
   'https://docs.tinyprune.com',
   'https://github.com/navig-me/tinyprune',
+  'https://www.googletagmanager.com/gtag/js?id=G-EERWCSKWF4',
+  "gtag('config', 'G-EERWCSKWF4');",
+  "posthog.init('phc_vYjj5JDjp63ZvmcVwko2Fd73Ks68Dmkz36z8vKGPNppD'",
+  'data-ph-event="cta_clicked"',
+  'posthog.capture(target.getAttribute',
 ];
 
 for (const value of required) {
