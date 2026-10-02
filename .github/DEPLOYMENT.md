@@ -13,6 +13,12 @@ The repository uses Cloudflare Pages Direct Upload from GitHub Actions. This kee
 
 `website/` deploys to the `tinyprune` project. `docs/` deploys to the `tinyprune-docs` project. The workflow validates each static site before uploading it. A push to `main` deploys both Pages projects; manual runs can select one site.
 
+### Search and assistant discovery
+
+Both sites publish canonical URLs, social metadata, JSON-LD, `robots.txt`, `sitemap.xml`, and an advisory `llms.txt`. The landing social image is `website/og.png` (1200×630); docs reference its absolute published URL. Keep product claims synchronized with the visible documentation, including release availability and optional updater behavior. Run `npm run check` in each site before deployment.
+
+After deployment, submit `https://tinyprune.com/sitemap.xml` and `https://docs.tinyprune.com/sitemap.xml` through verified Google Search Console/Bing Webmaster accounts. These require owner access and are not performed by the deployment workflow. Allowing crawlers and publishing `llms.txt` does not guarantee indexing, ranking, or inclusion in model answers; `llms.txt` is advisory, not a search-engine standard. Cloudflare zone-level bot/WAF rules must also permit the desired crawlers.
+
 ## macOS release setup
 
 Create a protected GitHub Environment named `release` (required reviewers, restricted to `v*` tags and `main`) and store these **environment secrets** (nothing else; never repository-level):

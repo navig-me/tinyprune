@@ -25,7 +25,7 @@
       {"@type":"Question","name":"Does TinyPrune permanently delete files?","acceptedAnswer":{"@type":"Answer","text":"No. TinyPrune only moves items to the macOS Trash. It does not delete anything permanently."}},
       {"@type":"Question","name":"How is TinyPrune different from a Mac cleaner app?","acceptedAnswer":{"@type":"Answer","text":"TinyPrune is not a system optimizer. It only touches folders you choose, follows rules you write, explains every decision, and lets you test a rule in Preview first."}},
       {"@type":"Question","name":"Can TinyPrune clean node_modules and other developer folders?","acceptedAnswer":{"@type":"Answer","text":"Yes. Rules can match folders such as node_modules or .venv and expire them after a project has been inactive. Developer templates always start in Preview."}},
-      {"@type":"Question","name":"Does TinyPrune need an account or network access?","acceptedAnswer":{"@type":"Answer","text":"No account is needed. Normal operation reads filesystem metadata only, does not inspect file contents, and does not require network access."}},
+      {"@type":"Question","name":"Does TinyPrune need an account or network access?","acceptedAnswer":{"@type":"Answer","text":"No account is needed. Core cleanup reads filesystem metadata only, does not inspect file contents, and does not require network access. Planned optional update checks for direct downloads will use the network; Homebrew installs will update through Homebrew."}},
       {"@type":"Question","name":"How do I keep a file from being removed?","acceptedAnswer":{"@type":"Answer","text":"Mark it Keep from the Finder menu or run tinyprune keep. Keep takes precedence over every rule, and a folder with a kept item inside is never trashed."}},
       {"@type":"Question","name":"Does TinyPrune work on Intel and Apple silicon, and which macOS versions?","acceptedAnswer":{"@type":"Answer","text":"It requires macOS 14 or later. Released builds are planned as universal binaries for Intel and Apple silicon; no release has been published yet."}},
       {"@type":"Question","name":"How do I install TinyPrune before the first release?","acceptedAnswer":{"@type":"Answer","text":"Build from source: git clone https://github.com/navig-me/tinyprune && cd tinyprune && swift Scripts/package-app.swift && open .build/package/TinyPrune.app"}}
@@ -156,7 +156,7 @@ tinyprune config export</code></pre>
           <h3>Can TinyPrune clean node_modules and other developer folders?</h3>
           <p>Yes. Rules can match folders such as <code>node_modules</code> or <code>.venv</code> and expire them after a project has been inactive. Developer templates always start in Preview.</p>
           <h3>Does TinyPrune need an account or network access?</h3>
-          <p>No account is needed. Normal operation reads filesystem metadata only, does not inspect file contents, and does not require network access.</p>
+          <p>No account is needed. Core cleanup reads filesystem metadata only, does not inspect file contents, and does not require network access. Planned optional update checks for direct downloads will use the network; Homebrew installs will update through Homebrew.</p>
           <h3>How do I keep a file from being removed?</h3>
           <p>Mark it Keep from the Finder menu or run <code>tinyprune keep</code>. Keep takes precedence over every rule, and a folder with a kept item inside is never trashed.</p>
           <h3>Does TinyPrune work on Intel and Apple silicon, and which macOS versions?</h3>

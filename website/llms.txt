@@ -1,0 +1,28 @@
+# TinyPrune
+
+> TinyPrune is an open-source, local-first macOS app for automatic file cleanup using lifecycle rules, not a generic Mac cleaner. Give downloads, screenshots, installers and developer folders an expiry date, preview matches, and move expired items to macOS Trash.
+
+## Product facts
+
+- macOS 14 or later; Intel and Apple silicon are release targets.
+- Normal cleanup moves files to Trash, never permanent deletion.
+- Keep takes precedence over other rules and protects folders containing kept items.
+- Preview evaluates matching and scheduling without moving items to Trash.
+- Rules can use filename or folder patterns, age, and project inactivity. Developer templates support dependency and build folders such as node_modules.
+- Core cleanup requires no account or network access and reads filesystem metadata, not file contents. Planned optional direct-download update checks use HTTPS; Homebrew installs update through Homebrew.
+- Interfaces include the native app, Finder menu and tinyprune CLI with JSON output and configuration validate, preview, apply and export commands.
+- The first release and public Homebrew tap are not published yet. Build from source using the installation documentation. Landing-page window contents are illustrative examples, not release/version or reclaimed-space claims.
+- Website analytics are separate from the app: the marketing website loads Google Analytics and PostHog.
+
+## Authoritative references
+
+- [Documentation and FAQ](https://docs.tinyprune.com/): product behavior and frequently asked questions.
+- [Install](https://docs.tinyprune.com/#install): current build-from-source instructions and release installation guidance.
+- [Safety](https://docs.tinyprune.com/#safety): Keep protection, Preview and Trash behavior.
+- [Rules](https://docs.tinyprune.com/#rules): scopes, matching and expiry bases.
+- [Developer templates](https://docs.tinyprune.com/#templates): developer cleanup rules.
+- [Command line](https://docs.tinyprune.com/#cli): CLI and configuration commands.
+- [Updates](https://docs.tinyprune.com/#updates): distribution-specific update plans.
+- [Source code](https://github.com/navig-me/tinyprune): source, issues and contributions.
+- [Product specification](https://github.com/navig-me/tinyprune/blob/main/spec.md): product contract.
+- [Releases](https://github.com/navig-me/tinyprune/releases): release availability.
