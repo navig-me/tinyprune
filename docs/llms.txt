@@ -1,0 +1,32 @@
+# TinyPrune
+
+> TinyPrune is a local-first macOS app that gives files and folders a lifetime. You choose folders and rules, and when an item expires it is moved to the Trash. It is not a generic Mac cleaner.
+
+## Key facts
+
+- Requires macOS 14 or later. Released builds are planned as universal (Intel and Apple silicon). No release is published yet.
+- Items only move to the macOS Trash. TinyPrune never permanently deletes files.
+- Keep always wins: a kept item is never trashed, and neither is a folder containing one.
+- Preview runs matching and scheduling without trashing anything. Developer templates and very broad folders start in Preview.
+- Local-first: no account, filesystem metadata only (no file contents), no network access needed for normal operation.
+- Every decision is explained: rule, basis, deadline, overrides, and why an item was skipped.
+- Interfaces: the app, a Finder menu, and the `tinyprune` CLI with `--json` output and config commands (validate, preview, apply, export).
+- Install before the first release: `git clone https://github.com/navig-me/tinyprune && cd tinyprune && swift Scripts/package-app.swift && open .build/package/TinyPrune.app`
+
+## Links
+
+- [TinyPrune home](https://tinyprune.com)
+- [Source code](https://github.com/navig-me/tinyprune)
+- [Releases](https://github.com/navig-me/tinyprune/releases)
+
+## Documentation sections
+
+- [Install](https://docs.tinyprune.com/#install)
+- [Safety](https://docs.tinyprune.com/#safety)
+- [Rules](https://docs.tinyprune.com/#rules)
+- [Preview](https://docs.tinyprune.com/#preview)
+- [Templates](https://docs.tinyprune.com/#templates)
+- [Finder menu](https://docs.tinyprune.com/#finder)
+- [Command line](https://docs.tinyprune.com/#cli)
+- [Updates](https://docs.tinyprune.com/#updates)
+- [FAQ](https://docs.tinyprune.com/#faq)

@@ -3,9 +3,35 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Install TinyPrune, set file lifetimes, and review what goes to Trash. A guide to the local-first macOS app, Finder menu, and CLI.">
+  <meta name="description" content="Documentation for TinyPrune, a local macOS app that moves old files and folders to Trash on rules you set. Install, Preview, Finder menu and CLI guide.">
   <meta name="theme-color" content="#fbf9f6">
-  <title>TinyPrune documentation</title>
+  <title>TinyPrune docs: automatic file cleanup rules for macOS</title>
+  <link rel="canonical" href="https://docs.tinyprune.com/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="TinyPrune docs">
+  <meta property="og:title" content="TinyPrune docs: automatic file cleanup rules for macOS">
+  <meta property="og:description" content="Set file lifetimes, preview matches, and move expired files to Trash on your Mac. Install guide, Finder menu, and CLI reference.">
+  <meta property="og:url" content="https://docs.tinyprune.com/">
+  <meta property="og:image" content="https://tinyprune.com/og.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="TinyPrune docs: automatic file cleanup rules for macOS">
+  <meta name="twitter:description" content="Set file lifetimes, preview matches, and move expired files to Trash on your Mac.">
+  <meta name="twitter:image" content="https://tinyprune.com/og.png">
+  <script type="application/ld+json">
+  {"@context":"https://schema.org","@graph":[
+    {"@type":"TechArticle","@id":"https://docs.tinyprune.com/#article","headline":"TinyPrune documentation","description":"How to install TinyPrune, create file lifetime rules, preview matches, and use the Finder menu and command line on macOS.","url":"https://docs.tinyprune.com/","inLanguage":"en","about":{"@id":"https://tinyprune.com/#software"},"isPartOf":{"@type":"WebSite","name":"TinyPrune docs","url":"https://docs.tinyprune.com/"},"publisher":{"@type":"Organization","name":"TinyPrune","url":"https://tinyprune.com"}},
+    {"@type":"FAQPage","@id":"https://docs.tinyprune.com/#faq","mainEntity":[
+      {"@type":"Question","name":"What is TinyPrune?","acceptedAnswer":{"@type":"Answer","text":"TinyPrune is a local macOS app that gives files and folders a lifetime. You choose folders and rules, and when an item expires TinyPrune moves it to the Trash."}},
+      {"@type":"Question","name":"Does TinyPrune permanently delete files?","acceptedAnswer":{"@type":"Answer","text":"No. TinyPrune only moves items to the macOS Trash. It does not delete anything permanently."}},
+      {"@type":"Question","name":"How is TinyPrune different from a Mac cleaner app?","acceptedAnswer":{"@type":"Answer","text":"TinyPrune is not a system optimizer. It only touches folders you choose, follows rules you write, explains every decision, and lets you test a rule in Preview first."}},
+      {"@type":"Question","name":"Can TinyPrune clean node_modules and other developer folders?","acceptedAnswer":{"@type":"Answer","text":"Yes. Rules can match folders such as node_modules or .venv and expire them after a project has been inactive. Developer templates always start in Preview."}},
+      {"@type":"Question","name":"Does TinyPrune need an account or network access?","acceptedAnswer":{"@type":"Answer","text":"No account is needed. Normal operation reads filesystem metadata only, does not inspect file contents, and does not require network access."}},
+      {"@type":"Question","name":"How do I keep a file from being removed?","acceptedAnswer":{"@type":"Answer","text":"Mark it Keep from the Finder menu or run tinyprune keep. Keep takes precedence over every rule, and a folder with a kept item inside is never trashed."}},
+      {"@type":"Question","name":"Does TinyPrune work on Intel and Apple silicon, and which macOS versions?","acceptedAnswer":{"@type":"Answer","text":"It requires macOS 14 or later. Released builds are planned as universal binaries for Intel and Apple silicon; no release has been published yet."}},
+      {"@type":"Question","name":"How do I install TinyPrune before the first release?","acceptedAnswer":{"@type":"Answer","text":"Build from source: git clone https://github.com/navig-me/tinyprune && cd tinyprune && swift Scripts/package-app.swift && open .build/package/TinyPrune.app"}}
+    ]}
+  ]}
+  </script>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -30,7 +56,7 @@
       <details open>
         <summary>In this guide</summary>
         <nav aria-label="Documentation">
-          <a href="#start">Getting started</a><a href="#install">Install</a><a href="#safety">Safety</a><a href="#rules">Rules</a><a href="#preview">Preview</a><a href="#templates">Templates</a><a href="#finder">Finder</a><a href="#cli">Command line</a><a href="#updates">Updates</a>
+          <a href="#start">Getting started</a><a href="#install">Install</a><a href="#safety">Safety</a><a href="#rules">Rules</a><a href="#preview">Preview</a><a href="#templates">Templates</a><a href="#finder">Finder</a><a href="#cli">Command line</a><a href="#updates">Updates</a><a href="#faq">FAQ</a>
         </nav>
       </details>
       <p class="sidebar-note">macOS 14 or later<br>Free and open source</p>
@@ -118,6 +144,25 @@ tinyprune config export</code></pre>
           <h2>How updates will work</h2>
           <p>The release plan is a signed, notarized DMG with Sparkle updates for direct downloads. Homebrew installs will update through the cask only. Signing and notarization are not available in the current early builds.</p>
           <p>For implementation details, read the <a href="https://github.com/navig-me/tinyprune/blob/main/AGENTS.md">contributor guide</a> and <a href="https://github.com/navig-me/tinyprune/blob/main/PLAN.md">release plan</a>. Report problems or suggest improvements on <a href="https://github.com/navig-me/tinyprune/issues">GitHub</a>.</p>
+        </section>
+        <section id="faq">
+          <h2>Frequently asked questions</h2>
+          <h3>What is TinyPrune?</h3>
+          <p>TinyPrune is a local macOS app that gives files and folders a lifetime. You choose folders and rules, and when an item expires TinyPrune moves it to the Trash.</p>
+          <h3>Does TinyPrune permanently delete files?</h3>
+          <p>No. TinyPrune only moves items to the macOS Trash. It does not delete anything permanently.</p>
+          <h3>How is TinyPrune different from a Mac cleaner app?</h3>
+          <p>TinyPrune is not a system optimizer. It only touches folders you choose, follows rules you write, explains every decision, and lets you test a rule in Preview first.</p>
+          <h3>Can TinyPrune clean node_modules and other developer folders?</h3>
+          <p>Yes. Rules can match folders such as <code>node_modules</code> or <code>.venv</code> and expire them after a project has been inactive. Developer templates always start in Preview.</p>
+          <h3>Does TinyPrune need an account or network access?</h3>
+          <p>No account is needed. Normal operation reads filesystem metadata only, does not inspect file contents, and does not require network access.</p>
+          <h3>How do I keep a file from being removed?</h3>
+          <p>Mark it Keep from the Finder menu or run <code>tinyprune keep</code>. Keep takes precedence over every rule, and a folder with a kept item inside is never trashed.</p>
+          <h3>Does TinyPrune work on Intel and Apple silicon, and which macOS versions?</h3>
+          <p>It requires macOS 14 or later. Released builds are planned as universal binaries for Intel and Apple silicon; no release has been published yet.</p>
+          <h3>How do I install TinyPrune before the first release?</h3>
+          <p>Build from source: <code>git clone https://github.com/navig-me/tinyprune &amp;&amp; cd tinyprune &amp;&amp; swift Scripts/package-app.swift &amp;&amp; open .build/package/TinyPrune.app</code>. See <a href="#install">Install</a> for details.</p>
         </section>
       </article>
     </main>
