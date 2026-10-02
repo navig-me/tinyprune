@@ -216,6 +216,7 @@ jobs:
       tag: ${{ inputs.tag || github.ref_name }}
     secrets: inherit
     permissions:
+      actions: read
       contents: write
       pull-requests: write
   homebrew:
