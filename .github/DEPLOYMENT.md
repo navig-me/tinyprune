@@ -95,6 +95,8 @@ tinyprune status --json
 # Exit 0 (available) or 69 with unavailable-agent JSON is expected.
 ```
 
+Local unsigned cask smoke (2026-10-02): the checksum-verified `TinyPrune-0.0.1-homebrew.dmg` installed through the current rendered template and a trusted local HTTP tap using isolated native-arm64 Homebrew: `brew install --debug --verbose --cask --appdir="$F/apps" local/tinyprune-smoke-20261002/tinyprune`. Homebrew exited 0 and linked the CLI; deep/strict signature verification passed, `TinyPruneDistribution=homebrew`, `SUEnableAutomaticChecks=false`, and both bundled/linked CLI status commands returned exit 69 with unavailable-agent JSON. The unsigned postflight removed propagated quarantine. This host required manually detaching the fixture DMG and terminating its stuck `diskutil eject` child before Homebrew continued; this is not proof of an unattended clean-host install. No public tap, Developer ID/notarization, running agent, Finder activation, or uninstall hooks were exercised. The isolated fixture was removed without touching user app data or `/Applications`.
+
 `TINYPRUNE_DISTRIBUTION=direct|homebrew` is backward-compatible packaging plumbing: default `direct`. The packager writes `TinyPruneDistribution` and `SUEnableAutomaticChecks` (`false` for Homebrew, `true` for direct) **before signing**. These keys are harmless while Sparkle is absent. Homebrew has a separately packaged, signed/notarized when available DMG with identical version/build; its only updater is `brew upgrade --cask tinyprune`. Future Sparkle integration must honor the distribution key and link only into the app; `verify-signing.sh` enforces component isolation.
 
 ### Maintainer release checklist
