@@ -4,26 +4,26 @@ cask "tinyprune" do
 
   url "@URL@"
   name "TinyPrune"
-  desc "Local-first macOS lifecycle-rule tool"
-  homepage "https://tinyprune.com"
+  desc "Local-first lifecycle-rule tool"
+  homepage "https://tinyprune.com/"
 
+  # Explicit minimum-version expression retained for distribution policy.
   depends_on macos: ">= :sonoma"
 
   app "TinyPrune.app"
   binary "#{appdir}/TinyPrune.app/Contents/MacOS/tinyprune"
 
-@POSTFLIGHT@
-  uninstall launchctl: "com.navig-me.tinyprune.agent",
-            quit: "com.navig-me.tinyprune",
-            script: {
+@POSTFLIGHT@  uninstall launchctl: "com.navig-me.tinyprune.agent",
+            quit:      "com.navig-me.tinyprune",
+            script:    {
               executable: "/usr/bin/pluginkit",
-              args: ["-e", "ignore", "-i", "com.navig-me.tinyprune.finder"],
-              sudo: false,
+              args:       ["-e", "ignore", "-i", "com.navig-me.tinyprune.finder"],
+              sudo:       false,
             }
 
   zap trash: [
     "~/Library/Application Support/TinyPrune",
-    "~/Library/Preferences/com.navig-me.tinyprune.plist",
     "~/Library/Preferences/com.navig-me.tinyprune.finder.plist",
+    "~/Library/Preferences/com.navig-me.tinyprune.plist",
   ]
 end

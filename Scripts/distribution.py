@@ -35,9 +35,14 @@ def tag():
 
 def digest(path):
     with path.open('rb') as stream:
-        return hashlib.file_digest(stream, 'sha256').hexdigest()
+        checksum = hashlib.sha256()
+        for block in iter(lambda: stream.read(1024 * 1024), b''):
+            checksum.update(block)
+        return checksum.hexdigest()
 
 def tools(root):
+    root = root / 'tooling'
+    root.mkdir(exist_ok=True)
     archive = root / 'Sparkle.tar.xz'
     urllib.request.urlretrieve(SPARKLE_URL, archive)
     if digest(archive) != SPARKLE_SHA256:
@@ -74,6 +79,7 @@ def render():
     system_command "/usr/bin/xattr",
                    args: ["-dr", "com.apple.quarantine", "#{appdir}/TinyPrune.app"]
   end
+
 '''
     text = Path('Resources/Homebrew/tinyprune.rb.template').read_text()
     for key, value in {'VERSION': tag()[1:], 'SHA256': digest(dmg), 'URL': url, 'POSTFLIGHT': postflight}.items():
@@ -97,12 +103,23 @@ def feed():
         (root / 'appcast.xml').write_bytes((output / 'appcast.xml').read_bytes())
     run(str(bin_path / 'generate_appcast'), '--ed-key-file', '-', '--maximum-versions', '0', '--maximum-deltas', '0', '--download-url-prefix', url.rsplit('/', 1)[0] + '/', '--release-notes-url-prefix', 'https://tinyprune.com/updates/', str(root), input=(os.environ['SPARKLE_ED25519_PRIVATE_KEY'] + '\n').encode())
     tree = ET.parse(root / 'appcast.xml')
+    key_input = (os.environ['SPARKLE_ED25519_PRIVATE_KEY'] + '\n').encode()
+    signature = run(str(bin_path / 'sign_update'), '--ed-key-file', '-', '-p', str(dmg), input=key_input, stdout=subprocess.PIPE).stdout.decode().strip()
+    run(str(bin_path / 'sign_update'), '--verify', '--ed-key-file', '-', str(dmg), signature, input=key_input)
+    ET.register_namespace('sparkle', NS)
+    matched = 0
     for item in tree.findall('./channel/item'):
         enclosure = item.find('enclosure')
         if enclosure is not None and enclosure.get('url') == url:
+            matched += 1
+            enclosure.set('{' + NS + '}edSignature', signature)
+            if enclosure.get('length') != str(dmg.stat().st_size):
+                raise ValueError('Generated enclosure length mismatch')
             notes_link = item.find('{' + NS + '}releaseNotesLink')
             if notes_link is not None:
                 notes_link.text = 'https://tinyprune.com/updates/' + tag()[1:] + '.html'
+    if matched != 1:
+        raise ValueError('Generated appcast must contain exactly one released enclosure')
     tree.write(output / 'appcast.xml', encoding='utf-8', xml_declaration=True)
     (output / (tag()[1:] + '.html')).write_text(note)
 

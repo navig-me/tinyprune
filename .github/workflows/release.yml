@@ -10,7 +10,7 @@ on:
         required: true
         type: string
       publish:
-        description: Publish GitHub release after signing and notarization
+        description: Publish GitHub release (unsigned builds are always prereleases)
         required: true
         default: false
         type: boolean
@@ -23,8 +23,7 @@ on:
 # Least privilege: the token only needs to create the release; signing material comes
 # from the protected `release` environment (see .github/DEPLOYMENT.md and ADR 0004).
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref_name || inputs.tag }}
@@ -35,7 +34,7 @@ env:
 
 jobs:
   release:
-    name: Sign, notarize, and publish
+    name: Package, verify, and publish selected signing mode
     runs-on: macos-15
     environment: release
     timeout-minutes: 90

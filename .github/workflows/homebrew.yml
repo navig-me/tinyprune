@@ -76,5 +76,7 @@ jobs:
           status=$?
           set -e
           [[ "$status" == 0 || "$status" == 69 ]] || exit "$status"
+          export STATUS_CODE="$status"
+          python3 -c 'import json, os; value=json.load(open(os.environ["RUNNER_TEMP"]+"/status.json")); assert value["status"] == ("unavailable" if os.environ["STATUS_CODE"] == "69" else "available"), value'
           python3 -m json.tool "$RUNNER_TEMP/status.json"
           cat "$RUNNER_TEMP/status.json"
