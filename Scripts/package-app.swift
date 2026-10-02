@@ -27,6 +27,11 @@ let isAdHoc = signIdentity == "-"
 let marketingVersion = environment["TINYPRUNE_VERSION"].flatMap { $0.isEmpty ? nil : $0 } ?? "0.1.0"
 let buildNumber = environment["TINYPRUNE_BUILD"].flatMap { $0.isEmpty ? nil : $0 } ?? "1"
 let universal = environment["TINYPRUNE_UNIVERSAL"] == "1" || !isAdHoc
+let distribution = environment["TINYPRUNE_DISTRIBUTION"] ?? "direct"
+guard ["direct", "homebrew"].contains(distribution) else {
+    FileHandle.standardError.write(Data("TINYPRUNE_DISTRIBUTION must be direct or homebrew\n".utf8))
+    exit(1)
+}
 var buildArguments = ["build", "--configuration", "release"]
 if universal { buildArguments += ["--arch", "arm64", "--arch", "x86_64"] }
 let binDirectory = repositoryRoot.appendingPathComponent(universal ? ".build/apple/Products/Release" : ".build/release", isDirectory: true)
@@ -90,6 +95,8 @@ do {
         "CFBundleVersion": buildNumber,
         "LSMinimumSystemVersion": "14.0",
         "NSHighResolutionCapable": true,
+        "TinyPruneDistribution": distribution,
+        "SUEnableAutomaticChecks": distribution == "direct",
         "ATSApplicationFontsPath": "Fonts",
         "NSPrincipalClass": "NSApplication",
         "CFBundleURLTypes": [[

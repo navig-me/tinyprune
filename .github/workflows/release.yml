@@ -14,11 +14,17 @@ on:
         required: true
         default: false
         type: boolean
+      signing:
+        description: auto requires all six secrets or none; signed never falls back; unsigned requires no secrets
+        default: auto
+        type: choice
+        options: [auto, signed, unsigned]
 
 # Least privilege: the token only needs to create the release; signing material comes
 # from the protected `release` environment (see .github/DEPLOYMENT.md and ADR 0004).
 permissions:
   contents: write
+  pull-requests: write
 
 concurrency:
   group: release-${{ github.ref_name || inputs.tag }}
@@ -33,13 +39,18 @@ jobs:
     runs-on: macos-15
     environment: release
     timeout-minutes: 90
+    permissions:
+      contents: write
+    outputs:
+      published: ${{ steps.publish.outputs.published }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0
-      - name: Validate tag and signing configuration
+      - name: Validate tag and select signing policy
         env:
+          REQUESTED_SIGNING: ${{ inputs.signing || 'auto' }}
           CERTIFICATE: ${{ secrets.DEVELOPER_ID_CERTIFICATE_P12_BASE64 }}
           CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_CERTIFICATE_PASSWORD }}
           NOTARY_KEY: ${{ secrets.APPLE_NOTARY_PRIVATE_KEY_BASE64 }}
@@ -50,9 +61,17 @@ jobs:
           set -euo pipefail
           [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Tag must look like vX.Y.Z"; exit 1; }
           git rev-parse --verify "refs/tags/$RELEASE_TAG" >/dev/null
+          count=0
           for name in CERTIFICATE CERTIFICATE_PASSWORD NOTARY_KEY NOTARY_KEY_ID NOTARY_ISSUER_ID TEAM_ID; do
-            [[ -n "${!name}" ]] || { echo "Missing release secret: $name"; exit 1; }
+            if [[ -n "${!name}" ]]; then count=$((count + 1)); fi
           done
+          [[ "$count" == 0 || "$count" == 6 ]] || { echo "Partial Apple configuration: refusing unsigned fallback"; exit 1; }
+          mode=unsigned
+          if [[ "$count" == 6 ]]; then mode=signed; fi
+          [[ "$REQUESTED_SIGNING" == auto || "$REQUESTED_SIGNING" == "$mode" ]] || { echo "Requested signing mode cannot be satisfied; no fallback"; exit 1; }
+          echo "SIGNING_MODE=$mode" >> "$GITHUB_ENV"
+          echo "TINYPRUNE_UNIVERSAL=1" >> "$GITHUB_ENV"
+          if [[ "$mode" == unsigned ]]; then echo "TINYPRUNE_SIGN_IDENTITY=-" >> "$GITHUB_ENV"; fi
           {
             echo "TINYPRUNE_VERSION=${RELEASE_TAG#v}"
             echo "TINYPRUNE_BUILD=$GITHUB_RUN_NUMBER"
@@ -69,6 +88,7 @@ jobs:
           swift run TinyPruneDomainCheck
           swift run TinyPruneEngineCheck
       - name: Import Developer ID certificate
+        if: env.SIGNING_MODE == 'signed'
         env:
           CERTIFICATE: ${{ secrets.DEVELOPER_ID_CERTIFICATE_P12_BASE64 }}
           CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_CERTIFICATE_PASSWORD }}
@@ -92,7 +112,9 @@ jobs:
         run: swift Scripts/package-app.swift
       - name: Verify signing before notarization
         run: Scripts/verify-signing.sh --release --pre-notarize .build/package/TinyPrune.app
+        if: env.SIGNING_MODE == 'signed'
       - name: Notarize and staple app
+        if: env.SIGNING_MODE == 'signed'
         env:
           NOTARY_KEY: ${{ secrets.APPLE_NOTARY_PRIVATE_KEY_BASE64 }}
           NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
@@ -110,7 +132,9 @@ jobs:
           xcrun stapler staple .build/package/TinyPrune.app
       - name: Verify notarized app
         run: Scripts/verify-signing.sh --release .build/package/TinyPrune.app
+        if: env.SIGNING_MODE == 'signed'
       - name: Create signed distribution DMG
+        if: env.SIGNING_MODE == 'signed'
         run: |
           set -euo pipefail
           rm -rf "$STAGING_PATH"
@@ -121,6 +145,7 @@ jobs:
           codesign --force --sign "$TINYPRUNE_SIGN_IDENTITY" --timestamp "$DMG_PATH"
           codesign --verify --strict --verbose=2 "$DMG_PATH"
       - name: Notarize and validate DMG
+        if: env.SIGNING_MODE == 'signed'
         env:
           NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
           NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
@@ -133,6 +158,7 @@ jobs:
           xcrun stapler validate "$DMG_PATH"
           spctl --assess --type open --context context:primary-signature -vv "$DMG_PATH"
       - name: Verify the app inside the DMG
+        if: env.SIGNING_MODE == 'signed'
         run: |
           set -euo pipefail
           mount_point="$RUNNER_TEMP/dmg-mount"
@@ -140,6 +166,20 @@ jobs:
           hdiutil attach "$DMG_PATH" -readonly -nobrowse -mountpoint "$mount_point"
           trap 'hdiutil detach "$mount_point" -force' EXIT
           Scripts/verify-signing.sh --release "$mount_point/TinyPrune.app"
+      - name: Verify and package unsigned preview
+        if: env.SIGNING_MODE == 'unsigned'
+        run: |
+          set -euo pipefail
+          Scripts/verify-signing.sh .build/package/TinyPrune.app
+          mkdir -p "$STAGING_PATH"
+          ditto .build/package/TinyPrune.app "$STAGING_PATH/TinyPrune.app"
+          ln -s /Applications "$STAGING_PATH/Applications"
+          hdiutil create -volname TinyPrune -srcfolder "$STAGING_PATH" -fs HFS+ -format UDZO -ov "$DMG_PATH"
+      - name: Package separate Homebrew distribution
+        env:
+          NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: bash Scripts/package-homebrew.sh
       - name: Generate checksums
         run: |
           cd "$RUNNER_TEMP"
@@ -150,14 +190,41 @@ jobs:
           path: |
             ${{ runner.temp }}/TinyPrune-*.dmg
             ${{ runner.temp }}/TinyPrune-*.dmg.sha256
+            ${{ runner.temp }}/TinyPrune-*.json
           if-no-files-found: error
       - name: Publish GitHub release
+        id: publish
         if: ${{ github.event_name == 'push' || inputs.publish }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$RELEASE_TAG" "$DMG_PATH" "$DMG_PATH.sha256" --verify-tag --generate-notes --title "TinyPrune $RELEASE_TAG"
+        run: |
+          set -euo pipefail
+          python3 Scripts/distribution.py notes > "$RUNNER_TEMP/release-notes.md"
+          flags=()
+          if [[ "$SIGNING_MODE" == unsigned ]]; then flags+=(--prerelease); fi
+          gh release create "$RELEASE_TAG" "$DMG_PATH" "$DMG_PATH.sha256" "$RUNNER_TEMP/TinyPrune-${RELEASE_TAG#v}-homebrew.dmg" "$RUNNER_TEMP/TinyPrune-${RELEASE_TAG#v}-homebrew.dmg.sha256" "$RUNNER_TEMP/TinyPrune-${RELEASE_TAG#v}.json" --verify-tag --notes-file "$RUNNER_TEMP/release-notes.md" --title "TinyPrune $RELEASE_TAG" "${flags[@]}"
+          echo "published=true" >> "$GITHUB_OUTPUT"
       - name: Remove signing material
         if: always()
         run: |
           security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
           rm -f "$NOTARY_KEY_PATH" "$RUNNER_TEMP/developer-id.p12"
+  update-feed:
+    needs: release
+    if: needs.release.outputs.published == 'true'
+    uses: ./.github/workflows/publish-update-feed.yml
+    with:
+      tag: ${{ inputs.tag || github.ref_name }}
+    secrets: inherit
+    permissions:
+      contents: write
+      pull-requests: write
+  homebrew:
+    needs: release
+    if: needs.release.outputs.published == 'true'
+    uses: ./.github/workflows/homebrew.yml
+    with:
+      tag: ${{ inputs.tag || github.ref_name }}
+    secrets: inherit
+    permissions:
+      contents: read

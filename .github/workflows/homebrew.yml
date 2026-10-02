@@ -1,0 +1,80 @@
+name: Publish Homebrew cask PR
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published vX.Y.Z tag
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: homebrew
+  cancel-in-progress: false
+jobs:
+  cask:
+    runs-on: macos-15
+    environment: homebrew
+    outputs:
+      branch: ${{ steps.publish.outputs.branch }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Render cask and open tap PR
+        id: publish
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          CASK_OUTPUT: tap/Casks/tinyprune.rb
+        run: |
+          set -euo pipefail
+          if [[ -z "$GH_TOKEN" ]]; then
+            echo 'Homebrew skipped: homebrew Environment has no HOMEBREW_TAP_TOKEN.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          gh repo clone tinyprune/homebrew-tap tap
+          python3 Scripts/distribution.py cask
+          ruby -c "$CASK_OUTPUT"
+          branch="release/$RELEASE_TAG"
+          git -C tap switch -c "$branch"
+          git -C tap config user.name tinyprune-release-bot
+          git -C tap config user.email release-bot@users.noreply.github.com
+          git -C tap add Casks/tinyprune.rb
+          git -C tap commit -m "Update TinyPrune to $RELEASE_TAG"
+          gh auth setup-git
+          git -C tap push origin "$branch"
+          gh pr create --repo tinyprune/homebrew-tap --base main --head "$branch" --title "TinyPrune $RELEASE_TAG" --body 'Separate Homebrew DMG with SUEnableAutomaticChecks=false. Review checksum and signing policy. Clean macOS CLI smoke runs against this PR branch; no auto-merge.'
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+  clean-macos:
+    needs: cask
+    if: needs.cask.outputs.branch != ''
+    runs-on: macos-15
+    environment: homebrew
+    steps:
+      - name: Install tap PR branch and exercise bundled CLI
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAP_BRANCH: ${{ needs.cask.outputs.branch }}
+        run: |
+          set -euo pipefail
+          brew tap tinyprune/tap
+          tap_path="$(brew --repo tinyprune/tap)"
+          git -C "$tap_path" fetch origin "$TAP_BRANCH"
+          git -C "$tap_path" checkout --detach FETCH_HEAD
+          HOMEBREW_NO_AUTO_UPDATE=1 brew install --cask tinyprune/tap/tinyprune
+          /usr/libexec/PlistBuddy -c 'Print :TinyPruneDistribution' /Applications/TinyPrune.app/Contents/Info.plist | /usr/bin/grep -x homebrew
+          /usr/libexec/PlistBuddy -c 'Print :SUEnableAutomaticChecks' /Applications/TinyPrune.app/Contents/Info.plist | /usr/bin/grep -x false
+          set +e
+          tinyprune status --json > "$RUNNER_TEMP/status.json"
+          status=$?
+          set -e
+          [[ "$status" == 0 || "$status" == 69 ]] || exit "$status"
+          python3 -m json.tool "$RUNNER_TEMP/status.json"
+          cat "$RUNNER_TEMP/status.json"

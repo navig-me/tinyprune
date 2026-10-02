@@ -1,0 +1,83 @@
+name: Publish or verify direct update feed
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published vX.Y.Z tag
+        required: true
+        type: string
+      verify_public:
+        description: Verify public feed AFTER merging the feed PR and successful Pages deployment
+        default: false
+        type: boolean
+permissions:
+  contents: read
+concurrency:
+  group: update-feed
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: ${{ !inputs.verify_public }}
+    runs-on: macos-15
+    environment: update-feed
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Generate signed appcast and open review PR
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+          SPARKLE_ED25519_PRIVATE_KEY: ${{ secrets.SPARKLE_ED25519_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$SPARKLE_ED25519_PRIVATE_KEY" ]]; then
+            echo 'Update feed skipped: update-feed Environment has no SPARKLE_ED25519_PRIVATE_KEY.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          python3 Scripts/distribution.py feed
+          if [[ -z "$(git status --porcelain -- website/updates)" ]]; then exit 0; fi
+          branch="updates/$RELEASE_TAG"
+          git switch -c "$branch"
+          git config user.name 'tinyprune-release-bot'
+          git config user.email 'release-bot@users.noreply.github.com'
+          git add website/updates
+          git commit -m "Publish direct update feed for $RELEASE_TAG"
+          gh auth setup-git
+          git push origin "$branch"
+          gh pr create --base main --head "$branch" --title "Update feed $RELEASE_TAG" --body 'Review signatures and release notes. Merge to deploy Pages, then dispatch this workflow with verify_public=true. Do not mark distribution complete before verification passes.'
+  verify-public:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.verify_public }}
+    runs-on: macos-15
+    environment: update-feed
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Verify deployed feed against released direct DMG
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          SPARKLE_ED25519_PRIVATE_KEY: ${{ secrets.SPARKLE_ED25519_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$SPARKLE_ED25519_PRIVATE_KEY" ]]; then
+            echo 'Public verification skipped: update-feed signing secret absent.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          deploy="$(gh run list --workflow deploy-pages.yml --branch main --commit "$(git rev-parse HEAD)" --status success --json databaseId --jq '.[0].databaseId // empty')"
+          [[ -n "$deploy" ]] || { echo 'Deploy this main commit successfully with deploy-pages.yml before public verification.'; exit 1; }
+          python3 Scripts/distribution.py verify
