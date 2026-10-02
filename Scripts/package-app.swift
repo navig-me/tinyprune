@@ -32,9 +32,13 @@ guard ["direct", "homebrew"].contains(distribution) else {
     FileHandle.standardError.write(Data("TINYPRUNE_DISTRIBUTION must be direct or homebrew\n".utf8))
     exit(1)
 }
-var buildArguments = ["build", "--configuration", "release"]
-if universal { buildArguments += ["--arch", "arm64", "--arch", "x86_64"] }
-let binDirectory = repositoryRoot.appendingPathComponent(universal ? ".build/apple/Products/Release" : ".build/release", isDirectory: true)
+// The xcbuild-based `--arch a --arch b` path rejects the Finder extension's Swift 5 language mode
+// ("SWIFT_VERSION '' is unsupported"), so universal builds compile each architecture with the
+// native build system and merge the products with lipo.
+let architectures = ["arm64", "x86_64"]
+let universalDirectory = repositoryRoot.appendingPathComponent(".build/universal-release", isDirectory: true)
+let binDirectory = universal ? universalDirectory : repositoryRoot.appendingPathComponent(".build/release", isDirectory: true)
+let executableProducts = ["TinyPruneApp", "TinyPruneAgent", "tinyprune", "TinyPruneFinderExtension"]
 
 func run(_ executable: String, _ arguments: [String]) throws {
     let process = Process()
@@ -63,7 +67,19 @@ func writePropertyList(_ value: [String: Any], to url: URL) throws {
 }
 
 do {
-    try run("/usr/bin/swift", buildArguments)
+    if universal {
+        if fileManager.fileExists(atPath: universalDirectory.path) { try fileManager.removeItem(at: universalDirectory) }
+        try fileManager.createDirectory(at: universalDirectory, withIntermediateDirectories: true)
+        for architecture in architectures {
+            try run("/usr/bin/swift", ["build", "--configuration", "release", "--triple", "\(architecture)-apple-macosx14.0"])
+        }
+        for product in executableProducts {
+            let slices = architectures.map { repositoryRoot.appendingPathComponent(".build/\($0)-apple-macosx/release/\(product)").path }
+            try run("/usr/bin/lipo", ["-create"] + slices + ["-output", universalDirectory.appendingPathComponent(product).path])
+        }
+    } else {
+        try run("/usr/bin/swift", ["build", "--configuration", "release"])
+    }
     try fileManager.createDirectory(at: packageDirectory, withIntermediateDirectories: true)
     if fileManager.fileExists(atPath: appURL.path) { try fileManager.removeItem(at: appURL) }
     try fileManager.createDirectory(at: macOSURL, withIntermediateDirectories: true)
