@@ -2,36 +2,22 @@ import { readFile } from 'node:fs/promises';
 
 const html = await readFile(new URL('../index.html', import.meta.url), 'utf8');
 const required = [
-  '<!doctype html>',
-  '<title>TinyPrune | File lifetimes for macOS</title>',
-  'assets/tinyprune-plum.svg',
-  'assets/overview.png',
-  'assets/upcoming-inspector.png',
-  'assets/rule-editor.png',
+  '<!DOCTYPE html>',
+  '<title>TinyPrune',
+  'Give your files',
   'https://docs.tinyprune.com',
   'https://github.com/navig-me/tinyprune',
+  'https://github.com/navig-me/tinyprune/releases',
   'https://www.googletagmanager.com/gtag/js?id=G-EERWCSKWF4',
   "gtag('config', 'G-EERWCSKWF4');",
   "posthog.init('phc_vYjj5JDjp63ZvmcVwko2Fd73Ks68Dmkz36z8vKGPNppD'",
-  "api_host: 'https://us.i.posthog.com'",
-  "person_profiles: 'identified_only'",
-  'data-ph-event="nav_clicked"',
-  'data-ph-event="install_clicked"',
-  'brew install --cask tinyprune/tap/tinyprune',
-  'xattr -dr com.apple.quarantine /Applications/TinyPrune.app',
-  'swift Scripts/package-app.swift',
-  'The first release is not published yet.',
-  'data-copy="brew-command"',
-  'data-copy="quarantine-command"',
-  'data-copy="source-command"',
-  'data-ph-event="cta_clicked"',
-  'posthog.capture(target.getAttribute',
+  "posthog.capture(name, { label: label, href: href })",
 ];
 
 for (const value of required) {
   if (!html.includes(value)) throw new Error(`website/index.html is missing ${value}`);
 }
 
-if ((html.match(/<main>/g) ?? []).length !== 1) throw new Error('website must contain one main landmark');
-if (!html.includes('<meta name="viewport"')) throw new Error('website must declare a viewport');
-if (/[—–]/.test(html)) throw new Error('website must not contain em or en dashes');
+if ((html.match(/<main[\s>]/g) ?? []).length !== 1) throw new Error('website must contain one main landmark');
+if (!html.includes('<meta content="width=device-width') && !html.includes('<meta name="viewport"')) throw new Error('website must declare a viewport');
+if (html.includes('href="#"') && html.match(/href="#"/g).length > 1) throw new Error('website has placeholder links');

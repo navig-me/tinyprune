@@ -1,6 +1,7 @@
-<!doctype html>
-<html lang="en">
-<head>
+<!DOCTYPE html>
+
+<html lang="en"><head>
+<meta charset="utf-8"/>
   <!-- Google tag (gtag.js) -->
   <script async src="https://www.googletagmanager.com/gtag/js?id=G-EERWCSKWF4"></script>
   <script>
@@ -19,117 +20,415 @@
         person_profiles: 'identified_only', // or 'always' to create profiles for anonymous users as well
     })
   </script>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="TinyPrune gives files a lifetime and safely moves eligible items to the Mac Trash.">
-  <meta name="theme-color" content="#fbf9f6">
-  <title>TinyPrune | File lifetimes for macOS</title>
-  <link rel="stylesheet" href="styles.css">
-</head>
-<body>
-  <a class="skip-link" href="#content">Skip to content</a>
-  <header class="site-header">
-    <div class="header-inner">
-      <a class="brand" href="/" aria-label="TinyPrune home" data-ph-event="nav_clicked" data-ph-label="home"><img src="assets/tinyprune-plum.svg" alt="" width="28" height="28"><span>TinyPrune</span></a>
-      <nav aria-label="Primary navigation">
-        <a href="#how-it-works" data-ph-event="nav_clicked" data-ph-label="how_it_works">How it works</a>
-        <a href="#rules" data-ph-event="nav_clicked" data-ph-label="rules">Rules</a>
-        <a href="#examples" data-ph-event="nav_clicked" data-ph-label="examples">Examples</a>
-        <a href="#privacy" data-ph-event="nav_clicked" data-ph-label="privacy">Privacy</a>
-        <a href="https://docs.tinyprune.com" data-ph-event="nav_clicked" data-ph-label="documentation">Docs</a>
-      </nav>
-      <a class="button primary header-install" href="#install" data-ph-event="install_clicked" data-ph-label="header_install">Install</a>
-    </div>
-  </header>
-  <main>
-    <section class="hero container" id="content" tabindex="-1">
-      <div class="hero-intro">
-        <div class="hero-copy">
-          <h1>Give your files<br><em>an expiry date.</em></h1>
-          <p>TinyPrune automatically moves old files and folders to Trash after the time you choose.</p>
-          <div class="actions">
-            <a class="button primary" href="#install" data-ph-event="install_clicked" data-ph-label="hero_install">Get TinyPrune</a>
-            <a class="button secondary" href="https://github.com/navig-me/tinyprune" data-ph-event="cta_clicked" data-ph-label="hero_source">View on GitHub</a>
-          </div>
-          <p class="compatibility">Open source · macOS 14+</p>
-          <ul class="hero-facts"><li>Moves to Trash</li><li>No account</li></ul>
-        </div>
-        <figure class="product-shot">
-          <img src="assets/overview.png" alt="TinyPrune Overview listing four managed places in Preview and the next item due" width="1400" height="1105" fetchpriority="high">
-          <figcaption>The real app: managed places and the next items due.</figcaption>
-        </figure>
-      </div>
-      <div class="install" id="install">
-        <div class="install-heading"><h2>Install TinyPrune</h2><p>The first release is not published yet.</p></div>
-        <ol class="install-steps">
-          <li><h3>Get the app</h3><p>When available, download <code>TinyPrune.dmg</code> from <a href="https://github.com/navig-me/tinyprune/releases" data-ph-event="install_clicked" data-ph-label="releases">GitHub Releases</a> and drag it to Applications. Or use Homebrew:</p><div class="command"><code id="brew-command">brew install --cask tinyprune/tap/tinyprune</code><button type="button" data-copy="brew-command" aria-label="Copy Homebrew command" data-ph-event="install_clicked" data-ph-label="copy_brew">Copy</button></div></li>
-          <li><h3>Open it once by hand</h3><p>Early builds are not notarized. If macOS blocks the first launch, go to <strong>System Settings &gt; Privacy &amp; Security &gt; Open Anyway</strong>. Alternatively, remove quarantine from the installed app:</p><div class="command"><code id="quarantine-command">xattr -dr com.apple.quarantine /Applications/TinyPrune.app</code><button type="button" data-copy="quarantine-command" aria-label="Copy quarantine command" data-ph-event="install_clicked" data-ph-label="copy_quarantine">Copy</button></div></li>
-          <li><h3>Allow the background agent</h3><p>TinyPrune offers to install its agent and sends you to Login Items to approve it. The agent does the work, so the app can stay closed.</p></li>
-          <li><h3>Add a folder and start in Preview</h3><p>Pick Downloads or a template. New rules start in Preview: you can review what would move to Trash without moving anything.</p></li>
-        </ol>
-        <div class="source-build"><p>Until the first release, build from source with the Xcode command line tools:</p><div class="command"><code id="source-command">git clone https://github.com/navig-me/tinyprune &amp;&amp; cd tinyprune &amp;&amp; swift Scripts/package-app.swift &amp;&amp; open .build/package/TinyPrune.app</code><button type="button" data-copy="source-command" aria-label="Copy build-from-source command" data-ph-event="install_clicked" data-ph-label="copy_source">Copy</button></div></div>
-        <p class="copy-status" role="status" aria-live="polite"></p>
-      </div>
-    </section>
-    <section class="band" id="how-it-works">
-      <div class="container"><h2>How it works</h2>
-        <ol class="workflow">
-          <li><span class="step-number" aria-hidden="true">01</span><h3>Pick a folder</h3><p>Add a place for disposable files, such as Downloads or a screenshots folder.</p></li>
-          <li><span class="step-number" aria-hidden="true">02</span><h3>Set an expiry</h3><p>Match a name or pattern, then choose an age or a period of project inactivity.</p></li>
-          <li><span class="step-number" aria-hidden="true">03</span><h3>Review, then enable</h3><p>Check the matches in Preview. Enable the rule when you are ready for automatic moves to Trash.</p></li>
-        </ol>
-      </div>
-    </section>
-    <section class="container section split" id="rules">
-      <div class="section-copy"><h2>Clean exactly what you want.</h2><p>Choose the folder, what to match, and how old it should be. Project rules can wait until a project has been inactive, based on file timestamps.</p><ul class="safety-list"><li><strong>Keep wins.</strong> A kept item, or a folder containing one, is protected from automatic cleanup.</li><li><strong>Trash only.</strong> Put items back with Finder. TinyPrune has no permanent delete.</li></ul><a class="text-link" href="https://docs.tinyprune.com#rules" data-ph-event="cta_clicked" data-ph-label="explore_rule_model">Read about rules</a></div>
-      <figure class="product-shot"><img src="assets/rule-editor.png" alt="Rules screen showing a dry run of Old installers with 2 matches totaling 6.3 MB" width="1400" height="589" loading="lazy"><figcaption>A read-only dry run shows which files a rule matches.</figcaption></figure>
-    </section>
-    <section class="band" id="examples"><div class="container"><h2>Useful rules to start with</h2><p class="section-lead">Templates create ordinary rules you can edit or delete. These are examples, not folders TinyPrune monitors without your permission.</p>
-      <div class="table-scroll" role="region" aria-label="Example lifecycle rules" tabindex="0"><table><caption class="visually-hidden">Example folders, matching items, and expiry times</caption><thead><tr><th scope="col">Folder</th><th scope="col">Match</th><th scope="col">Move to Trash after</th></tr></thead><tbody>
-        <tr><td><code>~/Downloads</code></td><td><code>*.dmg</code></td><td>7 days</td></tr>
-        <tr><td><code>~/Downloads</code></td><td><code>*.zip</code></td><td>14 days</td></tr>
-        <tr><td><code>~/Desktop/Shots</code></td><td>Screenshots</td><td>7 days</td></tr>
-        <tr><td><code>~/Developer/**</code></td><td><code>node_modules</code></td><td>30 days of project inactivity</td></tr>
-        <tr><td><code>~/Developer/**</code></td><td><code>.venv</code></td><td>45 days of project inactivity</td></tr>
-        <tr><td><code>~/Developer/**</code></td><td><code>__pycache__</code></td><td>7 days without modification</td></tr>
-      </tbody></table></div><p class="table-note">Keep overrides every rule, including these.</p>
-    </div></section>
-    <section class="container section split explanation">
-      <figure class="product-shot"><img src="assets/upcoming-inspector.png" alt="Upcoming list grouped by day with an inspector explaining the selected file's rule and scheduled time" width="1800" height="744" loading="lazy"><figcaption>Inspect a scheduled item before it moves.</figcaption></figure>
-      <div class="section-copy"><h2>Every item says why.</h2><p>Open a scheduled file to see the rule that matched, the timestamp used, and when it expires. Keep it or add 7 or 30 days if you need more time.</p><ul class="detail-list"><li><strong>Finder extension:</strong> set Keep or an expiry from Finder.</li><li><strong>Local history:</strong> review decisions and Trash operations in the audit log.</li><li><strong>CLI:</strong> inspect and manage rules from your terminal.</li></ul><a class="text-link" href="https://docs.tinyprune.com" data-ph-event="cta_clicked" data-ph-label="read_documentation">Explore the documentation</a></div>
-    </section>
-    <section class="container privacy-section" id="privacy"><div class="privacy-panel"><div><h2>It stays on your Mac.</h2><p>The app needs no account, makes no network requests, and never reads file contents. It works with filesystem metadata.</p><p class="website-note">This website uses Google Analytics and PostHog.</p></div><div class="actions"><a class="button light" href="https://github.com/navig-me/tinyprune" data-ph-event="cta_clicked" data-ph-label="privacy_source">View the source</a><a class="button outline" href="https://docs.tinyprune.com" data-ph-event="cta_clicked" data-ph-label="privacy_docs">Read the docs</a></div></div></section>
-  </main>
-  <footer class="site-footer"><div class="container footer-inner"><div><span class="footer-brand">TinyPrune</span><span>macOS file lifetimes</span></div><nav aria-label="Footer navigation"><a href="https://github.com/navig-me/tinyprune" data-ph-event="nav_clicked" data-ph-label="footer_github">GitHub</a><a href="https://docs.tinyprune.com" data-ph-event="nav_clicked" data-ph-label="footer_docs">Docs</a><a href="#privacy" data-ph-event="nav_clicked" data-ph-label="footer_privacy">Privacy</a></nav></div></footer>
-  <script>
-    // Custom PostHog events: any element with data-ph-event is captured on click.
-    document.addEventListener('click', function (event) {
-      var target = event.target.closest && event.target.closest('[data-ph-event]');
-      if (!target || !window.posthog) return;
-      posthog.capture(target.getAttribute('data-ph-event'), {
-        label: target.getAttribute('data-ph-label'),
-        href: target.getAttribute('href')
-      });
-    });
-  </script>
-  <script>
-    document.addEventListener('click', async function (event) {
-      var button = event.target.closest && event.target.closest('[data-copy]');
-      if (!button) return;
-      var command = document.getElementById(button.getAttribute('data-copy'));
-      var status = document.querySelector('.copy-status');
-      try {
-        await navigator.clipboard.writeText(command.textContent);
-        status.textContent = button.getAttribute('aria-label').replace(/^Copy /, '') + ' copied.';
-      } catch (error) {
-        var selection = window.getSelection();
-        var range = document.createRange();
-        range.selectNodeContents(command);
-        selection.removeAllRanges();
-        selection.addRange(range);
-        status.textContent = 'Clipboard unavailable. The command is selected; press Command+C to copy.';
+
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<meta content="web_standard" name="shell-type"/>
+<title>TinyPrune — Native macOS Disk Utility</title>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&amp;family=Manrope:wght@400;500;600;700&amp;family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
+<style>
+    @layer base {
+      html, body { margin: 0; padding: 0; }
+      body { overscroll-behavior: none; }
+      main > :first-child { margin-top: 0 !important; }
+      main > :last-child { margin-bottom: 0 !important; }
+    }
+    ::-webkit-scrollbar { display: none; }
+  </style>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          "colors": {
+            "on-primary": "#ffffff",
+            "on-background": "#1b1c1a",
+            "surface-container-lowest": "#ffffff",
+            "on-tertiary-container": "#d28432",
+            "tertiary-fixed-dim": "#ffb875",
+            "on-secondary-container": "#486a51",
+            "on-tertiary-fixed": "#2d1600",
+            "primary-fixed-dim": "#f3b4da",
+            "error-container": "#ffdad6",
+            "inverse-surface": "#30312f",
+            "surface": "#fbf9f6",
+            "secondary-fixed": "#c6eccd",
+            "primary-container": "#4a1f3d",
+            "secondary": "#44664d",
+            "on-surface": "#1b1c1a",
+            "on-error-container": "#93000a",
+            "primary": "#310927",
+            "on-tertiary": "#ffffff",
+            "surface-tint": "#814e6f",
+            "surface-variant": "#e4e2df",
+            "secondary-container": "#c3e9ca",
+            "surface-container-low": "#f5f3f0",
+            "surface-bright": "#fbf9f6",
+            "on-secondary-fixed-variant": "#2d4e37",
+            "on-tertiary-fixed-variant": "#6b3b00",
+            "on-primary-container": "#be85a8",
+            "on-secondary-fixed": "#00210e",
+            "surface-container": "#efeeeb",
+            "tertiary-container": "#482600",
+            "on-primary-fixed-variant": "#663756",
+            "inverse-on-surface": "#f2f0ed",
+            "on-surface-variant": "#4f444a",
+            "primary-fixed": "#ffd8ed",
+            "tertiary": "#2b1400",
+            "error": "#ba1a1a",
+            "on-secondary": "#ffffff",
+            "secondary-fixed-dim": "#aad0b1",
+            "surface-container-highest": "#e4e2df",
+            "surface-container-high": "#eae8e5",
+            "tertiary-fixed": "#ffdcc0",
+            "outline-variant": "#d3c2c9",
+            "inverse-primary": "#f3b4da",
+            "on-error": "#ffffff",
+            "outline": "#81737a",
+            "on-primary-fixed": "#340b29",
+            "surface-dim": "#dbdad7",
+            "background": "#fbf9f6"
+          },
+          "borderRadius": {
+            "DEFAULT": "0.25rem",
+            "lg": "0.5rem",
+            "xl": "0.75rem",
+            "2xl": "1rem",
+            "full": "9999px"
+          },
+          "fontFamily": {
+            "body": ["Manrope", "sans-serif"],
+            "headline": ["Newsreader", "serif"],
+            "mono": ["JetBrains Mono", "monospace"]
+          }
+        }
       }
-    });
+    };
   </script>
-</body>
-</html>
+</head>
+<body class="bg-surface font-body text-body-md text-on-surface antialiased selection:bg-primary-fixed selection:text-primary">
+<!-- HEADER -->
+<header class="fixed top-0 left-0 right-0 z-50 bg-surface/90 backdrop-blur-md border-b border-surface-container">
+<div class="h-14 max-w-7xl mx-auto px-6 lg:px-10 flex items-center justify-between">
+<div class="flex items-center gap-6">
+<a class="flex items-center gap-2.5 group" href="#">
+<div class="w-7 h-7 rounded-lg bg-primary-container text-primary-fixed flex items-center justify-center font-mono font-bold text-xs shadow-sm">
+            tp
+          </div>
+<span class="font-headline text-lg font-medium text-primary tracking-tight">TinyPrune</span>
+</a>
+<nav class="hidden md:flex items-center gap-6 text-xs text-on-surface-variant font-medium"><a class="hover:text-primary transition-colors" href="#how-it-works">How it works</a><a class="hover:text-primary transition-colors" href="#rules">Rules</a><a class="hover:text-primary transition-colors" href="#recipes">Examples</a><a class="hover:text-primary transition-colors" href="#philosophy">Privacy</a><a class="hover:text-primary transition-colors" href="https://github.com/navig-me/tinyprune" rel="noopener" target="_blank">GitHub</a><a class="inline-flex items-center gap-1.5 text-on-tertiary-container hover:text-primary transition-colors font-medium" href="https://buymeacoffee.com/mihirk" rel="noopener" target="_blank"><span class="material-symbols-outlined text-[15px]">coffee</span><span>Buy me a coffee</span></a></nav>
+</div>
+<div class="flex items-center gap-3">
+<a class="hidden sm:inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-outline-variant/60 hover:bg-surface-container text-xs text-on-surface font-medium transition-colors" href="https://github.com/navig-me/tinyprune" rel="noopener" target="_blank">
+<svg class="w-3.5 h-3.5 fill-current" viewbox="0 0 24 24"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"></path></svg>
+<span>GitHub</span>
+</a>
+<a class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-primary text-on-primary rounded-lg text-xs font-semibold hover:bg-primary-container transition-all active:scale-[0.98] shadow-sm" href="https://github.com/navig-me/tinyprune/releases">
+<span class="material-symbols-outlined text-[15px]">download</span>
+<span>Download</span>
+</a>
+</div>
+</div>
+</header>
+<main class="w-full pt-14 bg-surface">
+<!-- HERO SECTION -->
+<section class="w-full max-w-7xl mx-auto px-6 lg:px-10 pt-16 pb-20 lg:pt-24 lg:pb-28">
+<div class="grid grid-cols-1 lg:grid-cols-12 gap-12 lg:gap-14 items-center">
+<!-- Left: Punchy Indie Copy -->
+<div class="lg:col-span-5 flex flex-col space-y-6"><h1 class="font-headline text-5xl lg:text-[3.5rem] leading-[1.08] text-primary tracking-tight">Give your files<br/><span class="italic font-normal text-on-tertiary-container">an expiry date.</span></h1><p class="text-base text-on-surface-variant leading-relaxed">TinyPrune automatically moves old files and folders to Trash after the time you choose.</p><div class="pt-1 space-y-3"><div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3"><a class="inline-flex items-center justify-center gap-2.5 px-5 py-3 bg-primary-container text-on-primary rounded-xl shadow-md hover:bg-primary transition-all active:scale-[0.98]" href="https://github.com/navig-me/tinyprune/releases"><span class="material-symbols-outlined text-[18px]">download</span><span class="text-xs font-bold">Download for Mac</span></a><div class="group relative flex items-center justify-between px-3 py-2 bg-surface-container border border-surface-container-high rounded-xl cursor-pointer hover:border-outline-variant transition-colors" onclick="navigator.clipboard.writeText('brew install --cask tinyprune'); const fb = this.querySelector('.brew-feedback'); fb.classList.remove('opacity-0'); setTimeout(() =&gt; fb.classList.add('opacity-0'), 1800);"><div class="flex items-center gap-1.5 font-mono text-xs text-on-surface"><span class="text-outline select-none">$</span><span class="truncate">brew install --cask tinyprune</span></div><button class="ml-2 p-1 rounded hover:bg-surface-container-highest text-outline group-hover:text-on-surface transition-colors" title="Copy command" type="button"><span class="material-symbols-outlined text-[14px]">content_copy</span></button><div class="brew-feedback absolute -top-8 right-2 px-2 py-0.5 bg-inverse-surface text-inverse-on-surface text-[10px] font-mono rounded pointer-events-none opacity-0 transition-opacity">Copied</div></div></div><div class="font-mono text-[11px] text-outline">Free · Open source · macOS</div></div><div class="pt-2 flex items-center gap-5 text-xs text-on-surface-variant font-medium"><div class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-secondary"></span><span>Nothing permanently deleted</span></div><div class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-secondary"></span><span>No accounts</span></div></div></div>
+<!-- Right: Mac Window Preview -->
+<div class="lg:col-span-7">
+<div class="w-full bg-surface-container-lowest rounded-xl shadow-[0_20px_60px_-15px_rgba(49,9,39,0.12),0_1px_3px_rgba(0,0,0,0.06)] border border-surface-container-high overflow-hidden flex flex-col">
+<!-- Titlebar -->
+<div class="h-10 px-4 bg-surface-container flex items-center justify-between select-none border-b border-surface-container-high">
+<div class="flex items-center gap-2">
+<div class="w-3 h-3 rounded-full bg-[#ff5f56] border border-[#e0443e]"></div>
+<div class="w-3 h-3 rounded-full bg-[#ffbd2e] border border-[#dea123]"></div>
+<div class="w-3 h-3 rounded-full bg-[#27c93f] border border-[#1aab29]"></div>
+</div>
+<div class="flex items-center gap-2 font-mono text-[11px] text-on-surface-variant">
+<span class="w-1.5 h-1.5 rounded-full bg-secondary"></span>
+<span>Active</span>
+<span class="text-outline">·</span>
+<span>Agent v1.4</span>
+</div>
+<div class="flex items-center gap-2 text-outline">
+<span class="material-symbols-outlined text-[16px]">tune</span>
+</div>
+</div>
+<!-- Window Layout -->
+<div class="flex flex-col md:flex-row h-auto md:min-h-[420px]">
+<!-- Sidebar -->
+<div class="w-full md:w-44 bg-surface-container-low p-3 flex flex-col justify-between shrink-0 border-r border-surface-container">
+<div class="space-y-3">
+<span class="font-mono text-[10px] uppercase tracking-wider text-outline px-2">Library</span>
+<div class="space-y-0.5 text-xs">
+<div class="flex items-center gap-2 px-2.5 py-1.5 bg-surface-container-highest rounded-lg text-primary font-semibold">
+<span class="material-symbols-outlined text-[15px]">folder_managed</span>
+<span>Overview</span>
+</div>
+<div class="flex items-center justify-between px-2.5 py-1.5 text-on-surface-variant hover:bg-surface-container rounded-lg cursor-pointer">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[15px]">rule</span>
+<span>Rules</span>
+</div>
+<span class="font-mono text-[10px] px-1.5 bg-primary-fixed text-on-primary-fixed rounded">4</span>
+</div>
+<div class="flex items-center justify-between px-2.5 py-1.5 text-on-surface-variant hover:bg-surface-container rounded-lg cursor-pointer">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[15px]">schedule</span>
+<span>Upcoming</span>
+</div>
+<span class="font-mono text-[10px] px-1.5 bg-surface-container text-on-surface-variant rounded">17</span>
+</div>
+<div class="flex items-center gap-2 px-2.5 py-1.5 text-on-surface-variant hover:bg-surface-container rounded-lg cursor-pointer">
+<span class="material-symbols-outlined text-[15px]">history</span>
+<span>Log</span>
+</div>
+</div>
+</div>
+<div class="p-2.5 bg-surface-container rounded-lg border border-surface-container-high">
+<div class="font-mono text-[10px] text-outline">Reclaimed</div>
+<div class="font-headline text-lg font-medium text-primary mt-0.5">18.2 GB</div>
+<div class="text-[10px] text-on-surface-variant">this month</div>
+</div>
+</div>
+<!-- Main Canvas -->
+<div class="flex-1 p-5 bg-surface-container-lowest flex flex-col justify-between space-y-5">
+<div>
+<!-- Status -->
+<div class="flex items-center justify-between pb-4 border-b border-surface-container">
+<div>
+<h3 class="font-headline text-lg text-primary font-medium">Workspace is tidy.</h3>
+<p class="text-xs text-on-surface-variant mt-0.5">4 directories monitored, running in background.</p>
+</div>
+<span class="font-mono text-[11px] px-2.5 py-1 bg-secondary-container text-on-secondary-container rounded-full font-medium">
+                      All clean
+                    </span>
+</div>
+<!-- Managed paths -->
+<div class="mt-4 space-y-2">
+<div class="flex items-center justify-between text-xs text-outline font-mono">
+<span>MONITORED FOLDERS</span>
+<span class="text-primary hover:underline cursor-pointer">+ Add</span>
+</div>
+<div class="p-2.5 bg-surface-container-low rounded-lg flex items-center justify-between border border-surface-container">
+<div class="flex items-center gap-2.5">
+<span class="material-symbols-outlined text-primary text-[18px]">folder</span>
+<div>
+<span class="text-xs font-semibold text-on-surface">Downloads</span>
+<span class="font-mono text-[10px] text-outline ml-1.5">~/Downloads</span>
+</div>
+</div>
+<span class="font-mono text-[10px] text-on-surface-variant">14-day hold · 12 items (840 MB)</span>
+</div>
+<div class="p-2.5 bg-surface-container-low rounded-lg flex items-center justify-between border border-surface-container">
+<div class="flex items-center gap-2.5">
+<span class="material-symbols-outlined text-primary text-[18px]">terminal</span>
+<div>
+<span class="text-xs font-semibold text-on-surface">Developer</span>
+<span class="font-mono text-[10px] text-outline ml-1.5">~/Developer</span>
+</div>
+</div>
+<span class="font-mono text-[10px] text-on-tertiary-container">Preview mode (6 repos)</span>
+</div>
+</div>
+<!-- Up next shelf -->
+<div class="mt-4 space-y-2">
+<div class="text-xs text-outline font-mono">NEXT TO MOVE TO TRASH</div>
+<div class="p-2.5 bg-surface-container-low rounded-lg flex items-center justify-between border border-surface-container">
+<div class="flex items-center gap-2 min-w-0">
+<span class="material-symbols-outlined text-outline text-[16px]">draft</span>
+<div class="truncate">
+<span class="font-mono text-xs text-on-surface">Chrome-118.dmg</span>
+<span class="text-[10px] text-outline ml-2">14d old · Today at 6:40 PM</span>
+</div>
+</div>
+<div class="flex items-center gap-2 shrink-0">
+<span class="font-mono text-[11px] text-outline">214 MB</span>
+<button class="px-2 py-0.5 bg-surface-container hover:bg-surface-container-highest text-on-surface rounded text-[11px] font-medium transition-colors">Keep</button>
+<button class="px-2 py-0.5 bg-primary text-on-primary rounded text-[11px] font-medium">Trash</button>
+</div>
+</div>
+<div class="p-2.5 bg-surface-container-low rounded-lg flex items-center justify-between border border-surface-container">
+<div class="flex items-center gap-2 min-w-0">
+<span class="material-symbols-outlined text-outline text-[16px]">folder_zip</span>
+<div class="truncate">
+<span class="font-mono text-xs text-on-surface">old-portfolio/node_modules</span>
+<span class="text-[10px] text-outline ml-2">Inactive 42d · Tomorrow</span>
+</div>
+</div>
+<div class="flex items-center gap-2 shrink-0">
+<span class="font-mono text-[11px] text-outline">1.2 GB</span>
+<button class="px-2 py-0.5 bg-surface-container hover:bg-surface-container-highest text-on-surface rounded text-[11px] font-medium transition-colors">Keep</button>
+<button class="px-2 py-0.5 bg-primary text-on-primary rounded text-[11px] font-medium">Trash</button>
+</div>
+</div>
+</div>
+</div>
+<!-- Footer guarantee -->
+<div class="pt-2 text-[11px] text-outline flex items-center justify-between border-t border-surface-container">
+<span>Files move to macOS Trash. Undo anytime with ⌘Z.</span>
+<span class="font-mono">Local only</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- HOW IT WORKS (SLEEK 3-STEP FLOW) -->
+<section class="w-full bg-surface-container-low py-16 lg:py-20 border-y border-surface-container" id="how-it-works">
+<div class="max-w-7xl mx-auto px-6 lg:px-10 space-y-10"><h2 class="font-headline text-3xl text-primary tracking-tight">How it works</h2><div class="grid grid-cols-1 md:grid-cols-3 gap-6"><div class="bg-surface-container-lowest p-5 rounded-xl border border-surface-container space-y-2.5"><span class="font-mono text-xs font-bold text-primary-container px-2 py-0.5 bg-primary-fixed rounded">01</span><h3 class="font-headline text-lg text-primary font-medium pt-1">Pick a folder</h3><p class="text-xs text-on-surface-variant leading-relaxed">Downloads, screenshots, build folders — anything you want.</p></div><div class="bg-surface-container-lowest p-5 rounded-xl border border-surface-container space-y-2.5"><span class="font-mono text-xs font-bold text-primary-container px-2 py-0.5 bg-primary-fixed rounded">02</span><h3 class="font-headline text-lg text-primary font-medium pt-1">Set an expiry</h3><p class="text-xs text-on-surface-variant leading-relaxed">7 days, 30 days, or whatever works for you.</p></div><div class="bg-surface-container-lowest p-5 rounded-xl border border-surface-container space-y-2.5"><span class="font-mono text-xs font-bold text-primary-container px-2 py-0.5 bg-primary-fixed rounded">03</span><h3 class="font-headline text-lg text-primary font-medium pt-1">Forget about it</h3><p class="text-xs text-on-surface-variant leading-relaxed">TinyPrune moves expired items to Trash automatically.</p></div></div></div>
+</section>
+<!-- RULE LOGIC & EDITOR CARD -->
+<section class="w-full max-w-7xl mx-auto px-6 lg:px-10 py-20 lg:py-24" id="rules">
+<div class="grid grid-cols-1 lg:grid-cols-12 gap-12 lg:gap-14 items-center">
+<!-- Explainer -->
+<div class="lg:col-span-5 space-y-5"><div class="space-y-3"><h2 class="font-headline text-3xl lg:text-4xl text-primary tracking-tight">Clean exactly what you want.</h2><p class="text-sm text-on-surface-variant leading-relaxed">Choose the folder, what to match, and how old it should be.</p></div><div class="pt-4 space-y-2.5"><div class="p-3 bg-surface-container-low rounded-xl border border-surface-container flex items-center gap-2.5 text-xs font-medium text-on-surface"><span class="material-symbols-outlined text-secondary text-[18px]">check_circle</span><span>Protected files are never removed.</span></div><div class="p-3 bg-surface-container-low rounded-xl border border-surface-container flex items-center gap-2.5 text-xs font-medium text-on-surface"><span class="material-symbols-outlined text-primary text-[18px]">delete</span><span>Nothing is permanently deleted.</span></div></div></div>
+<!-- UI Inspector Mockup -->
+<div class="lg:col-span-7">
+<div class="bg-surface-container-lowest rounded-xl shadow-lg border border-surface-container-high p-5 sm:p-6 space-y-4">
+<div class="flex items-center justify-between pb-3 border-b border-surface-container">
+<div class="flex items-center gap-2.5">
+<span class="material-symbols-outlined text-primary text-[20px]">tune</span>
+<div>
+<h4 class="font-headline text-base text-primary font-medium">Old Node Modules</h4>
+<div class="font-mono text-[10px] text-outline">rules/dev-09.json</div>
+</div>
+</div>
+<span class="font-mono text-[10px] px-2 py-0.5 bg-secondary-container text-on-secondary-container rounded-full font-medium">
+                Active
+              </span>
+</div>
+<div class="space-y-2.5 font-mono text-xs">
+<!-- Where -->
+<div class="p-3 bg-surface-container-low rounded-lg border border-surface-container flex items-center justify-between">
+<span class="text-outline text-[11px]">WHERE</span>
+<span class="text-primary font-semibold">~/Developer/**</span>
+</div>
+<!-- What -->
+<div class="p-3 bg-surface-container-low rounded-lg border border-surface-container flex items-center justify-between">
+<span class="text-outline text-[11px]">WHAT</span>
+<div class="flex items-center gap-2">
+<span class="text-primary font-semibold">node_modules</span>
+<span class="text-[10px] px-1.5 py-0.5 bg-surface-container rounded text-on-surface-variant font-sans">Directory</span>
+</div>
+</div>
+<!-- When -->
+<div class="p-3 bg-surface-container-low rounded-lg border border-surface-container flex items-center justify-between">
+<span class="text-outline text-[11px]">WHEN</span>
+<span class="text-primary font-semibold">repo idle &gt; 30 days</span>
+</div>
+<!-- Except -->
+<div class="p-3 bg-surface-container-low rounded-lg border border-surface-container flex items-center justify-between">
+<span class="text-secondary text-[11px]">EXCEPT</span>
+<span class="text-secondary font-medium">pinned: ~/Developer/Production/*</span>
+</div>
+</div>
+<!-- Dry run preview bar -->
+<div class="p-3 bg-surface-container rounded-lg border border-surface-container-high flex items-center justify-between text-xs">
+<div class="flex items-center gap-2">
+<span class="w-2 h-2 rounded-full bg-secondary"></span>
+<span class="font-medium text-on-surface">Dry Run: 8 folders eligible</span>
+</div>
+<span class="font-mono font-bold text-primary">6.4 GB reclaimable</span>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- RECIPES TABLE -->
+<section class="w-full bg-surface-container-low py-16 lg:py-20 border-y border-surface-container" id="recipes">
+<div class="max-w-7xl mx-auto px-6 lg:px-10 space-y-8"><div class="space-y-1"><h2 class="font-headline text-3xl text-primary tracking-tight">Useful rules to start with</h2></div><div class="bg-surface-container-lowest rounded-xl border border-surface-container shadow-sm overflow-hidden"><div class="overflow-x-auto"><table class="w-full text-left text-xs"><thead class="bg-surface-container border-b border-surface-container-high font-mono text-[11px] text-on-surface-variant"><tr class="border-b border-surface-container-high"><th class="py-3 px-5 font-semibold">Folder</th><th class="py-3 px-5 font-semibold">Files</th><th class="py-3 px-5 font-semibold">Remove after</th><th class="py-3 px-5 font-semibold">Protected</th></tr></thead><tbody class="divide-y divide-surface-container font-mono"><tr class="hover:bg-surface-container-low transition-colors"><td class="py-3 px-5 text-primary font-medium">~/Downloads</td><td class="py-3 px-5 text-on-tertiary-container">.dmg, .zip</td><td class="py-3 px-5 text-on-surface font-sans">7 days</td><td class="py-3 px-5 text-secondary font-sans">Starred or tagged items</td></tr><tr class="hover:bg-surface-container-low transition-colors"><td class="py-3 px-5 text-primary font-medium">~/Desktop</td><td class="py-3 px-5 text-on-tertiary-container">Screenshots</td><td class="py-3 px-5 text-on-surface font-sans">7 days</td><td class="py-3 px-5 text-on-surface-variant font-sans">Renamed captures</td></tr><tr class="hover:bg-surface-container-low transition-colors"><td class="py-3 px-5 text-primary font-medium">~/Developer/**</td><td class="py-3 px-5 text-on-tertiary-container">node_modules</td><td class="py-3 px-5 text-on-surface font-sans">30 days inactive</td><td class="py-3 px-5 text-secondary font-sans">Active worktrees</td></tr><tr class="hover:bg-surface-container-low transition-colors"><td class="py-3 px-5 text-primary font-medium">~/Developer/**</td><td class="py-3 px-5 text-on-tertiary-container">.venv, __pycache__</td><td class="py-3 px-5 text-on-surface font-sans">45 days inactive</td><td class="py-3 px-5 text-on-surface-variant font-sans">Pinned environments</td></tr><tr class="hover:bg-surface-container-low transition-colors"><td class="py-3 px-5 text-primary font-medium">~/Library/Caches</td><td class="py-3 px-5 text-on-tertiary-container">Xcode DerivedData</td><td class="py-3 px-5 text-on-surface font-sans">14 days idle</td><td class="py-3 px-5 text-on-surface-variant font-sans">Open projects</td></tr></tbody></table></div></div></div>
+</section>
+<!-- UPCOMING DETAILS -->
+<section class="w-full max-w-7xl mx-auto px-6 lg:px-10 py-20">
+<div class="grid grid-cols-1 lg:grid-cols-12 gap-12 items-center">
+<!-- Visual Mockup -->
+<div class="lg:col-span-6 bg-surface-container-lowest p-5 rounded-xl border border-surface-container-high shadow-md space-y-3">
+<div class="flex items-center justify-between pb-2 border-b border-surface-container">
+<span class="font-headline text-base text-primary font-medium">Scheduled for Trash</span>
+<span class="font-mono text-[11px] text-outline">3 items pending</span>
+</div>
+<div class="space-y-2">
+<div class="p-2.5 bg-surface-container-low rounded-lg border border-surface-container flex items-center justify-between">
+<div class="min-w-0 pr-2">
+<div class="font-mono text-xs text-primary font-medium truncate">figma-setup.pkg</div>
+<div class="text-[10px] text-outline font-sans">Downloads rule · in 2 hours</div>
+</div>
+<div class="flex items-center gap-2">
+<span class="font-mono text-xs text-outline">148 MB</span>
+<button class="px-2 py-0.5 bg-surface-container hover:bg-surface-container-highest text-on-surface rounded text-xs font-medium">Keep</button>
+</div>
+</div>
+<div class="p-2.5 bg-surface-container-low rounded-lg border border-surface-container flex items-center justify-between">
+<div class="min-w-0 pr-2">
+<div class="font-mono text-xs text-primary font-medium truncate">wireframe_v2.png</div>
+<div class="text-[10px] text-outline font-sans">Screenshots rule · tomorrow</div>
+</div>
+<div class="flex items-center gap-2">
+<span class="font-mono text-xs text-outline">18 MB</span>
+<button class="px-2 py-0.5 bg-surface-container hover:bg-surface-container-highest text-on-surface rounded text-xs font-medium">Keep</button>
+</div>
+</div>
+<div class="p-2.5 bg-surface-container-low rounded-lg border border-secondary-container/60 flex items-center justify-between">
+<div class="min-w-0 pr-2">
+<div class="font-mono text-xs text-secondary font-medium truncate">client-proposal.key</div>
+<div class="text-[10px] text-secondary font-sans">Protected by Keep tag</div>
+</div>
+<div class="flex items-center gap-1.5 text-secondary">
+<span class="material-symbols-outlined text-[16px]">lock</span>
+<span class="text-xs font-mono">Kept</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Copy -->
+<div class="lg:col-span-6 space-y-4">
+<h2 class="font-headline text-3xl text-primary tracking-tight">Every item says why.</h2>
+<p class="text-sm text-on-surface-variant leading-relaxed">
+            Click any queued file to see which rule matched it, the timestamp it was evaluated against, and your options: keep it, snooze it for a week, or prune it immediately.
+          </p>
+<div class="pt-2 space-y-2 text-xs text-on-surface">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-secondary text-[18px]">done</span>
+<span><strong>Optional notifications:</strong> Get a polite daily summary before anything moves.</span>
+</div>
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-secondary text-[18px]">done</span>
+<span><strong>Finder tags:</strong> Tag any file with “Keep” right in Finder to exclude it instantly.</span>
+</div>
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-secondary text-[18px]">done</span>
+<span><strong>Audit history:</strong> A full local log lets you review every action.</span>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- PRIVACY MANIFESTO PLEDGE -->
+<section class="w-full max-w-7xl mx-auto px-6 lg:px-10 pb-20" id="philosophy">
+<div class="bg-primary-container text-on-primary rounded-2xl p-8 lg:p-10 border border-primary/20 shadow-md"><div class="flex flex-col md:flex-row md:items-center justify-between gap-6"><div class="space-y-2 max-w-2xl"><h3 class="font-headline text-2xl lg:text-3xl text-on-primary font-normal tracking-tight">Private by design.</h3><p class="text-xs sm:text-sm text-primary-fixed-dim leading-relaxed">TinyPrune runs entirely on your Mac. No account. No telemetry.</p></div><div class="flex flex-wrap items-center gap-3 shrink-0"><a class="inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-surface text-primary rounded-xl text-xs font-bold hover:bg-surface-container-lowest transition-colors shadow-sm" href="https://github.com/navig-me/tinyprune" rel="noopener" target="_blank"><svg class="w-3.5 h-3.5 fill-current" viewbox="0 0 24 24"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"></path></svg><span>View on GitHub</span></a><a class="inline-flex items-center justify-center px-4 py-2.5 rounded-xl text-xs font-semibold text-primary-fixed border border-primary-fixed/30 hover:bg-primary/40 transition-colors" href="https://docs.tinyprune.com#safety">Security Notes</a><a class="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-primary-fixed-dim hover:text-on-primary transition-colors" href="https://buymeacoffee.com/mihirk" rel="noopener" target="_blank"><span class="material-symbols-outlined text-[15px]">coffee</span><span>Buy me a coffee</span></a></div></div></div>
+</section>
+</main>
+<!-- FOOTER -->
+<footer class="w-full bg-surface-container-low border-t border-surface-container">
+<div class="max-w-7xl mx-auto px-6 lg:px-10 py-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-on-surface-variant"><div class="flex items-center gap-2"><span class="font-headline text-sm font-medium text-primary">TinyPrune</span><span>·</span><span>macOS file lifetimes</span></div><div class="flex items-center gap-6"><a class="hover:text-primary transition-colors" href="https://github.com/navig-me/tinyprune" rel="noopener" target="_blank">GitHub</a><a class="hover:text-primary transition-colors" href="https://docs.tinyprune.com">Docs</a><a class="hover:text-primary transition-colors" href="https://buymeacoffee.com/mihirk" rel="noopener" target="_blank">Buy me a coffee</a><a class="hover:text-primary transition-colors" href="#philosophy">Privacy</a></div></div>
+</footer>
+<script>
+  // PostHog custom events: every link click is captured with a label taken from its text.
+  document.addEventListener('click', function (event) {
+    var link = event.target.closest && event.target.closest('a');
+    if (!link || !window.posthog) return;
+    var label = (link.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+    var href = link.getAttribute('href') || '';
+    var name = /releases/.test(href) ? 'install_clicked' : (link.closest('header, nav') ? 'nav_clicked' : 'cta_clicked');
+    posthog.capture(name, { label: label, href: href });
+  });
+</script>
+</body></html>
