@@ -3,39 +3,133 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="TinyPrune documentation for safe, local file lifetimes on macOS.">
+  <meta name="description" content="Install TinyPrune, set file lifetimes, and review what goes to Trash. A guide to the local-first macOS app, Finder menu, and CLI.">
   <meta name="theme-color" content="#fbf9f6">
   <title>TinyPrune documentation</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <header><a class="brand" href="https://tinyprune.com"><img src="assets/tinyprune-plum.svg" alt=""><span>TinyPrune</span></a><a class="home" href="https://tinyprune.com">Back to tinyprune.com</a></header>
+  <a class="skip-link" href="#start">Skip to documentation</a>
+  <header class="site-header">
+    <div class="header-inner">
+      <a class="brand" href="https://tinyprune.com"><img src="assets/tinyprune-plum.svg" width="28" height="28" alt=""><span>TinyPrune</span></a>
+      <nav class="site-nav" aria-label="Main navigation">
+        <a href="https://tinyprune.com#how-it-works">How it works</a>
+        <a href="https://tinyprune.com#rules">Rules</a>
+        <a href="https://tinyprune.com#recipes">Examples</a>
+        <a href="https://tinyprune.com#philosophy">Privacy</a>
+        <a href="https://github.com/navig-me/tinyprune">GitHub</a>
+        <a class="coffee" href="https://buymeacoffee.com/mihirk">Buy me a coffee</a>
+      </nav>
+      <div class="header-actions"><a class="button secondary" href="https://github.com/navig-me/tinyprune">GitHub</a><a class="button" href="https://github.com/navig-me/tinyprune/releases">Download</a></div>
+    </div>
+  </header>
   <div class="shell">
-    <aside><p>Guide</p><nav aria-label="Documentation"><a href="#start">Getting started</a><a href="#safety">Safety model</a><a href="#rules">Rules</a><a href="#preview">Preview</a><a href="#templates">Templates</a><a href="#finder">Finder</a><a href="#cli">Command line</a><a href="#updates">Updates</a></nav><a class="source" href="https://github.com/navig-me/tinyprune">View the source</a></aside>
+    <aside class="sidebar">
+      <details open>
+        <summary>In this guide</summary>
+        <nav aria-label="Documentation">
+          <a href="#start">Getting started</a><a href="#install">Install</a><a href="#safety">Safety</a><a href="#rules">Rules</a><a href="#preview">Preview</a><a href="#templates">Templates</a><a href="#finder">Finder</a><a href="#cli">Command line</a><a href="#updates">Updates</a>
+        </nav>
+      </details>
+      <p class="sidebar-note">macOS 14 or later<br>Free and open source</p>
+    </aside>
     <main>
       <article>
-        <p class="eyebrow">Documentation</p>
-        <h1 id="start">A safer way to clear the things you no longer need.</h1>
-        <p class="intro">TinyPrune gives folders and files a lifetime. It works locally and moves eligible items to the Mac Trash.</p>
-        <div class="status"><strong>Project status</strong><p>TinyPrune is in active development. Installation instructions will arrive with the first signed release.</p></div>
-        <section id="safety"><h2>Safety is part of every rule.</h2><p>TinyPrune manages only the folders you choose. It records a stable filesystem identity for each root, then checks the current state again before any item moves.</p><div class="principles"><div><h3>Trash, not delete</h3><p>Eligible items use the standard macOS Trash path.</p></div><div><h3>Keep always wins</h3><p>A Keep override takes precedence over every rule.</p></div><div><h3>Local by design</h3><p>Normal operation reads metadata only, with no account or cloud sync.</p></div></div></section>
-        <section id="rules"><h2>Rules describe a clear boundary.</h2><p>Every rule establishes where to look, what to match, when it expires, and what happens next.</p><pre><code>WHERE  ~/Developer/**
-WHAT   Folder named node_modules
-WHEN   Project inactive for 30 days
-ACTION Move the folder to Trash</code></pre><p>A rule can match files or folders by scope, depth, exact name, glob, age, modification time, project inactivity, or an explicit override.</p></section>
-        <section id="preview"><h2>Start in Preview.</h2><p>Preview runs the same matching and scheduling logic, but does not invoke the Trash executor. It is the right way to test a broad rule before enabling it.</p><ol><li>Select a folder you control.</li><li>Choose a template or build a rule.</li><li>Review the upcoming items and their explanations.</li><li>Add Keep or expiry overrides where necessary.</li><li>Enable the rule when the result matches your intent.</li></ol></section>
-        <section id="templates"><h2>Templates create ordinary rules.</h2><p>Developer Cleanup, Downloads, Screenshots, Temporary Workspace, and Build Artifacts each create normal rules that you can edit, pause, duplicate, or delete. Developer templates and very broad folders such as your home folder always start in Preview. TinyPrune does not scan on demand: a new rule's matches appear in Upcoming after the agent indexes it, and the Rules screen shows scheduled matches and how many are already eligible.</p></section>
-        <section id="finder" aria-labelledby="finder-title"><h2 id="finder-title">Act from Finder.</h2><p>The TinyPrune Finder menu can Keep an item, set an expiry (tonight, tomorrow, 7 days, 30 days, or a custom date), return an item to its folder rules, and explain why it will expire. Folders add Protect Folder, Set Folder Lifetime, and Create Rule. Each action is sent to the same background agent used by the app and CLI, so they always show the same resolved policy. The extension must be enabled in System Settings, and it only acts inside folders you have chosen to manage.</p></section>
-        <section id="cli"><h2>Inspect and script from the terminal.</h2><p>The <code>tinyprune</code> command talks to the background agent. It has no cleanup engine of its own.</p><pre><code>tinyprune status | rules | upcoming | activity
-tinyprune keep invoice.pdf [--descendants]
-tinyprune expire video.mov 7d        # also 12h, 30m, tonight, tomorrow
+        <div class="intro-block" id="start">
+          <p class="eyebrow">Documentation</p>
+          <h1>Set up your<br><em>file lifetimes.</em></h1>
+          <p class="intro">Choose the folders TinyPrune can manage, give disposable files an expiry date, and check the results in Preview before anything moves to Trash.</p>
+          <p class="intro-meta">Local-first. No account needed. macOS 14+.</p>
+        </div>
+        <section id="install">
+          <h2>Install</h2>
+          <div class="notice"><strong>The first release is not published yet.</strong><p>You can build from source now. The download and Homebrew options below will be available once the release and tap are published.</p></div>
+          <h3>Download or use Homebrew</h3>
+          <p>When available, download the DMG from <a href="https://github.com/navig-me/tinyprune/releases">GitHub Releases</a> and move TinyPrune to Applications. Once the tap exists, you can also install it with:</p>
+          <pre aria-label="Homebrew installation command"><code>brew install --cask tinyprune/tap/tinyprune</code></pre>
+          <p>Early builds are unsigned. On first launch, use <strong>System Settings &gt; Privacy &amp; Security &gt; Open Anyway</strong>. Only open a build you trust. Alternatively, if you installed it in Applications:</p>
+          <pre aria-label="Remove quarantine from a trusted early build"><code>xattr -dr com.apple.quarantine /Applications/TinyPrune.app</code></pre>
+          <h3>Build from source</h3>
+          <p>With Apple's Swift development tools installed, run:</p>
+          <pre aria-label="Build and open TinyPrune"><code>git clone https://github.com/navig-me/tinyprune &amp;&amp; cd tinyprune &amp;&amp; swift Scripts/package-app.swift &amp;&amp; open .build/package/TinyPrune.app</code></pre>
+          <p>Open the app, choose a folder you control, and add a template or your own rule. Start in Preview and review Upcoming before enabling cleanup.</p>
+        </section>
+        <section id="safety">
+          <h2>What TinyPrune can change</h2>
+          <p>TinyPrune only manages folders you choose. It reads filesystem metadata for normal operation, not file contents, and does not need an account or cloud service.</p>
+          <div class="principles">
+            <div><h3>Items go to Trash</h3><p>TinyPrune never permanently deletes files. Eligible items move to macOS Trash.</p></div>
+            <div><h3>Keep wins</h3><p>Keep overrides every expiry rule. A folder cannot be trashed if it contains a protected item.</p></div>
+          </div>
+          <p>Before each move, the agent checks the item's identity, current rules, protection, deadline, pause state, permissions, and volume availability again. The index schedules work; it does not authorize a move.</p>
+          <h3>Pause and settings</h3>
+          <p>Pause cleanup globally, for a managed folder, or for a rule. A timed global pause resumes when its time is up. In Settings, you can set the default grace period, protect hidden files, and choose how long to retain activity history. These settings apply to the app, Finder, and CLI.</p>
+        </section>
+        <section id="rules">
+          <h2>Choose what expires and when</h2>
+          <p>A rule specifies a folder, the files or folders to match, and the time basis for expiry. For example, you can target dependencies in inactive projects without expiring the source folder itself.</p>
+          <div class="rule-card"><div class="card-heading"><h3>Old Node modules</h3><span class="badge">Preview</span></div><dl><div><dt>Where</dt><dd>~/Developer/**</dd></div><div><dt>What</dt><dd>Folder named node_modules</dd></div><div><dt>When</dt><dd>Project inactive for 30 days</dd></div><div><dt>Action</dt><dd>Move the folder to Trash</dd></div></dl></div>
+          <p>Match by exact name or glob, item type, and scope depth. Expiry can use age, modification time, or project inactivity. Set an explicit expiry on an individual item, use Keep to protect it, or choose Inherit to return it to the folder's rules.</p>
+          <p>Every decision includes an explanation: the matching rule, time basis, resolved deadline, project context when relevant, any override, and why an item is protected or skipped.</p>
+        </section>
+        <section id="preview">
+          <h2>Check the matches before cleanup</h2>
+          <p>A rule saved in Preview runs matching and scheduling without moving anything to Trash. Upcoming shows indexed candidates and their explanations.</p>
+          <ol><li>Choose a managed folder and create a rule.</li><li>Use <strong>Preview matches</strong> in the rule editor for a read-only dry run. It is bounded and cancellable, and does not save changes or trash items.</li><li>Review the matches, deadlines, and explanations. Add Keep or expiry overrides where needed.</li><li>Enable the rule only when the result matches what you want.</li></ol>
+          <p>The Rules screen also shows scheduled matches and how many are already eligible. These counts come from the index, so a newly saved rule needs time to be indexed.</p>
+        </section>
+        <section id="templates">
+          <h2>Start with a template</h2>
+          <p>Templates create ordinary rules you can edit, pause, duplicate, or delete. Pick a folder and adjust the match and lifetime to suit the files you actually keep there.</p>
+          <div class="table-wrap" tabindex="0" role="region" aria-label="Available templates"><table><thead><tr><th scope="col">Template</th><th scope="col">Use it for</th></tr></thead><tbody><tr><td>Downloads</td><td>Files that have outlived their usefulness in Downloads</td></tr><tr><td>Screenshots</td><td>Captures you only need briefly</td></tr><tr><td>Temporary Workspace</td><td>Disposable files in a folder you choose</td></tr><tr><td>Developer Cleanup</td><td>Generated dependencies in inactive projects</td></tr><tr><td>Build Artifacts</td><td>Build output you can regenerate</td></tr></tbody></table></div>
+          <p>Developer templates and very broad folders, such as your home folder, always start in Preview.</p>
+        </section>
+        <section id="finder" aria-labelledby="finder-title">
+          <h2 id="finder-title">Use the Finder menu</h2>
+          <p>Enable the TinyPrune Finder extension in System Settings. The menu works inside folders you have chosen to manage.</p>
+          <p>From Finder, you can Keep an item, set its expiry to tonight, tomorrow, 7 days, 30 days, or a custom date, return it to inherited rules, and ask why it will expire. Folders also offer Protect Folder, Set Folder Lifetime, and Create Rule.</p>
+          <p>Finder sends actions to the same background agent as the app and CLI. Folder lifetime, rule creation, and custom expiry open the app to finish the action.</p>
+        </section>
+        <section id="cli">
+          <h2>Work from the command line</h2>
+          <p>The <code>tinyprune</code> command talks to the background agent; it does not run a separate cleanup engine. Use it to inspect upcoming items, set overrides, or pause cleanup.</p>
+          <pre aria-label="CLI examples"><code>tinyprune status
+tinyprune rules
+tinyprune upcoming --json
+tinyprune activity
+tinyprune keep invoice.pdf --descendants
+tinyprune expire video.mov 7d
 tinyprune inherit foo.zip
 tinyprune why node_modules
-tinyprune pause | resume
-tinyprune config validate|preview|apply|export tinyprune.yml</code></pre><p>Add <code>--json</code> for stable output; every document carries a <code>schemaVersion</code>. Config files are checked locally by <code>validate</code>, diffed against current rules by <code>preview</code>, and applied by <code>apply</code> only inside folders already managed in the app. Rules created from a config start in Preview unless you pass <code>--active</code>.</p></section>
-        <section id="updates"><h2>Updates follow the channel you choose.</h2><p>Direct downloads will use a signed, notarized DMG and Sparkle update feed. Homebrew installs will use the TinyPrune cask, with Homebrew as the only updater for that channel.</p><p>Read <a href="https://github.com/navig-me/tinyprune/blob/main/CLAUDE.md">CLAUDE.md</a> for engineering constraints and <a href="https://github.com/navig-me/tinyprune/blob/main/PLAN.md">PLAN.md</a> for release architecture.</p></section>
+tinyprune pause
+tinyprune resume</code></pre>
+          <p>Expiry values also accept <code>12h</code>, <code>30m</code>, <code>tonight</code>, and <code>tomorrow</code>. Add <code>--json</code> for structured output; each document carries <code>schemaVersion: 1</code>.</p>
+          <h3>Manage rules as code</h3>
+          <pre aria-label="Config commands"><code>tinyprune config validate tinyprune.yml
+tinyprune config preview tinyprune.yml
+tinyprune config apply tinyprune.yml
+tinyprune config export</code></pre>
+          <p>Config uses a restricted YAML format. <code>validate</code> checks it locally, <code>preview</code> compares it with current rules, <code>apply</code> saves the changes, and <code>export</code> writes the current configuration.</p>
+          <p>Apply only works inside folders already managed in the app, because the app must obtain folder access. Rules created from a config start in Preview unless you pass <code>--active</code>.</p>
+        </section>
+        <section id="updates">
+          <h2>How updates will work</h2>
+          <p>The release plan is a signed, notarized DMG with Sparkle updates for direct downloads. Homebrew installs will update through the cask only. Signing and notarization are not available in the current early builds.</p>
+          <p>For implementation details, read the <a href="https://github.com/navig-me/tinyprune/blob/main/AGENTS.md">contributor guide</a> and <a href="https://github.com/navig-me/tinyprune/blob/main/PLAN.md">release plan</a>. Report problems or suggest improvements on <a href="https://github.com/navig-me/tinyprune/issues">GitHub</a>.</p>
+        </section>
       </article>
     </main>
   </div>
+  <div class="footer-panel"><div><h2>Your files stay on your Mac.</h2><p>No account, cloud sync, or file-content inspection in normal operation.</p></div><a class="button" href="https://github.com/navig-me/tinyprune">View on GitHub</a></div>
+  <footer class="site-footer"><div class="footer-inner"><p><span>TinyPrune</span> <span class="footer-description">macOS file lifetimes</span></p><nav aria-label="Footer"><a href="https://github.com/navig-me/tinyprune">GitHub</a><a href="#start">Docs</a><a href="https://buymeacoffee.com/mihirk">Buy me a coffee</a><a href="https://tinyprune.com#philosophy">Privacy</a></nav></div></footer>
+  <script>
+    const guide = document.querySelector('.sidebar details');
+    const mobile = window.matchMedia('(max-width: 760px)');
+    const adaptGuide = () => { guide.open = !mobile.matches; };
+    adaptGuide();
+    mobile.addEventListener('change', adaptGuide);
+  </script>
 </body>
 </html>
