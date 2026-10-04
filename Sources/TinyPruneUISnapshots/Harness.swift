@@ -63,6 +63,17 @@ func waitFor(_ what: String, timeout: TimeInterval = quickMode ? 8 : 25, _ condi
     return false
 }
 
+/// Like `waitFor`, but a timeout is reported to the caller instead of failing the run.
+@MainActor
+func waitUntil(timeout: TimeInterval, _ condition: () async -> Bool) async -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+        if await condition() { return true }
+        await pump(0.05)
+    }
+    return await condition()
+}
+
 // MARK: - Fonts
 
 /// Registers the bundled typefaces for this process, matching what `ATSApplicationFontsPath` does in the packaged app.
