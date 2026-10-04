@@ -4,10 +4,6 @@ import TinyPruneIPC
 
 func displayName(_ path: String) -> String { URL(fileURLWithPath: path).lastPathComponent }
 
-func displayPath(_ path: String) -> String {
-    let home = NSHomeDirectory()
-    return path.hasPrefix(home + "/") ? "~" + path.dropFirst(home.count) : path
-}
 
 private func relativeDay(_ date: Date, now: Date = Date()) -> String {
     let calendar = Calendar.current
@@ -55,7 +51,7 @@ struct OverviewPage: View {
                                 Text(rules.isEmpty ? "No rules" : rules.map(\.name).joined(separator: " · "))
                                     .font(.subheadline)
                                     .foregroundStyle(.secondary)
-                                PathText(path: displayPath(root.path))
+                                PathText(path: root.path)
                             }
                             Spacer()
                             if let state = dominantState(rules) { Pill(text: state.label, color: state.color) }
@@ -74,7 +70,7 @@ struct OverviewPage: View {
                         HStack {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(displayName(item.explanation.candidateIdentity.pathHint))
-                                PathText(path: displayPath(item.explanation.candidateIdentity.pathHint))
+                                PathText(path: item.explanation.candidateIdentity.pathHint)
                             }
                             Spacer()
                             Text(relativeDay(item.explanation.scheduledAt)).foregroundStyle(.secondary)
@@ -191,15 +187,20 @@ struct UpcomingPage: View {
                         VStack(alignment: .leading, spacing: 0) {
                             SectionTitle(group.title).padding(.bottom, 8)
                             ForEach(rows) { item in
-                                UpcomingRow(
-                                    item: item,
-                                    isSelected: router.inspectedItemID == item.id,
-                                    isCustom: customPaths.contains(item.explanation.candidateIdentity.pathHint),
-                                    size: sizes[item.explanation.candidateIdentity.pathHint]
-                                )
-                                    .contentShape(Rectangle())
-                                    .onTapGesture { router.inspectedItemID = item.id }
-                                    .accessibilityAddTraits(.isButton)
+                                Button {
+                                    router.inspectedItemID = item.id
+                                } label: {
+                                    UpcomingRow(
+                                        item: item,
+                                        isSelected: router.inspectedItemID == item.id,
+                                        isCustom: customPaths.contains(item.explanation.candidateIdentity.pathHint),
+                                        size: sizes[item.explanation.candidateIdentity.pathHint]
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Why will \(displayName(item.explanation.candidateIdentity.pathHint)) be pruned?")
+                                .accessibilityValue("\(item.explanation.candidateIdentity.pathHint), \(item.explanation.matchedRuleName), \(item.explanation.scheduledAt.formatted(date: .abbreviated, time: .shortened)), \(item.explanation.disposition == .preview ? "Preview" : "Active")")
+                                .accessibilityAddTraits(router.inspectedItemID == item.id ? [.isSelected] : [])
                                 Divider()
                             }
                         }
@@ -212,7 +213,7 @@ struct UpcomingPage: View {
                             HStack(alignment: .firstTextBaseline) {
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(displayName(override.path))
-                                    PathText(path: displayPath(override.path))
+                                    PathText(path: override.path)
                                 }
                                 Spacer()
                                 if case .keep(let descendants) = override.policy {
@@ -242,6 +243,7 @@ struct UpcomingPage: View {
 private struct UpcomingRow: View {
     let item: AgentUpcomingItem
     let isSelected: Bool
+    @Environment(\.colorSchemeContrast) private var contrast
     let isCustom: Bool
     let size: AgentViewModel.ItemSize?
 
@@ -250,7 +252,7 @@ private struct UpcomingRow: View {
         HStack(alignment: .firstTextBaseline, spacing: 14) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(displayName(explanation.candidateIdentity.pathHint))
-                PathText(path: displayPath(explanation.candidateIdentity.pathHint))
+                PathText(path: explanation.candidateIdentity.pathHint)
                 Text(explanation.matchedRuleName).font(.subheadline).foregroundStyle(.secondary)
             }
             Spacer()
@@ -269,6 +271,11 @@ private struct UpcomingRow: View {
         .padding(.vertical, 12)
         .padding(.horizontal, 10)
         .background(isSelected ? PrunePalette.plum.opacity(0.08) : .clear, in: RoundedRectangle(cornerRadius: 8))
+        .overlay {
+            if isSelected && contrast == .increased {
+                RoundedRectangle(cornerRadius: 8).strokeBorder(PrunePalette.plum, lineWidth: 2)
+            }
+        }
     }
 }
 
@@ -299,16 +306,18 @@ package struct WhyInspectorContent: View {
                 HStack {
                     Text("Why will this be pruned?")
                         .font(Typography.display(size: 19))
+                        .accessibilityAddTraits(.isHeader)
                     Spacer()
                     Button(action: close) { Image(systemName: "xmark") }
                         .buttonStyle(.borderless)
                         .accessibilityLabel("Close inspector")
+                        .keyboardShortcut(.cancelAction)
                 }
                 PathText(path: path)
 
                 if let explanation { details(explanation) }
                 else if let failure { Text(failure).foregroundStyle(PrunePalette.caution) }
-                else { ProgressView() }
+                else { ProgressView("Loading explanation") }
         }
         .padding(20)
         .task(id: path) { await load() }
@@ -328,7 +337,7 @@ package struct WhyInspectorContent: View {
             field("Scheduled", custom.expiresAt.formatted(date: .complete, time: .shortened))
             field("Reason", "An explicit expiry is set on this item")
         case .protected(let protected):
-            field("Protected", "Keep on \(displayPath(protected.protectedPath))\(protected.protectsDescendants ? " including everything inside" : "")")
+            field("Protected", "Keep on \(protected.protectedPath)\(protected.protectsDescendants ? " including everything inside" : "")")
         case .suppressed(let reason):
             field("Not scheduled", reason.userExplanation)
         case .noRule:
@@ -338,7 +347,7 @@ package struct WhyInspectorContent: View {
         case .ambiguousOverrides:
             field("Not scheduled", "Conflicting overrides on this item")
         }
-        field("Overrides", explanation.overrides.isEmpty ? "None" : explanation.overrides.map { displayPath($0.path) }.joined(separator: "\n"))
+        field("Overrides", explanation.overrides.isEmpty ? "None" : explanation.overrides.map(\.path).joined(separator: "\n"))
         VStack(alignment: .leading, spacing: 3) {
             Text("Size").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             if let size {
@@ -365,7 +374,9 @@ package struct WhyInspectorContent: View {
             HStack {
                 Button("Keep") { run { try await model.keep(path: path, protectDescendants: false) } }
                 Button("+7 days") { run { try await extend(by: 7) } }
+                    .accessibilityLabel("Extend expiry by 7 days")
                 Button("+30 days") { run { try await extend(by: 30) } }
+                    .accessibilityLabel("Extend expiry by 30 days")
             }
             if case .scheduled(let scheduled) = explanation.resolution {
                 Button("Open rule") { router.openRule(scheduled.matchedRuleID) }.buttonStyle(.link)
@@ -466,6 +477,7 @@ package struct CustomExpirySheet: View {
             HStack {
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
                 Button("Set expiry") {
                     Task {
                         do { try await model.setExpiry(path: path, at: date, state: .active); dismiss() }
@@ -473,9 +485,10 @@ package struct CustomExpirySheet: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
             }
         }
         .padding(28)
-        .frame(width: 460)
+        .frame(minWidth: 460, idealWidth: 460, maxWidth: 680)
     }
 }

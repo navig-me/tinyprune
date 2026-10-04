@@ -25,7 +25,7 @@
       {"@type":"Question","name":"Does TinyPrune permanently delete files?","acceptedAnswer":{"@type":"Answer","text":"No. TinyPrune only moves items to the macOS Trash. It does not delete anything permanently."}},
       {"@type":"Question","name":"How is TinyPrune different from a Mac cleaner app?","acceptedAnswer":{"@type":"Answer","text":"TinyPrune is not a system optimizer. It only touches folders you choose, follows rules you write, explains every decision, and lets you test a rule in Preview first."}},
       {"@type":"Question","name":"Can TinyPrune clean node_modules and other developer folders?","acceptedAnswer":{"@type":"Answer","text":"Yes. Rules can match folders such as node_modules or .venv and expire them after a project has been inactive. Developer templates always start in Preview."}},
-      {"@type":"Question","name":"Does TinyPrune need an account or network access?","acceptedAnswer":{"@type":"Answer","text":"No account is needed. Core cleanup reads filesystem metadata only, does not inspect file contents, and does not require network access. Planned optional update checks for direct downloads will use the network; Homebrew installs will update through Homebrew."}},
+      {"@type":"Question","name":"Does TinyPrune need an account or network access?","acceptedAnswer":{"@type":"Answer","text":"No account is needed. Core cleanup reads filesystem metadata only, does not inspect file contents, and does not require network access. Optional update checks in configured, signed direct-download builds use HTTPS; Homebrew installs update through Homebrew. Early unsigned builds require manual updates."}},
       {"@type":"Question","name":"How do I keep a file from being removed?","acceptedAnswer":{"@type":"Answer","text":"Mark it Keep from the Finder menu or run tinyprune keep. Keep takes precedence over every rule, and a folder with a kept item inside is never trashed."}},
       {"@type":"Question","name":"Does TinyPrune work on Intel and Apple silicon, and which macOS versions?","acceptedAnswer":{"@type":"Answer","text":"It requires macOS 14 or later. Released builds are planned as universal binaries for Intel and Apple silicon; no release has been published yet."}},
       {"@type":"Question","name":"How do I install TinyPrune before the first release?","acceptedAnswer":{"@type":"Answer","text":"Build from source: git clone https://github.com/navig-me/tinyprune && cd tinyprune && swift Scripts/package-app.swift && open .build/package/TinyPrune.app"}}
@@ -116,7 +116,7 @@
           <h2 id="finder-title">Use the Finder menu</h2>
           <p>Enable the TinyPrune Finder extension in System Settings. The menu works inside folders you have chosen to manage.</p>
           <p>From Finder, you can Keep an item, set its expiry to tonight, tomorrow, 7 days, 30 days, or a custom date, return it to inherited rules, and ask why it will expire. Folders also offer Protect Folder, Set Folder Lifetime, and Create Rule.</p>
-          <p>Finder sends actions to the same background agent as the app and CLI. Folder lifetime, rule creation, and custom expiry open the app to finish the action.</p>
+          <p>Finder sends actions to the same background agent as the app and CLI. Folder lifetime, rule creation, and custom expiry open the app to finish the action and require a single selected item. Keep, expiry presets, and inherited rules can act on multiple selected items.</p>
         </section>
         <section id="cli">
           <h2>Work from the command line</h2>
@@ -141,8 +141,10 @@ tinyprune config export</code></pre>
           <p>Apply only works inside folders already managed in the app, because the app must obtain folder access. Rules created from a config start in Preview unless you pass <code>--active</code>.</p>
         </section>
         <section id="updates">
-          <h2>How updates will work</h2>
-          <p>The release plan is a signed, notarized DMG with Sparkle updates for direct downloads. Homebrew installs will update through the cask only. Signing and notarization are not available in the current early builds.</p>
+          <h2>How updates work</h2>
+          <p>Sparkle is integrated for configured, Developer ID signed direct-download builds. Use <strong>Check for Updates…</strong> in the application menu. The updater verifies signed feeds, release notes, and downloaded updates. Homebrew copies disable in-app checks and update only with <code>brew upgrade --cask tinyprune</code>. Early unsigned builds require manual downloads; the menu explains why updates are unavailable.</p>
+          <p>Pruning stops while a downloadable update is pending. An update cannot interrupt an in-flight Trash operation. If a downloaded update is interrupted, resume it with Check for Updates or manually install its intended newer signed version; opening the old app alone does not resume pruning. The menu offers <strong>Update Safety Status…</strong> while an update is blocking cleanup.</p>
+          <p>Signed release and end-to-end update verification remain release prerequisites. Signing and notarization are not available in current early builds.</p>
           <p>For implementation details, read the <a href="https://github.com/navig-me/tinyprune/blob/main/AGENTS.md">contributor guide</a> and <a href="https://github.com/navig-me/tinyprune/blob/main/PLAN.md">release plan</a>. Report problems or suggest improvements on <a href="https://github.com/navig-me/tinyprune/issues">GitHub</a>.</p>
         </section>
         <section id="faq">
@@ -156,7 +158,7 @@ tinyprune config export</code></pre>
           <h3>Can TinyPrune clean node_modules and other developer folders?</h3>
           <p>Yes. Rules can match folders such as <code>node_modules</code> or <code>.venv</code> and expire them after a project has been inactive. Developer templates always start in Preview.</p>
           <h3>Does TinyPrune need an account or network access?</h3>
-          <p>No account is needed. Core cleanup reads filesystem metadata only, does not inspect file contents, and does not require network access. Planned optional update checks for direct downloads will use the network; Homebrew installs will update through Homebrew.</p>
+          <p>No account is needed. Core cleanup reads filesystem metadata only, does not inspect file contents, and does not require network access. Optional update checks in configured, signed direct-download builds use HTTPS; Homebrew installs update through Homebrew. Early unsigned builds require manual updates.</p>
           <h3>How do I keep a file from being removed?</h3>
           <p>Mark it Keep from the Finder menu or run <code>tinyprune keep</code>. Keep takes precedence over every rule, and a folder with a kept item inside is never trashed.</p>
           <h3>Does TinyPrune work on Intel and Apple silicon, and which macOS versions?</h3>

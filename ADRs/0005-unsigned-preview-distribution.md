@@ -4,14 +4,14 @@ Status: Accepted (interim)
 
 ## Context
 
-TinyPrune currently has neither an Apple Developer ID certificate nor an in-app Sparkle integration. Maintainers need a real downloadable universal DMG without pretending that an ad-hoc signature is Developer ID trust or notarization. ADR 0004 remains the production signing contract.
+TinyPrune has no configured production Apple Developer ID certificate. Maintainers need a real downloadable universal DMG without pretending that an ad-hoc signature is Developer ID trust or notarization. Sparkle is now linked only into the application, but unsigned previews never start it. ADR 0004 remains the production signing contract.
 
 ## Decision
 
 - Keep `release.yml` as one entry point. No Apple secrets means an explicitly ad-hoc signed, non-notarized **GitHub prerelease**. All six secrets means the existing Developer ID/notarized path. Partial credentials or an explicit mode that cannot be satisfied fails. Signing/notary errors never trigger fallback.
 - Build universal macOS apps on an Xcode-equipped macOS runner. Sign with `TINYPRUNE_SIGN_IDENTITY=-` and run `verify-signing.sh` in development mode for previews, package with `hdiutil`, and publish immutable DMGs with SHA-256 sidecars and signing-mode metadata.
 - Publish two distinct artifacts: direct and Homebrew. Homebrew sets `TinyPruneDistribution=homebrew` and `SUEnableAutomaticChecks=false` before signing; direct defaults to `direct`. Both share version/build. The cask is its sole updater. No Homebrew artifact enters a Sparkle appcast.
-- Unsigned previews never enter the stable Sparkle feed. Signed direct feed generation is optional while the app lacks Sparkle. With a real EdDSA key, upstream pinned/checksummed Sparkle tools generate signed enclosures into a reviewed website PR. After merge and successful Pages deploy, a separate dispatch verifies the public feed's URL, length and signature. No direct writes bypass protected `main`.
+- Unsigned previews never enter the stable Sparkle feed. Signed direct feeds require the app's corresponding Ed25519 public key and separately protected private key. Pinned/checksummed Sparkle 2.9 tools sign enclosures, release notes and final XML into a reviewed website PR. After merge and successful Pages deploy, a separate dispatch verifies feed/notes signatures and the enclosure against the app's embedded public key. No direct writes bypass protected `main`.
 - Homebrew updates go through a reviewed tap PR and a clean-macOS install/CLI smoke against that PR branch. Only metadata-marked unsigned builds warn and clear quarantine in postflight; signed builds never do so.
 - Missing optional channel secrets skip clearly rather than failing an otherwise valid release. Signing keys and cross-repository tokens belong exclusively to reviewer-protected GitHub Environments, never pull-request jobs or shell arguments containing interpolated secrets.
 
@@ -27,7 +27,7 @@ Removing quarantine is a local trust decision, not notarization. Finder extensio
 
 ## Disabled or unsupported today
 
-There are no in-app automatic updates: Sparkle is not linked. Users install newer direct previews manually, or use `brew upgrade --cask tinyprune` for the cask. Preview releases are not Apple-verified production releases, and no Gatekeeper acceptance/stapled-ticket claim is made. Clean CI CLI launch proof does not prove agent registration, Finder activation, login-item approval, or real-device Gatekeeper behavior.
+There are no in-app updates for unsigned previews: the linked Sparkle controller is never constructed. Users install newer direct previews manually, or use `brew upgrade --cask tinyprune` for the cask. The native Check for Updates command explains that policy. Preview releases are not Apple-verified production releases, and no Gatekeeper acceptance/stapled-ticket claim is made. Clean CI CLI launch proof does not prove agent registration, Finder activation, login-item approval, or real-device Gatekeeper behavior.
 
 ## Transition to Developer ID
 

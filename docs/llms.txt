@@ -8,7 +8,8 @@
 - Items only move to the macOS Trash. TinyPrune never permanently deletes files.
 - Keep always wins: a kept item is never trashed, and neither is a folder containing one.
 - Preview runs matching and scheduling without trashing anything. Developer templates and very broad folders start in Preview.
-- Local-first: no account, filesystem metadata only (no file contents), no network access needed for normal operation.
+- Local-first: no account, filesystem metadata only (no file contents), no network access needed for core cleanup.
+- Optional signed direct-download update checks use HTTPS. Homebrew copies update only through Homebrew; unsigned previews require manual updates.
 - Every decision is explained: rule, basis, deadline, overrides, and why an item was skipped.
 - Interfaces: the app, a Finder menu, and the `tinyprune` CLI with `--json` output and config commands (validate, preview, apply, export).
 - Install before the first release: `git clone https://github.com/navig-me/tinyprune && cd tinyprune && swift Scripts/package-app.swift && open .build/package/TinyPrune.app`

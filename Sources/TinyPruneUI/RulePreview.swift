@@ -84,7 +84,7 @@ struct RulePreviewResultView: View {
             EmptyView()
         case .running:
             HStack(spacing: 10) {
-                ProgressView().controlSize(.small)
+                ProgressView("Scanning matching items").labelsHidden().controlSize(.small)
                 Text("Scanning matching items…").foregroundStyle(.secondary)
                 Spacer()
                 Button("Cancel") { controller.cancel() }
@@ -120,10 +120,7 @@ struct RulePreviewResultView: View {
                     VStack(alignment: .leading, spacing: 0) {
                         ForEach(Array(preview.samples.enumerated()), id: \.offset) { _, sample in
                             HStack(alignment: .firstTextBaseline, spacing: 12) {
-                                Text(displayPath(sample.path))
-                                    .font(Typography.mono(size: 12, relativeTo: .caption))
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
+                                PathText(path: sample.path)
                                 Spacer(minLength: 8)
                                 if let bytes = sample.bytes {
                                     Text(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))

@@ -42,6 +42,8 @@ jobs:
       contents: write
     outputs:
       published: ${{ steps.publish.outputs.published }}
+    env:
+      TINYPRUNE_SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_ED25519_PUBLIC_KEY }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:

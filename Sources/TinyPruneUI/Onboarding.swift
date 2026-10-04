@@ -41,13 +41,16 @@ package struct OnboardingFlow: View {
 
     package var body: some View {
         VStack(alignment: .leading, spacing: 28) {
-            Spacer(minLength: 0)
-            switch step {
-            case 0: intro
-            case 1: chooser
-            default: reassurance
+            ScrollView {
+                VStack(alignment: .leading, spacing: 28) {
+                    switch step {
+                    case 0: intro
+                    case 1: chooser
+                    default: reassurance
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            Spacer(minLength: 0)
             HStack {
                 Text("Step \(step + 1) of 3").foregroundStyle(.secondary)
                 Spacer()
@@ -63,6 +66,7 @@ package struct OnboardingFlow: View {
                         .disabled(isSaving)
                 }
             }
+            .disabled(isSaving)
         }
         .padding(48)
         .frame(maxWidth: 680, maxHeight: .infinity, alignment: .leading)
@@ -75,8 +79,10 @@ package struct OnboardingFlow: View {
     private var intro: some View {
         VStack(alignment: .leading, spacing: 14) {
             Image(systemName: "leaf.fill").font(.system(size: 34)).foregroundStyle(PrunePalette.plum)
+                .accessibilityHidden(true)
             Text("Files don’t all need to live forever.")
                 .font(Typography.display(size: 40))
+                .accessibilityAddTraits(.isHeader)
             Text("TinyPrune quietly moves files to Trash once they are no longer useful.")
                 .font(.title3)
                 .foregroundStyle(.secondary)
@@ -87,6 +93,7 @@ package struct OnboardingFlow: View {
         VStack(alignment: .leading, spacing: 16) {
             Text("What would you like to keep tidy?")
                 .font(Typography.display(size: 32))
+                .accessibilityAddTraits(.isHeader)
             ForEach(choices) { choice in
                 HStack(alignment: .firstTextBaseline) {
                     VStack(alignment: .leading, spacing: 3) {
@@ -97,8 +104,10 @@ package struct OnboardingFlow: View {
                     Spacer()
                     if folders[choice.id] != nil {
                         Button("Remove") { folders[choice.id] = nil }
+                            .accessibilityLabel("Remove \(choice.title) folder")
                     }
                     Button(folders[choice.id] == nil ? "Choose folder…" : "Change…") { pick(choice) }
+                        .accessibilityLabel("\(folders[choice.id] == nil ? "Choose" : "Change") folder for \(choice.title)")
                 }
                 Divider()
             }
@@ -108,8 +117,10 @@ package struct OnboardingFlow: View {
     private var reassurance: some View {
         VStack(alignment: .leading, spacing: 16) {
             Image(systemName: "arrow.uturn.backward.circle").font(.system(size: 34)).foregroundStyle(PrunePalette.safe)
+                .accessibilityHidden(true)
             Text("Always recoverable.")
                 .font(Typography.display(size: 40))
+                .accessibilityAddTraits(.isHeader)
             Text("TinyPrune moves items to Trash. It does not permanently delete them.")
                 .font(.title3)
                 .foregroundStyle(.secondary)

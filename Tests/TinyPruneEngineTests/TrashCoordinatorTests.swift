@@ -2,8 +2,35 @@ import Testing
 import Foundation
 @testable import TinyPruneDomain
 @testable import TinyPruneEngine
+import TinyPruneIPC
 
 @Suite struct TrashCoordinatorTests {
+    @Test func pendingAppUpdateBlocksCleanupUntilCanceled() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TinyPruneEngineUpdate-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let updater = UpdateInstallationGate(directory: directory)
+        try updater.beginInstallation(targetVersion: "2", currentVersion: "1")
+        let candidate = makeCandidate()
+        let rule = try makeRule(state: .active)
+        let store = MockPolicyStore(snapshot: PolicySnapshot(rules: [rule], overrides: [], globallyPaused: false))
+        let audit = MockAudit()
+        let access = MockTrashFileAccess(candidate: candidate, protectedDescendant: false, trashError: nil)
+        let coordinator = TrashCoordinator(
+            policyStore: store, fileAccess: access, audit: audit,
+            clock: FixedClock(Date(timeIntervalSinceReferenceDate: 1_000)),
+            updateGate: UpdateInstallationGate(directory: directory)
+        )
+        await #expect(throws: TrashExecutionError.updateInstallationPending) {
+            try await coordinator.execute(request(for: candidate, rule: rule))
+        }
+        #expect(await access.moveCount() == 0)
+        #expect(await audit.events().map(\.kind) == [.safetySkipped])
+        try updater.finishInstallation()
+        let resumed = try await coordinator.execute(request(for: candidate, rule: rule))
+        #expect(resumed == .movedToTrash(originalPath: candidate.identity.pathHint, trashedPath: "/.Trash/node_modules"))
+        #expect(await access.moveCount() == 1)
+    }
+
     @Test func testPreviewNeverCallsTrashAndRecordsPreviewEvent() async throws {
         let candidate = makeCandidate()
         let rule = try makeRule(state: .preview)

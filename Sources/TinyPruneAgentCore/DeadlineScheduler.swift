@@ -1,6 +1,7 @@
 import Foundation
 import TinyPruneEngine
 import TinyPrunePersistence
+import TinyPruneIPC
 
 public actor DeadlineScheduler {
     private let store: SQLiteSafetyStore
@@ -12,6 +13,7 @@ public actor DeadlineScheduler {
     private var waiter: CheckedContinuation<Void, Never>?
     private var changeVersion: UInt64 = 0
     private var sleeperGeneration: UInt64 = 0
+    private var updateObserver: UpdateInstallationObservation?
 
     public init(store: SQLiteSafetyStore, coordinator: TrashCoordinator, clock: any SafetyClock = SystemSafetyClock()) {
         self.store = store
@@ -32,15 +34,21 @@ public actor DeadlineScheduler {
         self.onWaitingForDeadline = onWaitingForDeadline
     }
 
-    public func start() {
+    public func start() throws {
         guard worker == nil else { return }
+        updateObserver = try coordinator.observeUpdateGateChanges { [weak self] in
+            Task { await self?.signalChange() }
+        }
         worker = Task { await runLoop() }
     }
 
-    public func stop() {
-        worker?.cancel()
+    public func stop() async {
+        let activeWorker = worker
+        activeWorker?.cancel()
         worker = nil
+        updateObserver = nil
         signalChange()
+        await activeWorker?.value
     }
 
     public func signalChange() {
@@ -55,7 +63,7 @@ public actor DeadlineScheduler {
 
     public func runDueNow() async throws {
         if try await store.loadSnapshot().globallyPaused { return }
-        while let deadline = try await store.nextDeadline(), deadline.scheduledAt <= clock.now() {
+        while !Task.isCancelled, let deadline = try await store.nextDeadline(), deadline.scheduledAt <= clock.now() {
             let request = TrashRequest(
                 candidateIdentity: deadline.identity,
                 source: deadline.source,

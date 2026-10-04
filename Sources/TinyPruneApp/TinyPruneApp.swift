@@ -5,6 +5,7 @@ import TinyPruneUI
 struct TinyPruneApp: App {
     @StateObject private var model = AgentViewModel()
     @StateObject private var router = AppRouter()
+    @StateObject private var updater = AppUpdater()
     @AppStorage("showMenuBarIcon") private var showMenuBarIcon = true
 
     var body: some Scene {
@@ -17,6 +18,11 @@ struct TinyPruneApp: App {
                 .onOpenURL { router.handle($0) }
         }
         .windowStyle(.hiddenTitleBar)
+        .commands {
+            CommandGroup(after: .appInfo) {
+                UpdateCommand(updater: updater)
+            }
+        }
 
         MenuBarExtra("TinyPrune", systemImage: "leaf.fill", isInserted: $showMenuBarIcon) {
             MenuBarContent()

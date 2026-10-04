@@ -6,13 +6,20 @@ import TinyPruneDomain
 import TinyPruneIPC
 
 package enum PrunePalette {
-    package static let plum = Color(red: 0.29, green: 0.12, blue: 0.24)
-    package static let canvas = Color(red: 0.985, green: 0.975, blue: 0.96)
-    package static let sidebar = Color(red: 0.955, green: 0.94, blue: 0.92)
-    package static let row = Color(red: 0.995, green: 0.99, blue: 0.98)
-    package static let safe = Color(red: 0.16, green: 0.45, blue: 0.27)
-    /// 5.4:1 on its own 12% tint and 6.3:1 on the canvas (the previous amber measured 3.6:1 at caption size).
-    package static let caution = Color(red: 0.55, green: 0.30, blue: 0.0)
+    package static let plum = adaptive(light: (0.29, 0.12, 0.24), dark: (0.91, 0.70, 0.83))
+    package static let canvas = adaptive(light: (0.985, 0.975, 0.96), dark: (0.12, 0.11, 0.12))
+    package static let sidebar = adaptive(light: (0.955, 0.94, 0.92), dark: (0.16, 0.15, 0.16))
+    package static let row = adaptive(light: (0.995, 0.99, 0.98), dark: (0.19, 0.18, 0.19))
+    package static let safe = adaptive(light: (0.16, 0.45, 0.27), dark: (0.60, 0.82, 0.66))
+    /// Dark amber remains readable on warm light surfaces; dark mode uses a lighter amber.
+    package static let caution = adaptive(light: (0.55, 0.30, 0.0), dark: (0.96, 0.73, 0.43))
+
+    private static func adaptive(light: (Double, Double, Double), dark: (Double, Double, Double)) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            let components = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light
+            return NSColor(srgbRed: components.0, green: components.1, blue: components.2, alpha: 1)
+        })
+    }
 }
 
 package enum PolicyMutationError: Error, LocalizedError {
@@ -152,7 +159,13 @@ package final class AgentViewModel: ObservableObject {
     private func send(_ operation: AgentOperation) async throws -> AgentResponsePayload {
         let response = try await transport.request(AgentRequest(operation: operation))
         if case .failure(let error) = response.payload {
-            throw PolicyMutationError.agentRejected(String(describing: error))
+            let message: String
+            switch error {
+            case .invalidRequest(let detail), .storageUnavailable(let detail): message = detail
+            case .unsupportedProtocol:
+                message = "The app and background agent use different protocol versions. Quit and reopen TinyPrune to load the matching agent."
+            }
+            throw PolicyMutationError.agentRejected(message)
         }
         return response.payload
     }
@@ -173,7 +186,14 @@ package final class AgentViewModel: ObservableObject {
                 errorMessage = "The TinyPrune agent returned an unexpected response."
                 return
             }
+            let previousRoots = self.overview?.policy.managedRoots
             self.overview = overview
+            if previousRoots != overview.policy.managedRoots {
+                DistributedNotificationCenter.default().postNotificationName(
+                    Notification.Name("com.navig-me.tinyprune.managedRootsChanged"),
+                    object: nil, userInfo: nil, deliverImmediately: true
+                )
+            }
             errorMessage = nil
             refreshedAt = now()
             if case .settings(let loaded) = try await send(.loadSettings) { settings = loaded }
@@ -332,6 +352,7 @@ extension LifetimeRule {
 struct Pill: View {
     let text: String
     var color: Color = PrunePalette.plum
+    @Environment(\.colorSchemeContrast) private var contrast
 
     var body: some View {
         Text(text)
@@ -340,6 +361,9 @@ struct Pill: View {
             .padding(.horizontal, 9)
             .padding(.vertical, 4)
             .background(color.opacity(0.12), in: Capsule())
+            .overlay {
+                if contrast == .increased { Capsule().strokeBorder(color, lineWidth: 1) }
+            }
     }
 }
 
@@ -350,8 +374,13 @@ struct PathText: View {
             .font(Typography.mono(size: 12, relativeTo: .caption))
             .foregroundStyle(.secondary)
             .textSelection(.enabled)
-            .lineLimit(2)
-            .truncationMode(.middle)
+            .fixedSize(horizontal: false, vertical: true)
+            .contextMenu {
+                Button("Copy path") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(path, forType: .string)
+                }
+            }
     }
 }
 
@@ -360,6 +389,7 @@ struct SectionTitle: View {
     init(_ text: String) { self.text = text }
     var body: some View {
         Text(text).font(Typography.display(size: 22))
+            .accessibilityAddTraits(.isHeader)
     }
 }
 

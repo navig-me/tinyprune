@@ -117,6 +117,9 @@ for target in "$app" "$app/Contents/MacOS/TinyPruneAgent" "$app/Contents/MacOS/t
     [[ $release == 1 ]] && fail "${target#"$app"/} carries get-task-allow" || echo "note: ${target#"$app"/} carries get-task-allow (debug)"
   fi
   if printf '%s' "$e" | grep -q 'app-sandbox'; then fail "${target#"$app"/} must not be sandboxed (agent needs bookmarks/Trash/FSEvents)"; fi
+  if [[ $release == 1 ]] && printf '%s' "$e" | grep -q 'disable-library-validation'; then
+    fail "${target#"$app"/} disables library validation in a release"
+  fi
 done
 
 # --- Sparkle isolation (PLAN.md): only the app may link or embed Sparkle ----------------
@@ -124,6 +127,35 @@ for target in "$app/Contents/MacOS/TinyPruneAgent" "$app/Contents/MacOS/tinyprun
   if otool -L "$target" 2>/dev/null | grep -qi sparkle; then fail "${target#"$app"/} links Sparkle"; else pass "${target#"$app"/} does not link Sparkle"; fi
 done
 if [[ -e "$appex/Contents/Frameworks/Sparkle.framework" ]]; then fail "Sparkle embedded in the Finder extension"; fi
+sparkle="$app/Contents/Frameworks/Sparkle.framework"
+[[ -d "$sparkle" ]] && pass "Sparkle embedded in application" || fail "Sparkle framework missing"
+otool -L "$app/Contents/MacOS/$main_exec" | grep -q '@rpath/Sparkle.framework' \
+  && pass "application links Sparkle" || fail "application does not link embedded Sparkle"
+check "embedded Sparkle signature" codesign --verify --deep --strict "$sparkle"
+for helper in Autoupdate Updater.app XPCServices/Downloader.xpc XPCServices/Installer.xpc; do
+  [[ -e "$sparkle/Versions/B/$helper" ]] && pass "Sparkle $helper present" || fail "Sparkle $helper missing"
+done
+plist_value() { /usr/libexec/PlistBuddy -c "Print :$1" "$app/Contents/Info.plist" 2>/dev/null; }
+channel="$(plist_value TinyPruneDistribution)"
+enabled="$(plist_value TinyPruneUpdatesEnabled)"
+[[ "$channel" == direct || "$channel" == homebrew ]] || fail "unknown update distribution"
+[[ "$(plist_value SUFeedURL)" == https://tinyprune.com/updates/appcast.xml ]] || fail "unexpected direct update feed URL"
+[[ "$(plist_value SURequireSignedFeed)" == true && "$(plist_value SUVerifyUpdateBeforeExtraction)" == true ]] \
+  && pass "signed feed and pre-extraction verification required" || fail "update cryptographic verification not required"
+[[ "$(plist_value SUSignedFeedFailureExpirationInterval)" == 0 ]] || fail "signed feed validation must fail closed"
+[[ "$(plist_value SUAllowsAutomaticUpdates)" == false && "$(plist_value SUAutomaticallyUpdate)" == false ]] \
+  && pass "automatic installations disabled" || fail "automatic installation policy mismatch"
+if [[ "$channel" == homebrew || "$(plist_value TinyPruneSigning)" == ad-hoc ]]; then
+  [[ "$enabled" == false && "$(plist_value SUEnableAutomaticChecks)" == false ]] \
+    && pass "Homebrew/development updater disabled" || fail "Homebrew/development updater enabled"
+fi
+if [[ "$enabled" == true ]]; then
+  [[ "$channel" == direct && "$(plist_value TinyPruneSigning)" == developer-id ]] || fail "updater enabled outside signed direct channel"
+  [[ "$(plist_value SUPublicEDKey)" != "" && "$(plist_value SUEnableAutomaticChecks)" == true ]] \
+    && pass "enabled updater has public key and checks" || fail "enabled updater lacks public key/check policy"
+else
+  [[ "$(plist_value SUEnableAutomaticChecks)" == false ]] || fail "disabled updater has automatic checks"
+fi
 
 # --- Gatekeeper + notarization (release only) -------------------------------------------
 if [[ $release == 1 && $notarized == 1 ]]; then

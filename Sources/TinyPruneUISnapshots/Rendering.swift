@@ -12,6 +12,8 @@ final class Snapshotter {
     private(set) var axInventory: [String: Int] = [:]
     var dynamicTypeSizes: [DynamicTypeSize?] = [nil]
     var scales: [CGFloat] = [1, 2]
+    var colorScheme: ColorScheme = .light
+    var increasedContrast = false
 
     init(outputDirectory: URL) { self.outputDirectory = outputDirectory }
 
@@ -27,7 +29,7 @@ final class Snapshotter {
     func host<V: View>(_ view: V, size: CGSize, dynamicType: DynamicTypeSize? = nil) async -> Hosted {
         let root = AnyView(
             view
-                .environment(\.colorScheme, .light)
+                .environment(\.colorScheme, colorScheme)
                 .environment(\.dynamicTypeSize, dynamicType ?? .large)
                 .frame(width: size.width, height: size.height)
         )
@@ -40,7 +42,10 @@ final class Snapshotter {
         )
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
-        window.appearance = NSAppearance(named: .aqua)
+        let appearance: NSAppearance.Name = increasedContrast
+            ? (colorScheme == .dark ? .accessibilityHighContrastDarkAqua : .accessibilityHighContrastAqua)
+            : (colorScheme == .dark ? .darkAqua : .aqua)
+        window.appearance = NSAppearance(named: appearance)
         window.isReleasedWhenClosed = false
         window.contentView = host
         window.setContentSize(size)

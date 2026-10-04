@@ -118,13 +118,13 @@ private struct RuleRow: View {
                 }
             }
             Text(rule.naturalDescription())
-            PathText(path: displayPath(rule.scope.path))
+            PathText(path: rule.scope.path)
             if rule.state == .preview {
                 Text("Preview schedules matches but never moves anything to Trash.")
                     .font(.caption)
                     .foregroundStyle(PrunePalette.caution)
             }
-            HStack(spacing: 16) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), alignment: .leading)], alignment: .leading, spacing: 12) {
                 Button("Edit", action: onEdit)
                 Button("Preview matches") { preview.start(rule, model: model) }
                     .disabled(preview.isRunning)
@@ -199,6 +199,8 @@ private extension ExpiryBasis {
 package struct RuleEditorSheet: View {
     @EnvironmentObject private var model: AgentViewModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @FocusState private var nameIsFocused: Bool
 
     let target: RuleEditorTarget
     let overview: AgentOverviewSnapshot
@@ -240,15 +242,16 @@ package struct RuleEditorSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     TextField("Rule name", text: $name)
+                        .focused($nameIsFocused)
 
                     editorSection("Where") {
                         HStack {
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(scopePath.isEmpty ? "Choose a folder to continue" : scopePath)
-                                    .font(Typography.mono(size: 13))
-                                    .textSelection(.enabled)
-                                    .lineLimit(2)
-                                    .truncationMode(.middle)
+                                if scopePath.isEmpty {
+                                    Text("Choose a folder to continue").foregroundStyle(.secondary)
+                                } else {
+                                    PathText(path: scopePath)
+                                }
                             }
                             Spacer()
                             Button("Choose folder…", action: chooseFolder)
@@ -286,6 +289,7 @@ package struct RuleEditorSheet: View {
                             Text("Grace period")
                             TextField("Hours", value: $graceHours, format: .number)
                                 .frame(width: 60)
+                                .accessibilityLabel("Grace period in hours")
                             Text("hours (0 for none)").foregroundStyle(.secondary)
                         }
                     }
@@ -317,13 +321,16 @@ package struct RuleEditorSheet: View {
             }
             .onChange(of: preview.phase) { _, phase in
                 // The result sits below the fold of a long form; bring it into view after the user's explicit click.
-                if phase != .idle { withAnimation { proxy.scrollTo("impact", anchor: .top) } }
+                if phase != .idle {
+                    withAnimation(reduceMotion ? nil : .default) { proxy.scrollTo("impact", anchor: .top) }
+                }
             }
             }
 
             HStack {
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
                 Button("Activate rule") {
                     if isBroad { confirmsBroadActivation = true } else { Task { await save(state: .active) } }
                 }
@@ -336,8 +343,8 @@ package struct RuleEditorSheet: View {
             .padding(.top, 14)
         }
         .padding(28)
-        .frame(width: 620, height: 720)
-        .onAppear(perform: load)
+        .frame(minWidth: 620, idealWidth: 620, maxWidth: 820, minHeight: 480, idealHeight: 720, maxHeight: 900)
+        .onAppear { load(); nameIsFocused = true }
         .confirmationDialog("Activate a broad rule?", isPresented: $confirmsBroadActivation, titleVisibility: .visible) {
             Button("Activate anyway", role: .destructive) { Task { await save(state: .active) } }
             Button("Save as Preview instead") { Task { await save(state: .preview) } }
@@ -378,6 +385,7 @@ package struct RuleEditorSheet: View {
     private func editorSection<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title.uppercased()).font(.caption.weight(.bold)).foregroundStyle(PrunePalette.plum)
+                .accessibilityAddTraits(.isHeader)
             content()
         }
     }

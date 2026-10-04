@@ -112,6 +112,7 @@ package struct TemplateApplySheet: View {
     @State private var errorMessage: String?
 
     package var body: some View {
+        ScrollView {
         VStack(alignment: .leading, spacing: 18) {
             Text(template.title).font(Typography.display(size: 27))
             Text(template.summary).foregroundStyle(.secondary)
@@ -119,9 +120,11 @@ package struct TemplateApplySheet: View {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Folder")
-                    Text(folder?.root.path ?? prefillPath ?? "Choose a folder to continue")
-                        .font(Typography.mono(size: 12, relativeTo: .caption))
-                        .foregroundStyle(.secondary)
+                    if let path = folder?.root.path ?? prefillPath {
+                        PathText(path: path)
+                    } else {
+                        Text("Choose a folder to continue").foregroundStyle(.secondary)
+                    }
                 }
                 Spacer()
                 Button("Choose folder…") { choose() }
@@ -139,13 +142,16 @@ package struct TemplateApplySheet: View {
             HStack {
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
                 Button("Create rules") { Task { await create() } }
                     .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
                     .disabled((folder == nil && prefillPath == nil) || isSaving)
             }
         }
         .padding(28)
-        .frame(width: 540)
+        }
+        .frame(minWidth: 540, idealWidth: 540, maxWidth: 760, maxHeight: 700)
         .onAppear { startInPreview = previewByDefault || template.isBroad }
         .alert("Could not create rules", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
             Button("OK", role: .cancel) { errorMessage = nil }
@@ -250,6 +256,13 @@ struct SettingsPage: View {
                     Text("ln -sf \"\(cliPath)\" /usr/local/bin/tinyprune")
                         .font(Typography.mono(size: 12, relativeTo: .caption))
                         .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .contextMenu {
+                            Button("Copy install command") {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString("ln -sf \"\(cliPath)\" /usr/local/bin/tinyprune", forType: .string)
+                            }
+                        }
                 }
                 HStack {
                     Button("Export configuration…", action: exportConfig)
@@ -392,6 +405,7 @@ package struct ConfigImportSheet: View {
             HStack {
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
                 Button("Apply") {
                     isApplying = true
                     Task {
@@ -401,10 +415,11 @@ package struct ConfigImportSheet: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
                 .disabled(!preview.plan.isApplicable || isApplying)
             }
         }
         .padding(28)
-        .frame(width: 560, height: 420)
+        .frame(minWidth: 560, idealWidth: 560, maxWidth: 820, minHeight: 420, idealHeight: 520, maxHeight: 760)
     }
 }

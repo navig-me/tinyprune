@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -23,3 +24,55 @@ jobs:
           node-version: 22.14.0
       - name: Validate static site
         run: npm --prefix ${{ matrix.site }} run check
+
+  native:
+    name: Native acceptance (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-14, macos-15-intel]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - name: Native behavior and safety suite
+        run: |
+          set -euo pipefail
+          mkdir -p .build
+          swift test 2>&1 | tee .build/native-tests.log
+      - name: Real domain and filesystem fixtures
+        run: |
+          set -euo pipefail
+          swift run TinyPruneDomainCheck
+          swift run TinyPruneEngineCheck 2>&1 | tee .build/engine-smoke.log
+      - name: Native view and lifecycle smoke
+        id: ui
+        run: |
+          set -euo pipefail
+          swift run TinyPruneUISnapshots 2>&1 | tee .build/ui-smoke.log
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          line = next(line for line in Path('.build/ui-smoke.log').read_text().splitlines() if line.startswith('PNG output directory: '))
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('snapshots=' + line.split(': ', 1)[1] + '\n')
+          PY
+      - name: Package and verify direct preview
+        run: |
+          set -euo pipefail
+          swift Scripts/package-app.swift
+          Scripts/verify-signing.sh .build/package/TinyPrune.app
+      - name: Unattended Homebrew installation on fresh runner
+        run: |
+          set -euo pipefail
+          TINYPRUNE_DISTRIBUTION=homebrew swift Scripts/package-app.swift
+          Scripts/verify-signing.sh .build/package/TinyPrune.app
+          python3 Scripts/smoke-homebrew.py 2>&1 | tee .build/homebrew-smoke.log
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: native-acceptance-${{ matrix.runner }}
+          path: |
+            .build/*.log
+            ${{ steps.ui.outputs.snapshots }}
+          retention-days: 7

@@ -1,5 +1,6 @@
 import Foundation
 import TinyPruneDomain
+import TinyPruneIPC
 
 public struct PolicySnapshot: Sendable {
     public let rules: [LifetimeRule]
@@ -117,6 +118,7 @@ public enum TrashExecutionError: Error, Equatable, Sendable {
     case auditWriteFailed(String)
     case filesystemOperationFailed(String)
     case movedButAuditFailed(path: String, detail: String)
+    case updateInstallationPending
 }
 
 private struct TrashAuthorization {
@@ -142,22 +144,42 @@ public actor TrashCoordinator {
     private let fileAccess: any TrashFileAccess
     private let audit: any TrashAuditRecording
     private let clock: any SafetyClock
+    private let updateGate: UpdateInstallationGate
 
     public init(
         policyStore: any PolicySnapshotProviding,
         fileAccess: any TrashFileAccess,
         audit: any TrashAuditRecording,
-        clock: any SafetyClock = SystemSafetyClock()
+        clock: any SafetyClock = SystemSafetyClock(),
+        updateGate: UpdateInstallationGate = UpdateInstallationGate()
     ) {
         self.policyStore = policyStore
         self.fileAccess = fileAccess
         self.audit = audit
         self.clock = clock
+        self.updateGate = updateGate
+    }
+
+    public nonisolated func observeUpdateGateChanges(_ onChange: @escaping @Sendable () -> Void) throws -> UpdateInstallationObservation {
+        try updateGate.observeChanges(onChange)
     }
 
     public func execute(_ request: TrashRequest) async throws -> TrashExecutionOutcome {
         let path = request.candidateIdentity.pathHint
         let now = clock.now()
+        let updatePermit: UpdateTrashPermit?
+        do {
+            updatePermit = try updateGate.acquireTrashPermit()
+        } catch {
+            throw TrashExecutionError.policyReadFailed("update installation gate: \(error)")
+        }
+        guard let updatePermit else {
+            _ = try await recordSkip("app update installation is pending", request: request, at: now)
+            // A transient installation block is not terminal: the scheduler must retain this deadline.
+            throw TrashExecutionError.updateInstallationPending
+        }
+        // ARC may otherwise release the permit before an awaited filesystem operation completes.
+        defer { withExtendedLifetime(updatePermit) {} }
         let snapshot: PolicySnapshot
         do {
             snapshot = try await policyStore.loadSnapshot()

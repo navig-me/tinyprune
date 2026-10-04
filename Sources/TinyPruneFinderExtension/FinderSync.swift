@@ -15,10 +15,39 @@ final class FinderSync: FIFinderSync {
 
     override init() {
         super.init()
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self, selector: #selector(monitoringContextChanged(_:)),
+            name: NSWorkspace.didLaunchApplicationNotification, object: nil
+        )
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self, selector: #selector(monitoringContextChanged(_:)),
+            name: NSWorkspace.didMountNotification, object: nil
+        )
+        DistributedNotificationCenter.default().addObserver(
+            self, selector: #selector(monitoringContextChanged(_:)),
+            name: Notification.Name("com.navig-me.tinyprune.managedRootsChanged"), object: nil
+        )
         refreshMonitoredDirectories()
     }
 
+    deinit {
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
+        DistributedNotificationCenter.default().removeObserver(self)
+    }
+
     // MARK: Monitoring
+
+    override func beginObservingDirectory(at url: URL) {
+        refreshMonitoredDirectories()
+    }
+
+    @objc private func monitoringContextChanged(_ notification: Notification) {
+        if notification.name == NSWorkspace.didLaunchApplicationNotification {
+            let application = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            guard application?.bundleIdentifier == "com.navig-me.tinyprune" else { return }
+        }
+        refreshMonitoredDirectories()
+    }
 
     private func refreshMonitoredDirectories() {
         let client = self.client
@@ -45,28 +74,33 @@ final class FinderSync: FIFinderSync {
         guard menuKind == .contextualMenuForItems else { return menu }
         refreshMonitoredDirectories()
 
+        let urls = FIFinderSyncController.default().selectedItemURLs() ?? []
+        guard !urls.isEmpty else { return menu }
         let submenu = NSMenu(title: "TinyPrune")
-        func add(_ title: String, _ action: Action) {
+        submenu.autoenablesItems = false
+        func add(_ title: String, _ action: Action, enabled: Bool = true) {
             let item = NSMenuItem(title: title, action: #selector(menuAction(_:)), keyEquivalent: "")
             item.target = self
             item.tag = action.rawValue
             submenu.addItem(item)
+            item.representedObject = urls
+            item.isEnabled = enabled
         }
         add("Keep", .keep)
         add("Expire Tonight", .tonight)
         add("Tomorrow", .tomorrow)
         add("7 Days", .sevenDays)
         add("30 Days", .thirtyDays)
-        add("Custom…", .customExpiry)
+        // App handoffs open a single editor; never silently discard a multi-selection.
+        add("Custom…", .customExpiry, enabled: urls.count == 1)
         add("Use Folder Rules", .inherit)
         add("Why will this expire?", .why)
 
-        let urls = FIFinderSyncController.default().selectedItemURLs() ?? []
         if urls.contains(where: Self.isDirectory) {
             submenu.addItem(.separator())
-            add("Set Folder Lifetime…", .folderLifetime)
+            add("Set Folder Lifetime…", .folderLifetime, enabled: urls.count == 1)
             add("Protect Folder (Keep Contents)", .protectFolder)
-            add("Create Rule…", .createRule)
+            add("Create Rule…", .createRule, enabled: urls.count == 1)
         }
 
         let root = NSMenuItem(title: "TinyPrune", action: nil, keyEquivalent: "")
@@ -83,7 +117,7 @@ final class FinderSync: FIFinderSync {
 
     @objc private func menuAction(_ sender: NSMenuItem) {
         guard let action = Action(rawValue: sender.tag) else { return }
-        let urls = FIFinderSyncController.default().selectedItemURLs() ?? []
+        let urls = sender.representedObject as? [URL] ?? []
         guard !urls.isEmpty else {
             Self.showAlert(title: "Nothing selected", message: "TinyPrune could not read the Finder selection.")
             return
@@ -98,12 +132,17 @@ final class FinderSync: FIFinderSync {
     private static func run(_ action: Action, urls: [URL], client: TinyPruneAgentClient) async {
         switch action {
         case .folderLifetime, .createRule:
-            let directories = urls.filter(isDirectory)
-            for url in directories {
-                openApp(route: action == .createRule ? "rule" : "folder", path: url.path)
+            guard urls.count == 1, let url = urls.first, isDirectory(url) else {
+                showAlert(title: "Select one folder", message: "Select a single folder to open its TinyPrune editor.")
+                return
             }
+            openApp(route: action == .createRule ? "rule" : "folder", path: url.path)
         case .customExpiry:
-            for url in urls.prefix(1) { openApp(route: "expire", path: url.path) }
+            guard urls.count == 1, let url = urls.first else {
+                showAlert(title: "Select one item", message: "Select a single file or folder to set a custom expiry.")
+                return
+            }
+            openApp(route: "expire", path: url.path)
         case .keep:
             await mutate(urls, client: client, success: "Kept") { .setItemOverride(path: $0, policy: .keep(protectDescendants: false)) }
         case .protectFolder:

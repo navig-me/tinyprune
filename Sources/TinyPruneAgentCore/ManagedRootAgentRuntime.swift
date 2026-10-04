@@ -73,7 +73,7 @@ public actor ManagedRootAgentRuntime {
         await lifecycle.start()
         do {
             try await indexer.start()
-            await scheduler.start()
+            try await scheduler.start()
             await operationGate.release()
         } catch {
             lifecycleGeneration = nil

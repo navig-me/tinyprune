@@ -32,6 +32,12 @@ guard ["direct", "homebrew"].contains(distribution) else {
     FileHandle.standardError.write(Data("TINYPRUNE_DISTRIBUTION must be direct or homebrew\n".utf8))
     exit(1)
 }
+let publicUpdateKey = environment["TINYPRUNE_SPARKLE_PUBLIC_KEY"] ?? ""
+guard publicUpdateKey.isEmpty || Data(base64Encoded: publicUpdateKey)?.count == 32 else {
+    FileHandle.standardError.write(Data("TINYPRUNE_SPARKLE_PUBLIC_KEY must be a base64 Ed25519 public key (32 bytes).\n".utf8))
+    exit(1)
+}
+let updatesEnabled = distribution == "direct" && !isAdHoc && !publicUpdateKey.isEmpty
 // The xcbuild-based `--arch a --arch b` path rejects the Finder extension's Swift 5 language mode
 // ("SWIFT_VERSION '' is unsupported"), so universal builds compile each architecture with the
 // native build system and merge the products with lipo.
@@ -91,6 +97,25 @@ do {
     try copyExecutable("tinyprune")
     try Data("APPLTPRN".utf8).write(to: contentsURL.appendingPathComponent("PkgInfo"))
 
+    // SwiftPM links the binary artifact but does not embed it in a hand-packaged app.
+    // Discover the one macOS universal framework from the pinned artifact, not build products.
+    let artifactsURL = repositoryRoot.appendingPathComponent(".build/artifacts", isDirectory: true)
+    guard let artifacts = fileManager.enumerator(at: artifactsURL, includingPropertiesForKeys: [.isDirectoryKey]) else {
+        throw NSError(domain: "TinyPrunePackager", code: 1, userInfo: [NSLocalizedDescriptionKey: "Sparkle SwiftPM artifact is missing."])
+    }
+    var sparkleSources: [URL] = []
+    for case let url as URL in artifacts where url.lastPathComponent == "Sparkle.framework" {
+        if url.path.contains("macos-") { sparkleSources.append(url) }
+        artifacts.skipDescendants()
+    }
+    guard sparkleSources.count == 1, let sparkleSource = sparkleSources.first else {
+        throw NSError(domain: "TinyPrunePackager", code: 1, userInfo: [NSLocalizedDescriptionKey: "Expected one pinned macOS Sparkle.framework artifact."])
+    }
+    let frameworksURL = contentsURL.appendingPathComponent("Frameworks", isDirectory: true)
+    try fileManager.createDirectory(at: frameworksURL, withIntermediateDirectories: true)
+    let sparkleURL = frameworksURL.appendingPathComponent("Sparkle.framework", isDirectory: true)
+    try run("/usr/bin/ditto", [sparkleSource.path, sparkleURL.path])
+
     let fontsSourceURL = repositoryRoot.appendingPathComponent("Resources/Fonts", isDirectory: true)
     let fontsURL = resourcesURL.appendingPathComponent("Fonts", isDirectory: true)
     try fileManager.copyItem(at: fontsSourceURL, to: fontsURL)
@@ -112,7 +137,17 @@ do {
         "LSMinimumSystemVersion": "14.0",
         "NSHighResolutionCapable": true,
         "TinyPruneDistribution": distribution,
-        "SUEnableAutomaticChecks": distribution == "direct",
+        "TinyPruneUpdatesEnabled": updatesEnabled,
+        "TinyPruneSigning": isAdHoc ? "ad-hoc" : "developer-id",
+        "SUEnableAutomaticChecks": updatesEnabled,
+        "SUAllowsAutomaticUpdates": false,
+        "SUAutomaticallyUpdate": false,
+        "SUFeedURL": "https://tinyprune.com/updates/appcast.xml",
+        "SUPublicEDKey": publicUpdateKey,
+        "SURequireSignedFeed": true,
+        "SUVerifyUpdateBeforeExtraction": true,
+        "SUSignedFeedFailureExpirationInterval": 0,
+        "SUEnableSystemProfiling": false,
         "ATSApplicationFontsPath": "Fonts",
         "NSPrincipalClass": "NSApplication",
         "CFBundleURLTypes": [[
@@ -150,20 +185,38 @@ do {
     // Every component uses hardened runtime; release builds add a secure timestamp.
     // The Finder extension keeps its own bundle identifier and the sandbox entitlements
     // (App Sandbox is mandatory for Finder Sync). It is signed before its container.
-    func sign(_ path: URL, identifier: String? = nil, entitlements: URL? = nil) throws {
+    func sign(_ path: URL, identifier: String? = nil, entitlements: URL? = nil, preserveEntitlements: Bool = false) throws {
         var arguments = ["--force", "--sign", signIdentity, "--options", "runtime", isAdHoc ? "--timestamp=none" : "--timestamp"]
         if let identifier { arguments += ["--identifier", identifier] }
         if let entitlements { arguments += ["--entitlements", entitlements.path] }
+        if preserveEntitlements { arguments += ["--preserve-metadata=entitlements"] }
         try run("/usr/bin/codesign", arguments + [path.path])
     }
+    // Sign nested Sparkle helpers inside-out; never use --deep to sign.
+    let sparkleVersionURL = sparkleURL.appendingPathComponent("Versions/B")
+    for helper in [
+        "XPCServices/Downloader.xpc",
+        "XPCServices/Installer.xpc",
+        "Autoupdate",
+        "Updater.app",
+    ] {
+        let helperURL = sparkleVersionURL.appendingPathComponent(helper)
+        if fileManager.fileExists(atPath: helperURL.path) { try sign(helperURL, preserveEntitlements: true) }
+    }
+    try sign(sparkleURL)
     try sign(extensionURL, identifier: finderExtensionIdentifier, entitlements: finderEntitlementsURL)
     // Security-scoped bookmarks created by the app must resolve in the agent, so every
     // executable that touches them shares the app's signing identifier (ADR 0004).
     for name in ["TinyPruneAgent", "tinyprune"] {
         try sign(macOSURL.appendingPathComponent(name), identifier: appIdentifier)
     }
-    try sign(appURL, identifier: appIdentifier)
+    try sign(appURL, identifier: appIdentifier, entitlements: isAdHoc ? repositoryRoot.appendingPathComponent("Resources/Entitlements/AppDevelopment.entitlements") : nil)
     try run("/usr/bin/codesign", ["--verify", "--deep", "--strict", appURL.path])
+    if !updatesEnabled {
+        print(distribution == "homebrew" ? "In-app updates disabled: Homebrew manages this distribution." :
+              isAdHoc ? "In-app updates disabled: unsigned/development preview." :
+              "In-app updates disabled: TINYPRUNE_SPARKLE_PUBLIC_KEY is not configured.")
+    }
     if isAdHoc {
         print("Packaged development app (ad-hoc signature, hardened runtime): \(appURL.path)")
         print("Developer ID signing and notarization require TINYPRUNE_SIGN_IDENTITY; see ADR 0004.")

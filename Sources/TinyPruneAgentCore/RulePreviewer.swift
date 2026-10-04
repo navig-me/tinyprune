@@ -158,11 +158,15 @@ struct RulePreviewer: Sendable {
         }
 
         let recursive = rule.scope.recursive
+        let traversalFailure = PreviewTraversalFailure()
         guard let enumerator = FileManager.default.enumerator(
             at: URL(fileURLWithPath: scopePath, isDirectory: true),
             includingPropertiesForKeys: [.isSymbolicLinkKey],
             options: [],
-            errorHandler: { _, _ in true }
+            errorHandler: { url, error in
+                traversalFailure.record(url: url, error: error)
+                return false
+            }
         ) else {
             throw RulePreviewError.invalidRequest("The rule's folder cannot be read.")
         }
@@ -190,6 +194,7 @@ struct RulePreviewer: Sendable {
                 if !recursive && values?.isDirectory == true { enumerator.skipDescendants() }
                 batch.append(child)
             }
+            try traversalFailure.check()
             for child in batch {
                 try Task.checkCancellation()
                 if configuration.uptime() - started >= limits.maxDurationSeconds {
@@ -213,8 +218,16 @@ struct RulePreviewer: Sendable {
         started: TimeInterval,
         tally: inout Tally
     ) async throws {
-        // Unreadable, vanished or symlinked entries are skipped, never fatal to a dry run.
-        guard let candidate = try? await fileAccess.inspect(path: url.path) else { return }
+        // Vanished and symlinked entries are harmless; access failures must not look like exact zero matches.
+        let candidate: RuleCandidate
+        do {
+            guard let observed = try await fileAccess.inspect(path: url.path) else { return }
+            candidate = observed
+        } catch LocalFileAccessError.symbolicLink {
+            return
+        } catch {
+            throw RulePreviewError.invalidRequest("Cannot read \(url.path). Check folder access and volume availability, then preview again. \(error.localizedDescription)")
+        }
         let evaluated = try await IndexedCandidateEvaluation.hydrate(candidate, rules: rules, store: store, now: now)
         guard case .scheduled(let explanation) = IndexedCandidateEvaluation.resolve(evaluated, rules: rules, snapshot: snapshot),
               explanation.matchedRuleID == rule.id else { return }
@@ -267,5 +280,24 @@ struct RulePreviewer: Sendable {
         var truncated = false
         var coveredDirectory: String?
         var samples: [AgentPreviewSample] = []
+    }
+}
+
+private final class PreviewTraversalFailure: @unchecked Sendable {
+    private let lock = NSLock()
+    private var message: String?
+
+    func record(url: URL, error: any Error) {
+        lock.lock()
+        defer { lock.unlock() }
+        if message == nil {
+            message = "Cannot read \(url.path). Check folder access and volume availability, then preview again. \(error.localizedDescription)"
+        }
+    }
+
+    func check() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        if let message { throw RulePreviewError.invalidRequest(message) }
     }
 }

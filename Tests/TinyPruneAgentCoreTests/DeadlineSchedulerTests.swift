@@ -4,8 +4,52 @@ import Testing
 import TinyPruneDomain
 import TinyPruneEngine
 import TinyPrunePersistence
+import TinyPruneIPC
 
 @Suite struct DeadlineSchedulerTests {
+    @Test func updateBlockPreservesDeadlineAndMarkerRemovalWakesCleanup() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TinyPruneUpdateScheduler-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try SQLiteSafetyStore(databaseURL: directory.appendingPathComponent("state.sqlite3"))
+        let candidate = RuleCandidate(
+            identity: FilesystemIdentity(volumeIdentifier: UUID(), resourceIdentifier: Data([42]), pathHint: "/Developer/update.tmp"),
+            name: "update.tmp", kind: .file, timestamps: CandidateTimestamps(modified: Date(timeIntervalSince1970: 1_000))
+        )
+        let rule = try LifetimeRule(
+            name: "Update fixture", scope: RuleScope(path: "/Developer", recursive: true),
+            matcher: ItemMatcher(itemKind: .file, exactNames: ["update.tmp"]),
+            expiryBasis: .modified, lifetime: RuleDuration(seconds: 10), action: .trashItem, state: .active
+        )
+        try await store.replaceSnapshot(PolicySnapshot(rules: [rule], overrides: [], globallyPaused: false))
+        let deadline = makeDeadline(candidate: candidate, rule: rule, scheduledAt: Date(timeIntervalSince1970: 1_010))
+        try await store.saveDeadline(deadline)
+        let updater = UpdateInstallationGate(directory: directory.appendingPathComponent("gate"))
+        try updater.beginInstallation(targetVersion: "2", currentVersion: "1")
+        let moved = TestExpectation("marker removal wakes retained due cleanup")
+        let signal = SchedulerActionSignal(expectation: moved)
+        let access = SchedulerTrashFileAccess(candidate: candidate) { signal.recordMove() }
+        let blocked = TestExpectation("scheduler observes pending update")
+        let audit = UpdateBlockAudit(store: store, blocked: blocked)
+        let coordinator = TrashCoordinator(
+            policyStore: store, fileAccess: access, audit: audit,
+            clock: MutableSchedulerClock(Date(timeIntervalSince1970: 1_010)),
+            updateGate: UpdateInstallationGate(directory: directory.appendingPathComponent("gate"))
+        )
+        let scheduler = DeadlineScheduler(store: store, coordinator: coordinator, clock: MutableSchedulerClock(Date(timeIntervalSince1970: 1_010)))
+        try await scheduler.start()
+        await blocked.expectFulfilled(timeout: 5)
+        #expect(try await store.nextDeadline() == deadline)
+        #expect(signal.moveCount == 0)
+        try updater.finishInstallation()
+        await moved.expectFulfilled(timeout: 5)
+        // Stop drains the worker's wakeup; runDueNow serializes the final deadline-removal state.
+        await scheduler.stop()
+        try await scheduler.runDueNow()
+        #expect(try await store.nextDeadline() == nil)
+        #expect(signal.moveCount == 1)
+    }
+
     @Test func testSignalReplacesFutureDeadlineAndRunsOnlyOnePreflight() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TinyPrune-Scheduler-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -47,7 +91,7 @@ import TinyPrunePersistence
             clock: clock,
             onWaitingForDeadline: { waitSignal.signal() }
         )
-        await scheduler.start()
+        try await scheduler.start()
         await waiting.expectFulfilled(timeout: 5)
 
         clock.set(Date(timeIntervalSince1970: 1_010))
@@ -137,4 +181,14 @@ private final class MutableSchedulerClock: SafetyClock, @unchecked Sendable {
 
 private enum SchedulerTestError: Error {
     case identityChanged
+}
+
+private struct UpdateBlockAudit: TrashAuditRecording {
+    let store: SQLiteSafetyStore
+    let blocked: TestExpectation
+
+    func append(_ event: TrashAuditEvent) async throws {
+        try await store.append(event)
+        if event.kind == .safetySkipped { blocked.fulfill() }
+    }
 }

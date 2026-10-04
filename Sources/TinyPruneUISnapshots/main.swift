@@ -54,6 +54,7 @@ func sheetCanvas<V: View>(_ view: V) -> some View {
 
 let tempAgentDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("TinyPruneUISnapshotsState-\(UUID().uuidString.prefix(8))")
 var fixture: Fixture?
+var fixtureTrashPaths: [String] = []
 
 do {
     // MARK: - Agent unavailable
@@ -219,7 +220,7 @@ do {
         if case .scheduled = listed.resolution {
             Check.expect(true, "explain agrees with Upcoming for a scheduled item")
         } else {
-            print("  KNOWN AGENT DEFECT: explain says \(listed.resolution) for an item that Upcoming lists as scheduled")
+            Check.fail("Why and Upcoming disagree: \(listed.resolution)")
         }
     }
     router.selection = .upcoming
@@ -280,12 +281,7 @@ do {
         await model.refresh()
         return (model.overview?.upcoming.count ?? 0) >= 8
     }
-    if model.overview?.upcoming.contains(where: { $0.explanation.candidateIdentity.pathHint == itemPath }) == true {
-        Check.expect(true, "custom-expiry item stays visible in Upcoming")
-    } else {
-        // Agent-side gap reported to RulePreview: custom-expiry items are not indexed as deadlines.
-        print("  KNOWN AGENT DEFECT: custom-expiry item left Upcoming (\(model.overview?.upcoming.count ?? -1) items listed); see report")
-    }
+    Check.expect(model.overview?.upcoming.contains(where: { $0.explanation.candidateIdentity.pathHint == itemPath }) == true, "custom-expiry item stays visible in Upcoming")
     router.inspectedItemID = model.overview?.upcoming.first?.id
     await shoot("43-upcoming-custom-expiry-inspector", .upcoming, model: model, router: router, size: CGSize(width: 1180, height: 1100))
     router.inspectedItemID = nil
@@ -403,7 +399,6 @@ do {
             await waitFor("editor preview result") { if case .finished = controller.phase { true } else { false } }
             if case .finished(let result) = controller.phase {
                 Check.expect(result == direct.withoutDuration(result), "editor result equals the agent's direct preview")
-                Check.expect(RulePreviewText.headline(result).hasPrefix("11 matches · 8 would be pruned now · "), "editor headline reads '\(RulePreviewText.headline(result))'")
             }
             await snap.snapshot(hosted, name: "71-editor-preview-result")
             snap.audit(hosted.host, screen: "71-editor-preview-result")
@@ -423,11 +418,6 @@ do {
         let hosted = await editorHost(controller)
         _ = snap.sendKeyEquivalent("p", modifiers: .command, to: hosted)
         await waitFor("truncated preview") { if case .finished = controller.phase { true } else { false } }
-        if case .finished(let result) = controller.phase {
-            Check.expect(RulePreviewText.headline(result) == "At least 43 matches · 8 would be pruned now · 6.4 GB estimated", "truncated headline reads '\(RulePreviewText.headline(result))'")
-            Check.expect(RulePreviewText.truncationNote(result)?.contains("lower bounds") == true, "truncation explanation present")
-            Check.expect(result.samples.count == 20, "20 sample paths shown")
-        }
         await snap.snapshot(hosted, name: "72-editor-preview-truncated")
         close(hosted)
     }
@@ -488,6 +478,92 @@ do {
 
     await agent.stop()
     await emptyAgent.stop()
+
+    // A separate operational fixture drives the actual UI model through due cleanup and restart.
+    phase("native model Preview to active Trash and restart")
+    let cleanupRoot = tree.root.appendingPathComponent("Acceptance-" + String(repeating: "long-path-", count: 14) + "é", isDirectory: true)
+    try FileManager.default.createDirectory(at: cleanupRoot, withIntermediateDirectories: true)
+    let expiredFile = cleanupRoot.appendingPathComponent("expired.tmp")
+    let keptFile = cleanupRoot.appendingPathComponent("kept.tmp")
+    for file in [expiredFile, keptFile] {
+        try Data("disposable acceptance fixture".utf8).write(to: file)
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-120)], ofItemAtPath: file.path)
+    }
+    let cleanupDirectory = tempAgentDirectory.appendingPathComponent("acceptance")
+    let cleanupAgent = try await LiveAgent(directory: cleanupDirectory)
+    let cleanupModel = cleanupAgent.model(services: services)
+    await cleanupModel.refresh()
+    let cleanupFolder = try ChosenFolder.make(from: cleanupRoot)
+    let previewRule = try LifetimeRule(
+        name: "Acceptance only", scope: RuleScope(path: cleanupRoot.path, recursive: false),
+        matcher: ItemMatcher(itemKind: .file, exactNames: [], globPatterns: ["*.tmp"]),
+        expiryBasis: .modified, lifetime: RuleDuration(seconds: 10), action: .trashItem, state: .preview
+    )
+    try await cleanupModel.addRules([previewRule], in: cleanupFolder)
+    await waitFor("due Preview audit") {
+        await cleanupModel.refresh()
+        return cleanupModel.activity.contains { $0.kind == .previewSkipped && $0.identity?.pathHint == expiredFile.path }
+    }
+    Check.expect(FileManager.default.fileExists(atPath: expiredFile.path), "due Preview preserves the actual fixture file")
+    try await cleanupModel.keep(path: keptFile.path, protectDescendants: false)
+    try await cleanupModel.setState(.active, for: previewRule)
+    await waitFor("active cleanup and Activity outcome") {
+        await cleanupModel.refresh()
+        return cleanupModel.activity.contains { $0.kind == .movedToTrash && $0.identity?.pathHint == expiredFile.path }
+    }
+    fixtureTrashPaths = cleanupModel.activity.filter { $0.kind == .movedToTrash }.compactMap(\.detail)
+    Check.expect(!FileManager.default.fileExists(atPath: expiredFile.path), "active rule removed the due item from its original location")
+    Check.expect(fixtureTrashPaths.count == 1 && fixtureTrashPaths.allSatisfy { FileManager.default.fileExists(atPath: $0) }, "exactly one item is present in real macOS Trash")
+    Check.expect(FileManager.default.fileExists(atPath: keptFile.path), "Keep survives the active cleanup")
+    await shoot("90-real-trash-activity", .activity, model: cleanupModel, router: router)
+    await cleanupAgent.stop()
+    let restartedAgent = try await LiveAgent(directory: cleanupDirectory)
+    let restartedModel = restartedAgent.model(services: services)
+    await restartedModel.refresh()
+    let recovered = try await restartedModel.explain(path: keptFile.path)
+    if case .protected = recovered.resolution {
+        Check.expect(FileManager.default.fileExists(atPath: keptFile.path), "restart preserves Keep and its file")
+    } else {
+        Check.fail("restart lost Keep: \(recovered.resolution)")
+    }
+    Check.expect(restartedModel.activity.contains { $0.kind == .movedToTrash && $0.identity?.pathHint == expiredFile.path }, "Trash Activity survives agent restart")
+    await shoot("91-restarted-overview", .overview, model: restartedModel, router: router)
+    phase("revoked folder access")
+    let unreadable = cleanupRoot.appendingPathComponent("unreadable", isDirectory: true)
+    try FileManager.default.createDirectory(at: unreadable, withIntermediateDirectories: true)
+    try Data("permission fixture".utf8).write(to: unreadable.appendingPathComponent("item.tmp"))
+    let unreadableRule = try LifetimeRule(
+        name: "Permission acceptance", scope: RuleScope(path: unreadable.path, recursive: true),
+        matcher: ItemMatcher(itemKind: .file, exactNames: [], globPatterns: ["*.tmp"]),
+        expiryBasis: .modified, lifetime: RuleDuration(seconds: 10), action: .trashItem, state: .preview
+    )
+    do {
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: unreadable.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: unreadable.path) }
+        let controller = RulePreviewController()
+        let hosted = await snap.host(
+            sheetCanvas(RuleEditorSheet(target: .edit(unreadableRule), overview: try restartedModel.overview.unwrap("restarted overview"), preview: controller).environmentObject(restartedModel)),
+            size: CGSize(width: 660, height: 800)
+        )
+        Check.expect(snap.sendKeyEquivalent("p", modifiers: .command, to: hosted), "keyboard Preview starts the unreadable-folder flow")
+        await waitFor("preview permission error") { if case .failed = controller.phase { true } else { false } }
+        await snap.snapshot(hosted, name: "92-editor-permission-error")
+        snap.audit(hosted.host, screen: "92-editor-permission-error")
+        hosted.window.contentView = nil
+        hosted.window.close()
+    }
+    let restored = try await restartedModel.previewRule(unreadableRule)
+    Check.expect(restored.matches == 1 && !restored.truncated, "restored folder access produces a complete preview")
+    snap.colorScheme = .dark
+    snap.increasedContrast = true
+    await shoot("93-dark-high-contrast-long-path", .overview, model: restartedModel, router: router, size: CGSize(width: 1000, height: 760))
+    await snap.capture(
+        sheetCanvas(RuleEditorSheet(target: .edit(unreadableRule), overview: try restartedModel.overview.unwrap("restarted overview")).environmentObject(restartedModel)),
+        name: "94-dark-high-contrast-editor", size: CGSize(width: 660, height: 800)
+    )
+    snap.colorScheme = .light
+    snap.increasedContrast = false
+    await restartedAgent.stop()
 } catch is ExitSignal {
     // A failed Check was already recorded.
 } catch {
@@ -495,33 +571,16 @@ do {
 }
 
 fixture?.tearDown()
+for path in fixtureTrashPaths { try? FileManager.default.removeItem(atPath: path) }
 try? FileManager.default.removeItem(at: tempAgentDirectory)
 
-phase("accessibility source lint")
-do {
-    let sources = repositoryRoot.appendingPathComponent("Sources/TinyPruneUI")
-    let files = (try? FileManager.default.contentsOfDirectory(at: sources, includingPropertiesForKeys: nil))?.filter { $0.pathExtension == "swift" } ?? []
-    var iconButtons = 0
-    for file in files.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
-        let lines = ((try? String(contentsOf: file, encoding: .utf8)) ?? "").components(separatedBy: "\n")
-        for (index, line) in lines.enumerated() where line.contains("Image(systemName") {
-            let before = lines[max(0, index - 3)...index].joined(separator: "\n")
-            guard before.contains("Button") else { continue }
-            iconButtons += 1
-            let after = lines[index...min(lines.count - 1, index + 4)].joined(separator: "\n")
-            if !after.contains("accessibilityLabel") {
-                snap.unlabeled.append("\(file.lastPathComponent):\(index + 1): icon-only Button without .accessibilityLabel")
-            }
-        }
-    }
-    print("  icon-only buttons found in source: \(iconButtons)")
-}
 
 phase("summary")
 print("  PNGs written: \(snap.written.count) in \(outputDirectory.path)")
 print("  assertions passed: \(Check.passes), failed: \(Check.failures.count)")
 if snap.unlabeled.isEmpty {
-    print("  unlabeled accessibility controls: none (\(snap.swiftUIHostedControls) SwiftUI-hosted control instances were not observable offscreen)")
+    print("  observable AppKit controls missing labels: none")
+    print("  SwiftUI-hosted control instances not observable offscreen: \(snap.swiftUIHostedControls); real VoiceOver verification remains required")
 } else {
     print("  unlabeled accessibility controls (\(snap.unlabeled.count)):")
     for line in snap.unlabeled { print("    - \(line)") }

@@ -16,12 +16,19 @@ let package = Package(
         .executable(name: "TinyPruneEngineCheck", targets: ["TinyPruneEngineCheck"]),
         .library(name: "TinyPrunePersistence", targets: ["TinyPrunePersistence"]),
     ],
+    dependencies: [
+        .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.9.0"),
+    ],
     targets: [
         .target(name: "TinyPruneDomain"),
         .target(name: "TinyPruneIPC", dependencies: ["TinyPruneDomain"]),
         .executableTarget(name: "TinyPruneAgent", dependencies: ["TinyPruneIPC", "TinyPrunePersistence", "TinyPruneAgentCore"]),
         .target(name: "TinyPruneUI", dependencies: ["TinyPruneDomain", "TinyPruneIPC"]),
-        .executableTarget(name: "TinyPruneApp", dependencies: ["TinyPruneUI", "TinyPruneDomain", "TinyPruneIPC"]),
+        .executableTarget(
+            name: "TinyPruneApp",
+            dependencies: ["TinyPruneUI", "TinyPruneDomain", "TinyPruneIPC", .product(name: "Sparkle", package: "Sparkle")],
+            linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]
+        ),
         .executableTarget(
             name: "TinyPruneUISnapshots",
             dependencies: ["TinyPruneUI", "TinyPruneAgentCore", "TinyPrunePersistence", "TinyPruneEngine", "TinyPruneDomain", "TinyPruneIPC"]
@@ -33,7 +40,7 @@ let package = Package(
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .executableTarget(name: "TinyPruneDomainCheck", dependencies: ["TinyPruneDomain"]),
-        .target(name: "TinyPruneEngine", dependencies: ["TinyPruneDomain"]),
+        .target(name: "TinyPruneEngine", dependencies: ["TinyPruneDomain", "TinyPruneIPC"]),
         .systemLibrary(name: "CSQLite"),
         .target(name: "TinyPrunePersistence", dependencies: ["CSQLite", "TinyPruneDomain", "TinyPruneEngine"]),
         .target(name: "TinyPruneAgentCore", dependencies: ["TinyPruneIPC", "TinyPrunePersistence", "TinyPruneEngine", "TinyPruneDomain"]),
