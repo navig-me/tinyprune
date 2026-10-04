@@ -78,8 +78,7 @@ package struct OnboardingFlow: View {
 
     private var intro: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Image(systemName: "leaf.fill").font(.system(size: 34)).foregroundStyle(PrunePalette.plum)
-                .accessibilityHidden(true)
+            BrandMarkView(size: 56)
             Text("Files don’t all need to live forever.")
                 .font(Typography.display(size: 40))
                 .accessibilityAddTraits(.isHeader)

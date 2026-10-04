@@ -166,7 +166,11 @@ package struct TinyPruneRootView: View {
             case .settings: SettingsPage(overview: overview)
             }
         } else {
-            ContentUnavailableView("No local state", systemImage: "leaf", description: Text("Refresh to load TinyPrune rules."))
+            ContentUnavailableView {
+                Label { Text("No local state") } icon: { BrandMarkView(size: 44) }
+            } description: {
+                Text("Refresh to load TinyPrune rules.")
+            }
         }
     }
 
@@ -268,12 +272,16 @@ package struct TinyPruneSidebar: View {
         }
         .listStyle(.sidebar)
         .safeAreaInset(edge: .top, spacing: 0) {
-            Label("TinyPrune", systemImage: "leaf.fill")
-                .font(Typography.display(size: 17))
-                .foregroundStyle(PrunePalette.plum)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 18)
-                .padding(.vertical, 16)
+            HStack(spacing: 8) {
+                BrandMarkView(size: 24)
+                Text("TinyPrune")
+                    .font(Typography.display(size: 17))
+                    .foregroundStyle(PrunePalette.plum)
+            }
+            .accessibilityElement(children: .combine)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 16)
         }
         .background(PrunePalette.sidebar)
     }

@@ -24,10 +24,13 @@ struct TinyPruneApp: App {
             }
         }
 
-        MenuBarExtra("TinyPrune", systemImage: "leaf.fill", isInserted: $showMenuBarIcon) {
+        MenuBarExtra(isInserted: $showMenuBarIcon) {
             MenuBarContent()
                 .environmentObject(model)
                 .environmentObject(router)
+        } label: {
+            Image(nsImage: BrandMark.menuBarImage)
+                .accessibilityLabel("TinyPrune")
         }
     }
 }

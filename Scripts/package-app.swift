@@ -120,6 +120,13 @@ do {
     let fontsURL = resourcesURL.appendingPathComponent("Fonts", isDirectory: true)
     try fileManager.copyItem(at: fontsSourceURL, to: fontsURL)
 
+    // Same plum artwork as the website and in-app mark; icns is generated, never committed.
+    try run("/usr/bin/swift", [
+        repositoryRoot.appendingPathComponent("Scripts/make-app-icon.swift").path,
+        repositoryRoot.appendingPathComponent("website/assets/tinyprune-plum.svg").path,
+        resourcesURL.appendingPathComponent("AppIcon.icns").path,
+    ])
+
     try fileManager.createDirectory(at: extensionMacOSURL, withIntermediateDirectories: true)
     let extensionBinary = extensionMacOSURL.appendingPathComponent("TinyPruneFinderExtension")
     try fileManager.copyItem(at: binDirectory.appendingPathComponent("TinyPruneFinderExtension"), to: extensionBinary)
@@ -128,6 +135,7 @@ do {
     try writePropertyList([
         "CFBundleDevelopmentRegion": "en",
         "CFBundleExecutable": "TinyPruneApp",
+        "CFBundleIconFile": "AppIcon",
         "CFBundleIdentifier": appIdentifier,
         "CFBundleInfoDictionaryVersion": "6.0",
         "CFBundleName": "TinyPrune",

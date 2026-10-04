@@ -30,6 +30,10 @@ for key in ["onboardingCompleted", "showMenuBarIcon", "notificationsEnabled", "p
 
 phase("fonts")
 registerBundledFonts(repositoryRoot: repositoryRoot)
+do {
+    let canonical = try String(contentsOf: repositoryRoot.appendingPathComponent("website/assets/tinyprune-plum.svg"), encoding: .utf8)
+    Check.expect(canonical.trimmingCharacters(in: .whitespacesAndNewlines) == BrandMark.svg.trimmingCharacters(in: .whitespacesAndNewlines), "in-app brand mark is identical to the canonical website/app-icon SVG")
+}
 
 @MainActor
 func rootView(_ model: AgentViewModel, _ router: AppRouter) -> some View {
