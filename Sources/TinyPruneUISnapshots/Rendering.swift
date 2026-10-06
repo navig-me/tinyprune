@@ -120,7 +120,7 @@ final class Snapshotter {
         var result: [NSView] = []
         func visit(_ view: NSView) {
             result.append(view)
-            view.subviews.forEach(visit)
+            for child in view.subviews { visit(child) }
         }
         visit(root)
         return result
