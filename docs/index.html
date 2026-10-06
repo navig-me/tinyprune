@@ -92,6 +92,12 @@
           <p>Before each move, the agent checks the item's identity, current rules, protection, deadline, pause state, permissions, and volume availability again. The index schedules work; it does not authorize a move.</p>
           <h3>Pause and settings</h3>
           <p>Pause cleanup globally, for a managed folder, or for a rule. A timed global pause resumes when its time is up. In Settings, you can set the default grace period, protect hidden files, and choose how long to retain activity history. These settings apply to the app, Finder, and CLI.</p>
+          <h3>Activity and restoring items</h3>
+          <p>Activity summarizes only the loaded audit events: items moved to Trash, items skipped for safety, and the last recorded cleanup time. Each move offers <strong>Show in Trash</strong> to reveal its recorded destination in Finder. Exact original and Trash paths are copyable. If the destination no longer exists, the row says <strong>No longer in Trash</strong>.</p>
+          <p>To restore, use Finder’s <strong>Put Back</strong> in Trash, if available. TinyPrune does not restore items or empty Trash. Once an item leaves Trash, the audit event does not guarantee it can be recovered.</p>
+          <h3>Exporting and importing rule configuration</h3>
+          <p>In Settings, use <strong>Export rule config…</strong> and <strong>Import rules…</strong>. Export is not a complete backup: the restricted YAML format supports only expressible rules shared by every managed root, plus Keep overrides. Export reports how many rules were exported or skipped and lists skipped names and reasons; a partial or zero-rule export requires confirmation. The saved file also lists omissions in comments.</p>
+          <p>Import opens a review before applying additions, changes, and removals through the agent. Matching configuration-created rules can change, and absent configuration-created rules within the file’s roots can be removed; app-created rules are kept. Surviving app-created rules can therefore gain configuration copies when imported. Folder access must already be granted. New rules start in Preview; existing configuration rules retain their state. A lossless per-root backup format is not currently supported.</p>
         </section>
         <section id="rules">
           <h2>Choose what expires and when</h2>
@@ -109,8 +115,25 @@
         <section id="templates">
           <h2>Start with a template</h2>
           <p>Templates create ordinary rules you can edit, pause, duplicate, or delete. Pick a folder and adjust the match and lifetime to suit the files you actually keep there.</p>
-          <div class="table-wrap" tabindex="0" role="region" aria-label="Available templates"><table><thead><tr><th scope="col">Template</th><th scope="col">Use it for</th></tr></thead><tbody><tr><td>Downloads</td><td>Files that have outlived their usefulness in Downloads</td></tr><tr><td>Screenshots</td><td>Captures you only need briefly</td></tr><tr><td>Temporary Workspace</td><td>Disposable files in a folder you choose</td></tr><tr><td>Developer Cleanup</td><td>Generated dependencies in inactive projects</td></tr><tr><td>Build Artifacts</td><td>Build output you can regenerate</td></tr></tbody></table></div>
-          <p>Developer templates and very broad folders, such as your home folder, always start in Preview.</p>
+          <div class="table-wrap" tabindex="0" role="region" aria-label="Available templates"><table><thead><tr><th scope="col">Template</th><th scope="col">Use it for</th></tr></thead><tbody>
+            <tr><td>Downloads</td><td>DMG files after 7 days, ZIP files after 14, other items after 30 days in the folder</td></tr>
+            <tr><td>Screenshots</td><td>Screenshot and Screen Shot filenames, 7 days after creation</td></tr>
+            <tr><td>Temporary Workspace</td><td>Disposable items in a chosen folder, 3 days after first observation by default</td></tr>
+            <tr><td>Developer Cleanup</td><td>Dependencies and build output in inactive projects; Python caches after 7 days without modification</td></tr>
+            <tr><td>Build Artifacts</td><td>dist, build, target, coverage and .cache folders after 30 days of project inactivity</td></tr>
+            <tr><td>Xcode Derived Data</td><td><code>~/Library/Developer/Xcode/DerivedData</code>: immediate child folders, 60 days without modification</td></tr>
+            <tr><td>Xcode Device Support</td><td><code>~/Library/Developer/Xcode/iOS DeviceSupport</code>: immediate child folders, 180 days without modification</td></tr>
+            <tr><td>Homebrew Downloads</td><td><code>~/Library/Caches/Homebrew/downloads</code>: completed hash-prefixed tar.gz, tar.xz, tar.bz2, ZIP, DMG and PKG files, 90 days without modification; incomplete downloads excluded</td></tr>
+            <tr><td>npm Cache</td><td><code>~/.npm/_cacache</code>: package cache files, 90 days without modification</td></tr>
+            <tr><td>Yarn Classic Cache</td><td><code>~/Library/Caches/Yarn</code>: Yarn 1 cache files, 90 days without modification</td></tr>
+            <tr><td>pip Cache</td><td><code>~/Library/Caches/pip</code>: HTTP and wheel cache files, 90 days without modification</td></tr>
+            <tr><td>Cargo Registry Cache</td><td><code>~/.cargo/registry/cache</code>: .crate files only, 90 days without modification</td></tr>
+            <tr><td>Gradle Caches</td><td><code>~/.gradle/caches</code>: cache files only, 90 days without modification</td></tr>
+          </tbody></table></div>
+          <p>Developer and app-cache templates always start in Preview, as do very broad folders such as your home folder. Paths above are defaults, not discovery: choose and authorize the actual cache folder, especially if you changed a tool's configuration. The whole Library folder cannot be managed; specific cache subfolders can.</p>
+          <p>Caches are rebuilt or downloaded by their owning tool, not by TinyPrune. Removing them can slow builds and break offline installs until packages are downloaded again. Close the owning app and stop builds before enabling cleanup. Modification age does not prove that a cache is unused. Xcode regenerates Derived Data on a build; device symbols require reconnecting the matching device and can be needed to symbolicate older crashes.</p>
+          <p>No presets are provided for Xcode Archives (release builds and dSYMs), Docker data (volumes and containers), Zoom recordings in <code>~/Documents/Zoom</code>, screen recordings, or chat downloads: these may be irreplaceable user documents. Teams and Meet exports have no stable local export folder. Slack, Discord and Telegram download locations are configurable or shared with Downloads. Use a deliberately chosen disposable folder and review individual files instead. pnpm's store varies by configuration, volume and version and may contain a database and global virtual store; use <code>pnpm store prune</code> rather than a generic age rule. Yarn 2+ project caches may be checked into source control and are excluded.</p>
+          <p>Path and recovery references: <a href="https://stackoverflow.com/questions/39481549/what-can-i-delete-from-library-developer-xcode-folder">Xcode folders</a>, <a href="https://docs.brew.sh/Manpage">Homebrew cache</a>, <a href="https://docs.brew.sh/rubydoc/AbstractFileDownloadStrategy.html">Homebrew completed downloads</a>, <a href="https://docs.npmjs.com/cli/v11/commands/npm-cache">npm cache</a>, <a href="https://classic.yarnpkg.com/lang/en/docs/cli/cache/">Yarn 1 recovery</a>, <a href="https://github.com/yarnpkg/yarn/blob/master/src/util/user-dirs.js">Yarn macOS path</a>, <a href="https://pip.pypa.io/en/stable/topics/caching/">pip cache</a>, <a href="https://doc.rust-lang.org/cargo/guide/cargo-home.html">Cargo home</a>, <a href="https://docs.gradle.org/current/userguide/directory_layout.html">Gradle caches</a>, <a href="https://pnpm.io/settings/store">pnpm store layout</a>.</p>
         </section>
         <section id="finder" aria-labelledby="finder-title">
           <h2 id="finder-title">Use the Finder menu</h2>

@@ -32,9 +32,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [macos-15, macos-15-intel]
+        runner: [macos-14, macos-15, macos-15-intel]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      # macOS 14 defaults to Xcode 15.4 (Swift 5); select its installed Swift 6 toolchain.
+      # https://github.com/actions/runner-images/blob/main/images/macos/macos-14-Readme.md
+      - name: Select Xcode 16.2 on deployment-floor runner
+        if: matrix.runner == 'macos-14'
+        run: sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
       - name: Native behavior and safety suite
         run: |
           set -euo pipefail

@@ -72,8 +72,29 @@ guard GlobPattern("**/node_modules").matches("node_modules"),
 
 // Templates must produce ordinary valid rules that resolve without ambiguity.
 for template in RuleTemplate.allCases {
-    let produced = try template.rules(in: "/Users/example/Work", state: .preview)
+    let folder = template.suggestedFolder.map { "/Users/example" + $0.dropFirst() } ?? "/Users/example/Work"
+    _ = try ManagedRoot(displayName: template.title, path: folder, bookmarkData: Data([1]))
+    let produced = try template.rules(in: folder, state: .preview)
     guard !produced.isEmpty, produced.allSatisfy({ $0.state == .preview && !$0.naturalDescription().isEmpty }) else {
+        throw SmokeFailure.incorrectResolution
+    }
+}
+// Exercise actual app-cache evaluation, not just template construction.
+for template in RuleTemplate.allCases where template.suggestedFolder != nil {
+    let folder = "/Users/example" + template.suggestedFolder!.dropFirst()
+    let rule = try template.rules(in: folder, state: .active)[0]
+    let name = template == .cargoRegistryCache ? "registry/package.crate" :
+        template == .homebrewDownloads ? "hash--package.tar.gz" : "old-cache"
+    let modified = Date(timeIntervalSince1970: 0)
+    let item = RuleCandidate(
+        identity: FilesystemIdentity(volumeIdentifier: UUID(), resourceIdentifier: Data(name.utf8), pathHint: folder + "/" + name),
+        name: URL(fileURLWithPath: name).lastPathComponent,
+        kind: rule.matcher.itemKind,
+        timestamps: CandidateTimestamps(modified: modified)
+    )
+    guard case .scheduled(let explanation) = RuleEvaluator.evaluate(candidate: item, against: rule),
+          explanation.disposition == .preview,
+          explanation.eligibleAt == modified.addingTimeInterval(rule.lifetime.seconds) else {
         throw SmokeFailure.incorrectResolution
     }
 }

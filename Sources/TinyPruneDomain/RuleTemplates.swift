@@ -7,6 +7,14 @@ public enum RuleTemplate: String, CaseIterable, Codable, Sendable, Identifiable 
     case screenshots
     case temporaryWorkspace
     case buildArtifacts
+    case xcodeDerivedData
+    case xcodeDeviceSupport
+    case homebrewDownloads
+    case npmCache
+    case yarnClassicCache
+    case pipCache
+    case cargoRegistryCache
+    case gradleCaches
 
     public var id: String { rawValue }
 
@@ -17,6 +25,14 @@ public enum RuleTemplate: String, CaseIterable, Codable, Sendable, Identifiable 
         case .screenshots: "Screenshots"
         case .temporaryWorkspace: "Temporary Workspace"
         case .buildArtifacts: "Build Artifacts"
+        case .xcodeDerivedData: "Xcode Derived Data"
+        case .xcodeDeviceSupport: "Xcode Device Support"
+        case .homebrewDownloads: "Homebrew Downloads"
+        case .npmCache: "npm Cache"
+        case .yarnClassicCache: "Yarn Classic Cache"
+        case .pipCache: "pip Cache"
+        case .cargoRegistryCache: "Cargo Registry Cache"
+        case .gradleCaches: "Gradle Caches"
         }
     }
 
@@ -27,19 +43,45 @@ public enum RuleTemplate: String, CaseIterable, Codable, Sendable, Identifiable 
         case .screenshots: "Screenshots 7 days after they are created."
         case .temporaryWorkspace: "Anything placed in the chosen folder expires after a set time."
         case .buildArtifacts: "dist, build, target, coverage, and .cache folders after 30 days of project inactivity."
+        case .xcodeDerivedData: "Generated project folders after 60 days without modification; Xcode rebuilds them."
+        case .xcodeDeviceSupport: "Device symbol folders after 180 days without modification; reconnect the matching device to restore them."
+        case .homebrewDownloads: "Completed package downloads after 90 days without modification; Homebrew downloads them again."
+        case .npmCache: "Package cache files after 90 days without modification; npm fetches missing packages again."
+        case .yarnClassicCache: "Yarn 1 package caches after 90 days without modification; excludes project-local Yarn caches."
+        case .pipCache: "HTTP and wheel cache files after 90 days without modification; pip downloads or rebuilds them."
+        case .cargoRegistryCache: "Downloaded .crate archives after 90 days without modification; leaves sources, credentials, and tools alone."
+        case .gradleCaches: "Generated and downloaded cache files after 90 days without modification; leaves Gradle settings and wrappers alone."
         }
     }
 
-    /// Developer templates cover a broad tree, so callers should start them in Preview.
+    /// Home-relative suggestion only; users must choose and authorize the actual folder.
+    public var suggestedFolder: String? {
+        switch self {
+        case .xcodeDerivedData: "~/Library/Developer/Xcode/DerivedData"
+        case .xcodeDeviceSupport: "~/Library/Developer/Xcode/iOS DeviceSupport"
+        case .homebrewDownloads: "~/Library/Caches/Homebrew/downloads"
+        case .npmCache: "~/.npm/_cacache"
+        case .yarnClassicCache: "~/Library/Caches/Yarn"
+        case .pipCache: "~/Library/Caches/pip"
+        case .cargoRegistryCache: "~/.cargo/registry/cache"
+        case .gradleCaches: "~/.gradle/caches"
+        default: nil
+        }
+    }
+
+    /// Developer and app-cache templates must start in Preview.
     public var isBroad: Bool {
         switch self {
-        case .developerCleanup, .buildArtifacts: true
+        case .developerCleanup, .buildArtifacts, .xcodeDerivedData, .xcodeDeviceSupport,
+             .homebrewDownloads, .npmCache, .yarnClassicCache, .pipCache,
+             .cargoRegistryCache, .gradleCaches: true
         case .downloads, .screenshots, .temporaryWorkspace: false
         }
     }
 
     public func rules(in folderPath: String, state: RuleState, temporaryLifetime: TimeInterval = 3 * 86_400) throws -> [LifetimeRule] {
-        let scope = try RuleScope(path: folderPath, recursive: true)
+        let scope = try RuleScope(path: folderPath, recursive: self != .xcodeDerivedData && self != .xcodeDeviceSupport)
+        let initialState: RuleState = isBroad && state == .active ? .preview : state
         let day: TimeInterval = 86_400
 
         func rule(_ name: String, kind: ItemKind, names: Set<String> = [], globs: Set<String> = [], basis: ExpiryBasis, days: TimeInterval) throws -> LifetimeRule {
@@ -50,7 +92,7 @@ public enum RuleTemplate: String, CaseIterable, Codable, Sendable, Identifiable 
                 expiryBasis: basis,
                 lifetime: RuleDuration(seconds: days * day),
                 action: .trashItem,
-                state: state
+                state: initialState
             )
         }
 
@@ -83,6 +125,22 @@ public enum RuleTemplate: String, CaseIterable, Codable, Sendable, Identifiable 
             )]
         case .buildArtifacts:
             return [try rule("Old build artifacts", kind: .directory, names: ["dist", "build", "target", "coverage", ".cache"], basis: .projectActivity, days: 30)]
+        case .xcodeDerivedData:
+            return [try rule("Old Xcode derived data", kind: .directory, basis: .modified, days: 60)]
+        case .xcodeDeviceSupport:
+            return [try rule("Old iOS device symbols", kind: .directory, basis: .modified, days: 180)]
+        case .homebrewDownloads:
+            return [try rule("Old completed Homebrew downloads", kind: .file, globs: ["*--*.tar.gz", "*--*.tar.xz", "*--*.tar.bz2", "*--*.zip", "*--*.dmg", "*--*.pkg"], basis: .modified, days: 90)]
+        case .npmCache:
+            return [try rule("Old npm cache files", kind: .file, basis: .modified, days: 90)]
+        case .yarnClassicCache:
+            return [try rule("Old Yarn Classic cache files", kind: .file, basis: .modified, days: 90)]
+        case .pipCache:
+            return [try rule("Old pip cache files", kind: .file, basis: .modified, days: 90)]
+        case .cargoRegistryCache:
+            return [try rule("Old downloaded crates", kind: .file, globs: ["**/*.crate"], basis: .modified, days: 90)]
+        case .gradleCaches:
+            return [try rule("Old Gradle cache files", kind: .file, basis: .modified, days: 90)]
         }
     }
 }

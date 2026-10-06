@@ -7,6 +7,97 @@ import TinyPruneIPC
 
 // MARK: - Activity
 
+package struct ActivitySummary {
+    package let movedCount: Int
+    package let safetySkippedCount: Int
+    package let lastCleanup: Date?
+
+    package init(events: [AgentActivityItem]) {
+        var moved = 0
+        var skipped = 0
+        var last: Date?
+        for event in events {
+            if event.kind == .movedToTrash {
+                moved += 1
+                last = max(last ?? event.occurredAt, event.occurredAt)
+            } else if event.kind == .safetySkipped {
+                skipped += 1
+            }
+        }
+        movedCount = moved
+        safetySkippedCount = skipped
+        lastCleanup = last
+    }
+
+    package var text: String {
+        let cleanup = lastCleanup.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? "none recorded"
+        return "In loaded activity: \(movedCount.formatted()) \(movedCount == 1 ? "item" : "items") moved to Trash; \(safetySkippedCount.formatted()) \(safetySkippedCount == 1 ? "item" : "items") skipped for safety. Last cleanup: \(cleanup)."
+    }
+}
+
+/// Reveals only the destination recorded by the agent; never restores or moves an item.
+@MainActor
+package struct ActivityTrashReveal {
+    private let exists: (String) -> Bool
+    private let reveal: ([URL]) -> Void
+
+    package init(
+        exists: @escaping (String) -> Bool = { FileManager.default.fileExists(atPath: $0) },
+        reveal: @escaping ([URL]) -> Void = { NSWorkspace.shared.activateFileViewerSelecting($0) }
+    ) {
+        self.exists = exists
+        self.reveal = reveal
+    }
+
+    package func destination(for item: AgentActivityItem) -> URL? {
+        guard item.kind == .movedToTrash, let path = item.detail, path.hasPrefix("/"), exists(path) else { return nil }
+        return URL(fileURLWithPath: path)
+    }
+
+    @discardableResult
+    package func show(_ item: AgentActivityItem) -> Bool {
+        guard let url = destination(for: item) else { return false }
+        reveal([url])
+        return true
+    }
+}
+
+package struct ActivityTrashRecovery: View {
+    package let item: AgentActivityItem
+    private let action: ActivityTrashReveal
+    private let shortcut: KeyboardShortcut?
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var available = false
+
+    package init(item: AgentActivityItem, action: ActivityTrashReveal = ActivityTrashReveal(), shortcut: KeyboardShortcut? = nil) {
+        self.item = item
+        self.action = action
+        self.shortcut = shortcut
+    }
+
+    package var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            if let path = item.detail { PathText(path: path) }
+            Button("Show in Trash") { available = action.show(item) }
+                .buttonStyle(.bordered)
+                .keyboardShortcut(shortcut)
+                .disabled(!available)
+                .accessibilityLabel("Show \(item.identity?.pathHint ?? "item") in Trash")
+                .help("Reveal the recorded Trash location in Finder. This does not restore the item.")
+            if !available {
+                Text("No longer in Trash").font(.caption).foregroundStyle(.secondary)
+            }
+            Text("To restore, use Finder’s Put Back in Trash, if available. TinyPrune does not restore items.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .onAppear { available = action.destination(for: item) != nil }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { available = action.destination(for: item) != nil }
+        }
+    }
+}
+
 struct ActivityPage: View {
     @EnvironmentObject private var model: AgentViewModel
 
@@ -19,6 +110,10 @@ struct ActivityPage: View {
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 22) {
+                Text(ActivitySummary(events: model.activity).text)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityAddTraits(.isStaticText)
                 if model.activity.isEmpty {
                     ContentUnavailableView(
                         "No activity yet",
@@ -41,6 +136,9 @@ struct ActivityPage: View {
                                     if let path = item.identity?.pathHint { PathText(path: path) }
                                     if item.isAttention, let detail = item.detail {
                                         Text(detail).font(.caption).foregroundStyle(.secondary)
+                                    }
+                                    if item.kind == .movedToTrash {
+                                        ActivityTrashRecovery(item: item)
                                     }
                                 }
                                 Spacer()
@@ -163,7 +261,11 @@ package struct TemplateApplySheet: View {
             let start: URL? = switch template {
             case .downloads: FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
             case .screenshots: FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first
-            default: nil
+            default:
+                // Presets for tools such as Xcode or pip name their usual folder; open there only if it exists.
+                template.suggestedFolder
+                    .map { URL(fileURLWithPath: NSString(string: $0).expandingTildeInPath) }
+                    .flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
             }
             if let chosen = try ChosenFolder.choose(startingAt: start) { folder = chosen }
         } catch { errorMessage = error.localizedDescription }
@@ -184,6 +286,26 @@ package struct TemplateApplySheet: View {
     }
 }
 
+package struct ConfigExportReview {
+    package let text: String
+    package let exportedCount: Int
+    package let skippedCount: Int
+    package let omissions: [String]
+
+    package init(policy: AgentPolicySnapshot) throws {
+        text = ConfigDocument.render(policy: policy.rules, roots: policy.managedRoots, overrides: policy.overrides)
+        let document = try ConfigDocument.parse(text, homeDirectory: NSHomeDirectory())
+        exportedCount = document.rules.count * document.roots.count
+        skippedCount = policy.rules.count - exportedCount
+        omissions = text.split(separator: "\n").filter { $0.hasPrefix("# - ") }.map { String($0.dropFirst(4)) }
+    }
+
+    package var summary: String {
+        "\(exportedCount.formatted()) rules exported; \(skippedCount.formatted()) rules skipped." +
+            (omissions.isEmpty ? "" : "\nNot exported:\n" + omissions.joined(separator: "\n"))
+    }
+}
+
 // MARK: - Settings
 
 struct SettingsPage: View {
@@ -195,6 +317,7 @@ struct SettingsPage: View {
     @AppStorage("previewBroadByDefault") private var previewByDefault = true
     @State private var launchesAtLogin = false
     @State private var errorMessage: String?
+    @State private var backupMessage: String?
     @State private var isRebuilding = false
     @State private var pendingImport: ImportPreview?
 
@@ -264,12 +387,20 @@ struct SettingsPage: View {
                             }
                         }
                 }
+            }
+            Section("Rule configuration") {
                 HStack {
-                    Button("Export configuration…", action: exportConfig)
-                    Button("Import configuration…", action: importConfig)
+                    Button("Export rule config…", action: exportConfig)
+                    Button("Import rules…", action: importConfig)
                 }
+                Text("This config format is not a complete backup: it exports only supported rules shared by every managed root, and Keep overrides. Review skipped items before exporting. Import reviews additions, changes, and removals before applying; folder access must already be granted and new rules start in Preview.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Text("The same files work with `tinyprune config validate|preview|apply`.")
                     .font(.caption).foregroundStyle(.secondary)
+                if let backupMessage {
+                    Text(backupMessage).textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
         .formStyle(.grouped)
@@ -279,7 +410,7 @@ struct SettingsPage: View {
             Button("OK", role: .cancel) { errorMessage = nil }
         } message: { Text(errorMessage ?? "") }
         .sheet(item: $pendingImport) { preview in
-            ConfigImportSheet(preview: preview)
+            ConfigImportSheet(preview: preview) { backupMessage = "Rules imported from \(preview.fileName). Review their state in Rules." }
         }
     }
 
@@ -319,17 +450,30 @@ struct SettingsPage: View {
     }
 
     private func exportConfig() {
-        guard let policy = model.policy else { return }
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = "tinyprune.yml"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        let text = ConfigDocument.render(policy: policy.rules, roots: policy.managedRoots, overrides: policy.overrides)
-        do { try text.write(to: url, atomically: true, encoding: .utf8) }
-        catch { errorMessage = "Could not export the configuration: \(error.localizedDescription)" }
+        backupMessage = nil
+        guard let policy = model.policy else { errorMessage = "Connect to the background agent before exporting rules."; return }
+        do {
+            let review = try ConfigExportReview(policy: policy)
+            if !review.omissions.isEmpty || review.exportedCount == 0 {
+                let alert = NSAlert()
+                alert.messageText = review.exportedCount == 0 ? "No rules can be exported" : "Some items cannot be exported"
+                alert.informativeText = review.summary + "\n\nThis is not a complete rule-set backup. Export this partial configuration anyway?"
+                alert.alertStyle = .warning
+                alert.addButton(withTitle: "Cancel")
+                alert.addButton(withTitle: "Export partial config…")
+                guard alert.runModal() == .alertSecondButtonReturn else { return }
+            }
+            let panel = NSSavePanel()
+            panel.nameFieldStringValue = "tinyprune.yml"
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            try review.text.write(to: url, atomically: true, encoding: .utf8)
+            backupMessage = "Configuration exported to \(url.path).\n" + review.summary
+        } catch { errorMessage = "Could not export rules: \(error.localizedDescription)" }
     }
 
     private func importConfig() {
-        guard let policy = model.policy else { return }
+        backupMessage = nil
+        guard let policy = model.policy else { errorMessage = "Connect to the background agent before importing rules."; return }
         let panel = NSOpenPanel()
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
@@ -380,7 +524,12 @@ package struct ConfigImportSheet: View {
     @Environment(\.dismiss) private var dismiss
     let preview: ImportPreview
 
-    package init(preview: ImportPreview) { self.preview = preview }
+    private let onImported: () -> Void
+
+    package init(preview: ImportPreview, onImported: @escaping () -> Void = {}) {
+        self.preview = preview
+        self.onImported = onImported
+    }
 
     @State private var errorMessage: String?
     @State private var isApplying = false
@@ -395,6 +544,9 @@ package struct ConfigImportSheet: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(minHeight: 160)
+            Text("Review the changes above before applying. Matching configuration rules may be updated; configuration rules absent from the file may be removed within its roots. App-created rules are kept.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             if !preview.plan.isApplicable {
                 Label("Add the unmanaged folders in TinyPrune first. Only the app can grant folder access.", systemImage: "exclamationmark.triangle")
                     .foregroundStyle(PrunePalette.caution)
@@ -410,7 +562,7 @@ package struct ConfigImportSheet: View {
                     isApplying = true
                     Task {
                         defer { isApplying = false }
-                        do { _ = try await model.applyConfig(preview.plan); dismiss() }
+                        do { _ = try await model.applyConfig(preview.plan); onImported(); dismiss() }
                         catch { errorMessage = error.localizedDescription }
                     }
                 }

@@ -7,12 +7,27 @@
 - Requires macOS 14 or later. Released builds are planned as universal (Intel and Apple silicon). No release is published yet.
 - Items only move to the macOS Trash. TinyPrune never permanently deletes files.
 - Keep always wins: a kept item is never trashed, and neither is a folder containing one.
-- Preview runs matching and scheduling without trashing anything. Developer templates and very broad folders start in Preview.
+- Preview runs matching and scheduling without trashing anything. Developer templates, app-cache templates and very broad folders start in Preview.
 - Local-first: no account, filesystem metadata only (no file contents), no network access needed for core cleanup.
 - Optional signed direct-download update checks use HTTPS. Homebrew copies update only through Homebrew; unsigned previews require manual updates.
 - Every decision is explained: rule, basis, deadline, overrides, and why an item was skipped.
 - Interfaces: the app, a Finder menu, and the `tinyprune` CLI with `--json` output and config commands (validate, preview, apply, export).
 - Install before the first release: `git clone https://github.com/navig-me/tinyprune && cd tinyprune && swift Scripts/package-app.swift && open .build/package/TinyPrune.app`
+
+## App and tool templates
+
+All use modification age, produce ordinary editable Trash rules, and start in Preview. Folder suggestions are defaults; users must choose and authorize the actual folder. Specific Library subfolders are allowed, never the whole Library folder. Cache removal may slow builds or require the owning tool to download packages; TinyPrune never downloads them. Close apps and stop builds before enabling cleanup.
+
+- Xcode Derived Data: ~/Library/Developer/Xcode/DerivedData, immediate child directories, 60 days; regenerated on build.
+- Xcode Device Support: ~/Library/Developer/Xcode/iOS DeviceSupport, immediate child directories, 180 days; reconnect the matching device to restore symbols. Older crash symbolication may need them.
+- Homebrew Downloads: ~/Library/Caches/Homebrew/downloads, completed hash-prefixed tar.gz/tar.xz/tar.bz2/zip/dmg/pkg files, 90 days; downloaded again as needed. Incomplete downloads excluded.
+- npm Cache: ~/.npm/_cacache, files recursively, 90 days; packages fetched again.
+- Yarn Classic Cache: ~/Library/Caches/Yarn, files recursively, 90 days; Yarn 1 repopulates its cache. Excludes Yarn 2+ project-local caches.
+- pip Cache: ~/Library/Caches/pip, files recursively, 90 days; HTTP downloads and wheels downloaded or rebuilt.
+- Cargo Registry Cache: ~/.cargo/registry/cache, recursive **/*.crate files only, 90 days; crates downloaded again. Credentials, tools and sources excluded.
+- Gradle Caches: ~/.gradle/caches, files recursively, 90 days; regenerated or downloaded. Global settings and wrapper distributions excluded.
+- Deliberately omitted: Xcode Archives and Docker data contain non-regenerable release/user data; Zoom/screen/Teams/Meet recordings and Slack/Discord/Telegram downloads may be personal documents. Teams/Meet exports lack a stable local folder. pnpm stores vary by configuration, volume and version and may include database/global virtual-store state; prefer pnpm store prune.
+- References: [Xcode](https://stackoverflow.com/questions/39481549/what-can-i-delete-from-library-developer-xcode-folder), [Homebrew](https://docs.brew.sh/Manpage), [Homebrew download layout](https://docs.brew.sh/rubydoc/AbstractFileDownloadStrategy.html), [npm](https://docs.npmjs.com/cli/v11/commands/npm-cache), [Yarn recovery](https://classic.yarnpkg.com/lang/en/docs/cli/cache/), [Yarn default path](https://github.com/yarnpkg/yarn/blob/master/src/util/user-dirs.js), [pip](https://pip.pypa.io/en/stable/topics/caching/), [Cargo](https://doc.rust-lang.org/cargo/guide/cargo-home.html), [Gradle](https://docs.gradle.org/current/userguide/directory_layout.html), [pnpm](https://pnpm.io/settings/store).
 
 ## Links
 

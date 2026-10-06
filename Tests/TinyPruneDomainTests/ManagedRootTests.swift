@@ -18,4 +18,14 @@ import Foundation
 
         #expect(root.path == "/Users/example/Developer")
     }
+
+    @Test func testLibraryRootIsRejectedButSpecificCachesAreAllowed() throws {
+        #expect(throws: ManagedRootValidationError.dangerousPath) {
+            _ = try ManagedRoot(displayName: "Library", path: "/Users/example/Library", bookmarkData: Data([1]))
+        }
+        for path in ["/Users/example/Library/Caches/pip", "/Users/example/Library/Caches/Homebrew/downloads", "/Users/example/Library/Developer/Xcode/DerivedData"] {
+            let root = try ManagedRoot(displayName: "Cache", path: path, bookmarkData: Data([1]))
+            #expect(root.path == path)
+        }
+    }
 }

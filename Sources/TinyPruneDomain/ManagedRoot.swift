@@ -15,7 +15,8 @@ public struct ManagedRoot: Hashable, Codable, Sendable, Identifiable {
             throw ManagedRootValidationError.invalidPath
         }
         let protectedLocations = ["/Applications", "/System", "/Library", "/bin", "/sbin", "/usr", "/etc", "/var"]
-        guard !protectedLocations.contains(where: { normalizedPath == $0 || normalizedPath.hasPrefix($0 + "/") }) else {
+        guard !normalizedPath.hasSuffix("/Library"),
+              !protectedLocations.contains(where: { normalizedPath == $0 || normalizedPath.hasPrefix($0 + "/") }) else {
             throw ManagedRootValidationError.dangerousPath
         }
         guard !bookmarkData.isEmpty else { throw ManagedRootValidationError.emptyBookmark }

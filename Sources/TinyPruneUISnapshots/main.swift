@@ -365,6 +365,39 @@ do {
         print("  apply summary: \(summary)")
         Check.expect(model.policy?.rules.count == rulesBefore + 1, "apply added the rule")
         Check.expect(model.policy?.rules.first { $0.name == "Stale logs" }?.state == .preview, "imported rule starts in Preview")
+
+        // Save a real exported backup, remove one disposable rule, then restore through the review sheet.
+        let backupPolicy = try model.policy.unwrap("backup policy")
+        let backupURL = tree.root.appendingPathComponent("rules-backup.yml")
+        let fullExport = try ConfigExportReview(policy: backupPolicy)
+        Check.expect(fullExport.exportedCount == 0 && fullExport.skippedCount == backupPolicy.rules.count, "multi-root config export honestly reports all unrepresentable rules as skipped")
+        Check.expect(fullExport.omissions.contains { $0.contains("Stale logs") && $0.contains("not to every root") }, "partial export explains the skipped rule name and subset-of-roots reason")
+        let backedUpRule = try backupPolicy.rules.first { $0.name == "Stale logs" }.unwrap("backed-up rule")
+        let supportedPolicy = AgentPolicySnapshot(
+            rules: [backedUpRule], overrides: [],
+            managedRoots: backupPolicy.managedRoots.filter { $0.path == tree.projects.path }, globallyPaused: false
+        )
+        let supportedExport = try ConfigExportReview(policy: supportedPolicy)
+        Check.expect(supportedExport.exportedCount == 1 && supportedExport.skippedCount == 0, "supported one-root export reports exactly one restorable rule")
+        try supportedExport.text.write(to: backupURL, atomically: true, encoding: .utf8)
+        try await model.delete(backedUpRule)
+        let backupDocument = try ConfigDocument.parse(String(contentsOf: backupURL, encoding: .utf8), homeDirectory: NSHomeDirectory())
+        try backupDocument.validate()
+        let current = try model.policy.unwrap("restore policy")
+        let restorePlan = try ConfigPlan.make(document: backupDocument, currentRules: current.rules, currentRoots: current.managedRoots, currentOverrides: current.overrides, activate: false)
+        Check.expect(restorePlan.isApplicable && restorePlan.added.contains { $0.name == "Stale logs" }, "exported backup restores the missing rule")
+        var imported = false
+        let restoreHost = await snap.host(
+            sheetCanvas(ConfigImportSheet(preview: ImportPreview(fileName: backupURL.lastPathComponent, plan: restorePlan)) { imported = true }.environmentObject(model)),
+            size: CGSize(width: 650, height: 600)
+        )
+        Check.expect(model.policy?.rules.contains { $0.name == "Stale logs" } == false, "reviewing a backup does not overwrite rules before confirmation")
+        await snap.snapshot(restoreHost, name: "63-sheet-restore-export")
+        Check.expect(snap.sendKeyEquivalent("\r", modifiers: [], to: restoreHost), "Return confirms the reviewed rule backup")
+        await waitFor("backup restore") { imported }
+        Check.expect(model.policy?.rules.first { $0.name == "Stale logs" }?.state == .preview, "confirmed backup restores the rule in Preview")
+        restoreHost.window.contentView = nil
+        restoreHost.window.close()
     }
 
     // MARK: - Impact preview
@@ -526,6 +559,32 @@ do {
     Check.expect(!FileManager.default.fileExists(atPath: expiredFile.path), "active rule removed the due item from its original location")
     Check.expect(fixtureTrashPaths.count == 1 && fixtureTrashPaths.allSatisfy { FileManager.default.fileExists(atPath: $0) }, "exactly one item is present in real macOS Trash")
     Check.expect(FileManager.default.fileExists(atPath: keptFile.path), "Keep survives the active cleanup")
+    let trashEvent = try cleanupModel.activity.first { $0.kind == .movedToTrash }.unwrap("Trash event")
+    let trashPath = try trashEvent.detail.unwrap("Trash destination")
+    var revealed: [URL] = []
+    let revealAction = ActivityTrashReveal(reveal: { revealed = $0 })
+    Check.expect(revealAction.show(trashEvent) && revealed == [URL(fileURLWithPath: trashPath)], "Show in Trash selects the actual audited destination, not the original path")
+    let summary = ActivitySummary(events: cleanupModel.activity)
+    Check.expect(summary.movedCount == 1 && summary.lastCleanup == trashEvent.occurredAt, "loaded Activity summary records one move and its last cleanup time")
+    Check.expect(summary.safetySkippedCount == cleanupModel.activity.filter { $0.kind == .safetySkipped }.count, "Activity safety count uses only loaded safety-skip events")
+    let emptySummary = ActivitySummary(events: [])
+    Check.expect(emptySummary.movedCount == 0 && emptySummary.safetySkippedCount == 0 && emptySummary.lastCleanup == nil, "empty Activity does not invent a cleanup time")
+    revealed = []
+    let recoveryHost = await snap.host(
+        sheetCanvas(ActivityTrashRecovery(item: trashEvent, action: revealAction, shortcut: KeyboardShortcut("r", modifiers: [.command, .shift]))),
+        size: CGSize(width: 760, height: 320)
+    )
+    Check.expect(snap.sendKeyEquivalent("r", modifiers: [.command, .shift], to: recoveryHost), "keyboard action activates the real Trash reveal button")
+    Check.expect(revealed == [URL(fileURLWithPath: trashPath)], "Activity row reveals only the actual Trash destination")
+    await snap.snapshot(recoveryHost, name: "89-trash-recovery")
+    recoveryHost.window.contentView = nil
+    recoveryHost.window.close()
+    await shoot("89-real-trash-activity-available", .activity, model: cleanupModel, router: router)
+    // Remove only the known disposable fixture destination to model an emptied/restored item.
+    try FileManager.default.removeItem(atPath: trashPath)
+    revealed = []
+    Check.expect(!revealAction.show(trashEvent) && revealed.isEmpty, "missing Trash destination never opens Finder or reveals the original path")
+    await snap.capture(sheetCanvas(ActivityTrashRecovery(item: trashEvent, action: revealAction)), name: "89-trash-no-longer-present", size: CGSize(width: 760, height: 320))
     await shoot("90-real-trash-activity", .activity, model: cleanupModel, router: router)
     await cleanupAgent.stop()
     let restartedAgent = try await LiveAgent(directory: cleanupDirectory)
