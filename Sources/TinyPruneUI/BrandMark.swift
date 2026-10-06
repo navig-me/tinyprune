@@ -9,8 +9,10 @@ package enum BrandMark {
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="TinyPrune plum logo"><defs><linearGradient id="plumGrad" x1="20%" y1="15%" x2="85%" y2="85%"><stop offset="0%" stop-color="#6E2C58"/><stop offset="55%" stop-color="#4A1C3C"/><stop offset="100%" stop-color="#2D1125"/></linearGradient><linearGradient id="leafGrad" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#688F72"/><stop offset="100%" stop-color="#3D5A44"/></linearGradient><linearGradient id="sheen" x1="15%" y1="10%" x2="50%" y2="60%"><stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.28"/><stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/></linearGradient></defs><path d="M 52 28 C 53 20, 58 14, 63 11 C 61 11, 56 16, 50 25 Z" fill="#3D5A44"/><path d="M 54 22 C 65 14, 76 18, 77 24 C 76 31, 65 31, 54 22 Z" fill="url(#leafGrad)"/><path d="M 54 22 Q 66 23 74 23.5" stroke="#7DA687" stroke-width="0.8" fill="none" opacity="0.6"/><path d="M 50 26 C 65 26, 82 37, 81 58 C 80 77, 65 89, 49 89 C 32 89, 19 76, 20 56 C 21 38, 36 26, 50 26 Z" fill="url(#plumGrad)"/><path d="M 50 26 C 51 38, 48 54, 46 68 C 45 77, 47 84, 49 89" stroke="#38132D" stroke-width="1.6" fill="none" opacity="0.45" stroke-linecap="round"/><ellipse cx="37" cy="45" rx="14" ry="19" transform="rotate(-22 37 45)" fill="url(#sheen)"/></svg>
     """
 
+    // NSImage is not Sendable, but these two are built once, never mutated afterwards, and only ever read
+    // (drawn) by views, so sharing them across isolation domains is safe.
     /// Full-colour mark.
-    package static let image: NSImage = {
+    nonisolated(unsafe) package static let image: NSImage = {
         guard let image = NSImage(data: Data(svg.utf8)) else {
             preconditionFailure("The embedded TinyPrune brand SVG could not be decoded")
         }
@@ -19,12 +21,23 @@ package enum BrandMark {
     }()
 
     /// Monochrome silhouette for the menu bar, which tints template images for light, dark and highlighted states.
-    package static let menuBarImage: NSImage = {
-        let side: CGFloat = 18
-        let template = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
-            image.draw(in: rect.insetBy(dx: 0.5, dy: 0.5))
-            return true
+    /// Rendered eagerly at 2x so no drawing closure has to capture the shared image.
+    nonisolated(unsafe) package static let menuBarImage: NSImage = {
+        let points: CGFloat = 18
+        let pixels = Int(points) * 2
+        guard let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: pixels, pixelsHigh: pixels, bitsPerSample: 8, samplesPerPixel: 4,
+            hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+        ), let context = NSGraphicsContext(bitmapImageRep: rep) else {
+            preconditionFailure("Could not allocate the menu bar mark bitmap")
         }
+        rep.size = NSSize(width: points, height: points)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        image.draw(in: NSRect(x: 0.5, y: 0.5, width: points - 1, height: points - 1))
+        NSGraphicsContext.restoreGraphicsState()
+        let template = NSImage(size: rep.size)
+        template.addRepresentation(rep)
         template.isTemplate = true
         template.accessibilityDescription = "TinyPrune"
         return template
