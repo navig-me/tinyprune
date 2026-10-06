@@ -27,8 +27,8 @@
       {"@type":"Question","name":"Can TinyPrune clean node_modules and other developer folders?","acceptedAnswer":{"@type":"Answer","text":"Yes. Rules can match folders such as node_modules or .venv and expire them after a project has been inactive. Developer templates always start in Preview."}},
       {"@type":"Question","name":"Does TinyPrune need an account or network access?","acceptedAnswer":{"@type":"Answer","text":"No account is needed. Core cleanup reads filesystem metadata only, does not inspect file contents, and does not require network access. Optional update checks in configured, signed direct-download builds use HTTPS; Homebrew installs update through Homebrew. Early unsigned builds require manual updates."}},
       {"@type":"Question","name":"How do I keep a file from being removed?","acceptedAnswer":{"@type":"Answer","text":"Mark it Keep from the Finder menu or run tinyprune keep. Keep takes precedence over every rule, and a folder with a kept item inside is never trashed."}},
-      {"@type":"Question","name":"Does TinyPrune work on Intel and Apple silicon, and which macOS versions?","acceptedAnswer":{"@type":"Answer","text":"It requires macOS 14 or later. Released builds are planned as universal binaries for Intel and Apple silicon; no release has been published yet."}},
-      {"@type":"Question","name":"How do I install TinyPrune before the first release?","acceptedAnswer":{"@type":"Answer","text":"Build from source: git clone https://github.com/navig-me/tinyprune && cd tinyprune && swift Scripts/package-app.swift && open .build/package/TinyPrune.app"}}
+      {"@type":"Question","name":"Does TinyPrune work on Intel and Apple silicon, and which macOS versions?","acceptedAnswer":{"@type":"Answer","text":"It requires macOS 14 or later. Releases are universal binaries for Intel and Apple silicon."}},
+      {"@type":"Question","name":"How do I install TinyPrune?","acceptedAnswer":{"@type":"Answer","text":"Run brew install --cask navig-me/tap/tinyprune, or download the DMG from GitHub Releases. Version 0.1.0 is an unsigned pre-release, so macOS asks you to approve it on first launch. You can also build from source: git clone https://github.com/navig-me/tinyprune && cd tinyprune && swift Scripts/package-app.swift && open .build/package/TinyPrune.app"}}
     ]}
   ]}
   </script>
@@ -71,10 +71,11 @@
         </div>
         <section id="install">
           <h2>Install</h2>
-          <div class="notice"><strong>The first release is not published yet.</strong><p>You can build from source now. The download and Homebrew options below will be available once the release and tap are published.</p></div>
+          <div class="notice"><strong>Early release.</strong><p>TinyPrune 0.1.0 is an unsigned, not notarized pre-release. macOS asks you to approve it on first launch; see below.</p></div>
           <h3>Download or use Homebrew</h3>
-          <p>When available, download the DMG from <a href="https://github.com/navig-me/tinyprune/releases">GitHub Releases</a> and move TinyPrune to Applications. Once the tap exists, you can also install it with:</p>
-          <pre aria-label="Homebrew installation command"><code>brew install --cask tinyprune/tap/tinyprune</code></pre>
+          <p>Install with Homebrew:</p>
+          <pre aria-label="Homebrew installation command"><code>brew install --cask navig-me/tap/tinyprune</code></pre>
+          <p>Or download the DMG from <a href="https://github.com/navig-me/tinyprune/releases">GitHub Releases</a> and move TinyPrune to Applications. The Homebrew cask clears the quarantine flag for you; for a direct download, approve it as follows.</p>
           <p>Early builds are unsigned. On first launch, use <strong>System Settings &gt; Privacy &amp; Security &gt; Open Anyway</strong>. Only open a build you trust. Alternatively, if you installed it in Applications:</p>
           <pre aria-label="Remove quarantine from a trusted early build"><code>xattr -dr com.apple.quarantine /Applications/TinyPrune.app</code></pre>
           <h3>Build from source</h3>
@@ -185,9 +186,9 @@ tinyprune config export</code></pre>
           <h3>How do I keep a file from being removed?</h3>
           <p>Mark it Keep from the Finder menu or run <code>tinyprune keep</code>. Keep takes precedence over every rule, and a folder with a kept item inside is never trashed.</p>
           <h3>Does TinyPrune work on Intel and Apple silicon, and which macOS versions?</h3>
-          <p>It requires macOS 14 or later. Released builds are planned as universal binaries for Intel and Apple silicon; no release has been published yet.</p>
-          <h3>How do I install TinyPrune before the first release?</h3>
-          <p>Build from source: <code>git clone https://github.com/navig-me/tinyprune &amp;&amp; cd tinyprune &amp;&amp; swift Scripts/package-app.swift &amp;&amp; open .build/package/TinyPrune.app</code>. See <a href="#install">Install</a> for details.</p>
+          <p>It requires macOS 14 or later. Releases are universal binaries for Intel and Apple silicon.</p>
+          <h3>How do I install TinyPrune?</h3>
+          <p>Run <code>brew install --cask navig-me/tap/tinyprune</code>, or download the DMG from <a href="https://github.com/navig-me/tinyprune/releases">GitHub Releases</a>. You can also build from source; see <a href="#install">Install</a> for details.</p>
         </section>
       </article>
     </main>

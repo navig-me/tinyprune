@@ -78,9 +78,9 @@ Create a reviewer-protected **`homebrew`** Environment restricted to `main` and 
 
 | Secret | Value / scope |
 | --- | --- |
-| `HOMEBREW_TAP_TOKEN` | Fine-grained token for **only `tinyprune/homebrew-tap`**, Contents read/write, Pull requests read/write (Metadata read implicit); no administration, workflows, or branch-protection bypass |
+| `HOMEBREW_TAP_TOKEN` | Fine-grained token for **only `navig-me/homebrew-tap`**, Contents read/write, Pull requests read/write (Metadata read implicit); no administration, workflows, or branch-protection bypass |
 
-Create `tinyprune/homebrew-tap` with a protected `main` branch and required human review. `homebrew.yml` is called after release or manually dispatched for a tag; absent token skips without failing the release. It renders `Resources/Homebrew/tinyprune.rb.template`, pins the Homebrew DMG release URL and SHA-256, and opens `release/vX.Y.Z` as a PR. The cask installs the app and bundled CLI, requires Sonoma or newer, unloads `com.navig-me.tinyprune.agent`, disables Finder plugin `com.navig-me.tinyprune.finder`, and zaps TinyPrune Application Support and preference files. Zap deletes local configuration: users should export rules first.
+Create `navig-me/homebrew-tap` with a protected `main` branch and required human review. `homebrew.yml` is called after release or manually dispatched for a tag; absent token skips without failing the release. It renders `Resources/Homebrew/tinyprune.rb.template`, pins the Homebrew DMG release URL and SHA-256, and opens `release/vX.Y.Z` as a PR. The cask installs the app and bundled CLI, requires Sonoma or newer, unloads `com.navig-me.tinyprune.agent`, disables Finder plugin `com.navig-me.tinyprune.finder`, and zaps TinyPrune Application Support and preference files. Zap deletes local configuration: users should export rules first.
 
 Only metadata-marked **unsigned** builds get a postflight that plainly warns about lack of notarization and removes quarantine from the installed app. Signed casks never clear quarantine. Check that policy change explicitly in PR review; the checksum and metadata are delivered together through the protected release.
 
@@ -89,10 +89,10 @@ The template intentionally retains the requested `depends_on macos: ">= :sonoma"
 The clean `macos-15` verification job installs from the **PR branch** (not tap `main`), checks the distribution Info.plist, and runs `tinyprune status --json`. Exit 69 with `{\"schemaVersion\":1,\"status\":\"unavailable\"}` is acceptable on a fresh machine without a registered agent; it proves the CLI runs, not agent integration. No auto-merge is configured. To reproduce on a clean Mac:
 
 ```sh
-brew tap tinyprune/tap
-git -C \"$(brew --repo tinyprune/tap)\" fetch origin release/vX.Y.Z
-git -C \"$(brew --repo tinyprune/tap)\" checkout --detach FETCH_HEAD
-HOMEBREW_NO_AUTO_UPDATE=1 brew install --cask tinyprune/tap/tinyprune
+brew tap navig-me/tap
+git -C \"$(brew --repo navig-me/tap)\" fetch origin release/vX.Y.Z
+git -C \"$(brew --repo navig-me/tap)\" checkout --detach FETCH_HEAD
+HOMEBREW_NO_AUTO_UPDATE=1 brew install --cask navig-me/tap/tinyprune
 tinyprune status --json
 # Exit 0 (available) or 69 with unavailable-agent JSON is expected.
 ```

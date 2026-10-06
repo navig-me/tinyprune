@@ -11,7 +11,7 @@
 - Rules can use filename or folder patterns, age, and project inactivity. Developer templates support dependency and build folders such as node_modules.
 - Core cleanup requires no account or network access and reads filesystem metadata, not file contents. Optional update checks in configured, signed direct-download builds use HTTPS; Homebrew installs update through Homebrew. Early unsigned builds update manually.
 - Interfaces include the native app, Finder menu and tinyprune CLI with JSON output and configuration validate, preview, apply and export commands.
-- The first release and public Homebrew tap are not published yet. Build from source using the installation documentation. Landing-page window contents are illustrative examples, not release/version or reclaimed-space claims.
+- TinyPrune 0.1.0 is published as an unsigned, not notarized pre-release. Install with `brew install --cask navig-me/tap/tinyprune` or download the DMG from GitHub Releases. Landing-page window contents are illustrative examples, not release/version or reclaimed-space claims.
 - Website analytics are separate from the app: the marketing website loads Google Analytics and PostHog.
 
 ## Authoritative references

@@ -4,7 +4,7 @@
 
 ## Key facts
 
-- Requires macOS 14 or later. Released builds are planned as universal (Intel and Apple silicon). No release is published yet.
+- Requires macOS 14 or later. Releases are universal (Intel and Apple silicon). Version 0.1.0 is an unsigned, not notarized pre-release.
 - Items only move to the macOS Trash. TinyPrune never permanently deletes files.
 - Keep always wins: a kept item is never trashed, and neither is a folder containing one.
 - Preview runs matching and scheduling without trashing anything. Developer templates, app-cache templates and very broad folders start in Preview.
@@ -12,7 +12,7 @@
 - Optional signed direct-download update checks use HTTPS. Homebrew copies update only through Homebrew; unsigned previews require manual updates.
 - Every decision is explained: rule, basis, deadline, overrides, and why an item was skipped.
 - Interfaces: the app, a Finder menu, and the `tinyprune` CLI with `--json` output and config commands (validate, preview, apply, export).
-- Install before the first release: `git clone https://github.com/navig-me/tinyprune && cd tinyprune && swift Scripts/package-app.swift && open .build/package/TinyPrune.app`
+- Install: `brew install --cask navig-me/tap/tinyprune`, or download the DMG from GitHub Releases, or build from source with `git clone https://github.com/navig-me/tinyprune && cd tinyprune && swift Scripts/package-app.swift && open .build/package/TinyPrune.app`
 
 ## App and tool templates
 
