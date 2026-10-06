@@ -248,6 +248,10 @@ package struct MenuBarContent: View {
             router.selection = .overview
             if NSApp.windows.allSatisfy({ !$0.isVisible }) { openWindow(id: "main") }
         }
+        Divider()
+        Button("Quit TinyPrune") { NSApp.terminate(nil) }
+            .keyboardShortcut("q")
+            .help("Quits this app. The background agent keeps applying your rules.")
     }
 }
 
