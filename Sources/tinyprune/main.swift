@@ -119,6 +119,10 @@ struct TinyPruneCLI {
                 writeError("These config roots are not inside a managed folder:\n\(roots.map { "  \($0)" }.joined(separator: "\n"))\nAdd each folder in TinyPrune.app, then run the command again.\n")
             }
             return AgentErrorDescription.ExitCode.configuration
+        case CLIError.client(.unavailable) where json:
+            // Stable machine contract since v0.1.0: scripts and the Homebrew smoke test match this exact object.
+            print("{\"schemaVersion\":\(schemaVersion),\"status\":\"unavailable\"}")
+            return AgentErrorDescription.ExitCode.unavailable
         default:
             let info = failure(for: error)
             if json {
