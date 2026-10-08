@@ -241,7 +241,8 @@ def verify():
     bin_path = tools(root)
     key_input = (os.environ['SPARKLE_ED25519_PRIVATE_KEY'] + '\n').encode()
     public_feed = root / 'public-appcast.xml'
-    with urllib.request.urlopen('https://tinyprune.com/updates/appcast.xml', timeout=30) as response:
+    feed_request = urllib.request.Request('https://tinyprune.com/updates/appcast.xml', headers={'User-Agent': 'TinyPrune-ReleaseVerification/1.0'})
+    with urllib.request.urlopen(feed_request, timeout=30) as response:
         public_feed.write_bytes(response.read())
     run(str(bin_path / 'sign_update'), '--verify', '--ed-key-file', '-', str(public_feed), input=key_input)
     tree = ET.parse(public_feed).getroot()
@@ -263,7 +264,8 @@ def verify():
     if notes_link is None or notes_link.text != expected_notes_url:
         raise ValueError('Public release notes URL does not match release')
     public_notes = root / 'public-notes.html'
-    with urllib.request.urlopen(expected_notes_url, timeout=30) as response:
+    notes_request = urllib.request.Request(expected_notes_url, headers={'User-Agent': 'TinyPrune-ReleaseVerification/1.0'})
+    with urllib.request.urlopen(notes_request, timeout=30) as response:
         public_notes.write_bytes(response.read())
     notes_signature = notes_link.get('{' + NS + '}edSignature')
     if not notes_signature or notes_link.get('{' + NS + '}length') != str(public_notes.stat().st_size):
