@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?><!-- sparkle-sign-warning:
+IMPORTANT: This file was signed by Sparkle. Any modifications to this file requires re-signing this file with generate_appcast or sign_update! The signed signature will be embedded at the end of this file.
+--><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>TinyPrune</title>
+        <item>
+            <title>0.1.2</title>
+            <pubDate>Thu, 08 Oct 2026 07:18:54 +0000</pubDate>
+            <sparkle:version>10</sparkle:version>
+            <sparkle:shortVersionString>0.1.2</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:releaseNotesLink sparkle:edSignature="ZvJZLjEcGZjSQc+bBbqvVvx5OVsSKSK4raGOeUuWPFp0iJkblLvWXo+BqPMNdrT8NDXMM5PjVJCFu3UMQMTwAA==" sparkle:length="1297">https://tinyprune.com/updates/0.1.2.html</sparkle:releaseNotesLink>
+            <enclosure url="https://github.com/navig-me/tinyprune/releases/download/v0.1.2/TinyPrune-0.1.2.dmg" length="10486003" type="application/octet-stream" sparkle:edSignature="7jYURIOQbFQngJX0JYFMwNfPL9n63s4DvBL4+GM4TQFh3tg8AsjUwIimBoTNdBpgNmrhTm65PiCbrnx+oBmJAw=="></enclosure>
+        </item>
+    </channel>
+</rss><!-- sparkle-signatures:
+edSignature: w97t5GDeLrWjSWHaC/ZMeC71WB6rtrfAvJQrpJQl1u1wzQRTNxXpLc8oD17XC3iKON4CEqVLJIxHGO4K06/QCg==
+length: 1302
+-->
