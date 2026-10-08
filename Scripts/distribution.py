@@ -186,7 +186,13 @@ def feed():
     public_key, build = configuration
     bin_path = tools(root)
     notes = subprocess.check_output(['gh', 'release', 'view', tag(), '--repo', os.environ['GITHUB_REPOSITORY'], '--json', 'body', '--jq', '.body'], text=True)
-    note = '<!doctype html><html lang="en"><meta charset="utf-8"><title>TinyPrune ' + tag()[1:] + '</title><body><pre>' + html.escape(notes) + '</pre></body></html>'
+    note = ('<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width">'
+            '<title>TinyPrune ' + tag()[1:] + '</title>'
+            '<style>body{font:14px -apple-system,BlinkMacSystemFont,sans-serif;line-height:1.5;margin:20px}'
+            'pre{font:inherit;white-space:pre-wrap;overflow-wrap:anywhere}</style>'
+            '<body><h2>TinyPrune ' + tag()[1:] + '</h2>'
+            '<p>Choose Install Update to download, verify and install this release. TinyPrune will relaunch when it finishes. '
+            'Your rules and settings are kept.</p><pre>' + html.escape(notes) + '</pre></body></html>')
     (root / (dmg.stem + '.html')).write_text(note)
     output = Path('website/updates')
     output.mkdir(parents=True, exist_ok=True)

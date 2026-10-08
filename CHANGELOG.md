@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.3 - 2026-10-08
+
+- Fix the menu-bar plum's Retina drawing scale and increase its image size to 20 points.
+- Wrap update notes in the Sparkle dialog instead of clipping long lines; show install instructions above the release details.
+
 ## 0.1.2 - 2026-10-08
 
 ### Updates
