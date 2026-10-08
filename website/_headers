@@ -1,0 +1,2 @@
+/updates/*
+  Cache-Control: no-transform, public, max-age=300
