@@ -267,9 +267,11 @@ def verify():
     notes_request = urllib.request.Request(expected_notes_url, headers={'User-Agent': 'TinyPrune-ReleaseVerification/1.0'})
     with urllib.request.urlopen(notes_request, timeout=30) as response:
         public_notes.write_bytes(response.read())
+        final_url = response.geturl()
     notes_signature = notes_link.get('{' + NS + '}edSignature')
-    if not notes_signature or notes_link.get('{' + NS + '}length') != str(public_notes.stat().st_size):
-        raise ValueError('Public release notes signature/length is missing or mismatched')
+    signed_length = notes_link.get('{' + NS + '}length')
+    if not notes_signature or signed_length != str(public_notes.stat().st_size):
+        raise ValueError(f'Public release notes signature/length is missing or mismatched: signed={signed_length} fetched={public_notes.stat().st_size} final_url={final_url}')
     run(str(bin_path / 'sign_update'), '--verify', '--ed-key-file', '-', str(public_notes), notes_signature, input=key_input)
     print('Public signed feed, direct enclosure URL/length/signature and release notes verified.')
 
