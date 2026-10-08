@@ -24,7 +24,7 @@ let finderEntitlementsURL = repositoryRoot.appendingPathComponent("Resources/Ent
 let environment = ProcessInfo.processInfo.environment
 let signIdentity = environment["TINYPRUNE_SIGN_IDENTITY"].flatMap { $0.isEmpty ? nil : $0 } ?? "-"
 let isAdHoc = signIdentity == "-"
-let marketingVersion = environment["TINYPRUNE_VERSION"].flatMap { $0.isEmpty ? nil : $0 } ?? "0.1.1"
+let marketingVersion = environment["TINYPRUNE_VERSION"].flatMap { $0.isEmpty ? nil : $0 } ?? "0.1.2"
 let buildNumber = environment["TINYPRUNE_BUILD"].flatMap { $0.isEmpty ? nil : $0 } ?? "1"
 let universal = environment["TINYPRUNE_UNIVERSAL"] == "1" || !isAdHoc
 let distribution = environment["TINYPRUNE_DISTRIBUTION"] ?? "direct"
@@ -37,7 +37,7 @@ guard publicUpdateKey.isEmpty || Data(base64Encoded: publicUpdateKey)?.count == 
     FileHandle.standardError.write(Data("TINYPRUNE_SPARKLE_PUBLIC_KEY must be a base64 Ed25519 public key (32 bytes).\n".utf8))
     exit(1)
 }
-let updatesEnabled = distribution == "direct" && !isAdHoc && !publicUpdateKey.isEmpty
+let updatesEnabled = distribution == "direct" && !publicUpdateKey.isEmpty
 // The xcbuild-based `--arch a --arch b` path rejects the Finder extension's Swift 5 language mode
 // ("SWIFT_VERSION '' is unsupported"), so universal builds compile each architecture with the
 // native build system and merge the products with lipo.
@@ -222,7 +222,6 @@ do {
     try run("/usr/bin/codesign", ["--verify", "--deep", "--strict", appURL.path])
     if !updatesEnabled {
         print(distribution == "homebrew" ? "In-app updates disabled: Homebrew manages this distribution." :
-              isAdHoc ? "In-app updates disabled: unsigned/development preview." :
               "In-app updates disabled: TINYPRUNE_SPARKLE_PUBLIC_KEY is not configured.")
     }
     if isAdHoc {

@@ -38,13 +38,18 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
           GH_TOKEN: ${{ github.token }}
           SPARKLE_ED25519_PRIVATE_KEY: ${{ secrets.SPARKLE_ED25519_PRIVATE_KEY }}
+          SPARKLE_ED25519_PUBLIC_KEY: ${{ vars.SPARKLE_ED25519_PUBLIC_KEY }}
         run: |
           set -euo pipefail
           if [[ -z "$SPARKLE_ED25519_PRIVATE_KEY" ]]; then
             echo 'Update feed skipped: update-feed Environment has no SPARKLE_ED25519_PRIVATE_KEY.' >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          python3 Scripts/distribution.py feed
+          if [[ -z "$SPARKLE_ED25519_PUBLIC_KEY" ]]; then
+            echo 'Update feed skipped: update-feed Environment has no SPARKLE_ED25519_PUBLIC_KEY.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          python3 Scripts/distribution.py feed | tee -a "$GITHUB_STEP_SUMMARY"
           if [[ -z "$(git status --porcelain -- website/updates)" ]]; then exit 0; fi
           branch="updates/$RELEASE_TAG"
           git switch -c "$branch"
@@ -72,12 +77,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag }}
           SPARKLE_ED25519_PRIVATE_KEY: ${{ secrets.SPARKLE_ED25519_PRIVATE_KEY }}
+          SPARKLE_ED25519_PUBLIC_KEY: ${{ vars.SPARKLE_ED25519_PUBLIC_KEY }}
         run: |
           set -euo pipefail
           if [[ -z "$SPARKLE_ED25519_PRIVATE_KEY" ]]; then
             echo 'Public verification skipped: update-feed signing secret absent.' >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
+          if [[ -z "$SPARKLE_ED25519_PUBLIC_KEY" ]]; then
+            echo 'Public verification skipped: update-feed public key absent.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           deploy="$(gh run list --workflow deploy-pages.yml --branch main --commit "$(git rev-parse HEAD)" --status success --json databaseId --jq '.[0].databaseId // empty')"
           [[ -n "$deploy" ]] || { echo 'Deploy this main commit successfully with deploy-pages.yml before public verification.'; exit 1; }
-          python3 Scripts/distribution.py verify
+          python3 Scripts/distribution.py verify | tee -a "$GITHUB_STEP_SUMMARY"

@@ -75,6 +75,9 @@ jobs:
           if [[ "$mode" == unsigned ]]; then echo "TINYPRUNE_SIGN_IDENTITY=-" >> "$GITHUB_ENV"; fi
           {
             echo "TINYPRUNE_VERSION=${RELEASE_TAG#v}"
+            # One monotonically increasing release-workflow counter, shared by both channels.
+            # Reruns retain the build; feed publication refuses lower/equal prior builds.
+            # Do not rename/reset this workflow without migrating above published builds.
             echo "TINYPRUNE_BUILD=$GITHUB_RUN_NUMBER"
             echo "TINYPRUNE_EXPECTED_TEAM_ID=$TEAM_ID"
             echo "KEYCHAIN_PATH=$RUNNER_TEMP/tinyprune-signing.keychain-db"
@@ -85,6 +88,7 @@ jobs:
       - name: Quality gates
         run: |
           set -euo pipefail
+          python3 Scripts/test-distribution.py
           swift test
           swift run TinyPruneDomainCheck
           swift run TinyPruneEngineCheck
@@ -176,6 +180,11 @@ jobs:
           ditto .build/package/TinyPrune.app "$STAGING_PATH/TinyPrune.app"
           ln -s /Applications "$STAGING_PATH/Applications"
           hdiutil create -volname TinyPrune -srcfolder "$STAGING_PATH" -fs HFS+ -format UDZO -ov "$DMG_PATH"
+          mount_point="$RUNNER_TEMP/dmg-mount"
+          mkdir -p "$mount_point"
+          hdiutil attach "$DMG_PATH" -readonly -nobrowse -mountpoint "$mount_point"
+          trap 'hdiutil detach "$mount_point" -force' EXIT
+          Scripts/verify-signing.sh "$mount_point/TinyPrune.app"
       - name: Package separate Homebrew distribution
         env:
           NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}

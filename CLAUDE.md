@@ -50,8 +50,8 @@ Use the Stitch references in `stitch_tinyprune_macos_app/` as visual direction, 
 - Cloudflare Pages Direct Upload credentials belong exclusively in the reviewer-protected `cloudflare-pages-production` GitHub Environment. Use an account-scoped Pages-edit API token, never a Global API key.
 - Add tests for behavior and invariants, not implementation plumbing. At minimum cover precedence, glob boundaries, protection, preview, stale identity, pause/safety races, project activity noise, recovery, and failed Trash operations when modifying those paths.
 - For agent behavior, run a fixture-tree smoke test that observes actual scheduling/preflight/Trash outcomes. For UI, perform a manual/automation smoke of the affected native flow.
-- Direct DMG releases use signed, notarized Sparkle updates. Homebrew releases update only through the cask and must disable Sparkle automatic checks in that distribution build.
-- Release workflows must use protected GitHub Environments, least-privilege permissions, immutable artifacts, notarization/stapling/Gatekeeper validation, checksums, and a verified appcast/cask update.
+- Direct DMG builds with a valid Ed25519 public key use Sparkle's signed feed/notes/enclosures, including ad-hoc builds without an Apple account (ADR 0009). Automatic checks follow `checkForNewVersions` (default on); Update Now/native-dialog installation is user-confirmed, never automatic. Homebrew never constructs Sparkle; Homebrew/no-key copies use ReleaseNotifier and manual download or cask upgrade.
+- Release workflows must use protected GitHub Environments, least-privilege permissions, immutable artifacts, increasing `github.run_number` build numbers, checksums, and a verified appcast/cask update. Developer ID mode additionally requires notarization/stapling/Gatekeeper validation. Ad-hoc first-install Gatekeeper approval is unchanged; expected non-quarantined Sparkle replacements are not end-to-end verified. Preserve the Trash/update interlock and key-enabled direct target recovery; private-key loss/rotation policy is in ADR 0009.
 
 ## Before opening a pull request
 

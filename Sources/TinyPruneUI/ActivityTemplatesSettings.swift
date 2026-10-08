@@ -404,7 +404,7 @@ struct SettingsPage: View {
                 Toggle("Show menu bar icon", isOn: $showMenuBarIcon)
                 Toggle("Notify only when attention is needed", isOn: $notificationsEnabled)
                 Toggle("Check for new versions", isOn: $checkForNewVersions)
-                Text("Once a day TinyPrune asks github.com for the list of public releases. Nothing about your files or rules is sent, and nothing is installed without your click. Turn off to stop all automatic update checks.")
+                Text("TinyPrune checks for new versions using its verified update feed, or GitHub when in-app installation is unavailable. Nothing about your files or rules is sent, and nothing is installed without your click. Turn off to stop automatic update checks.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 LabeledContent("Background agent", value: agentStatus)

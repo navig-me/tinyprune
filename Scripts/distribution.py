@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Release metadata, checksum validation, cask rendering and Sparkle publication."""
+import base64
 import hashlib
 import html
 import json
 import os
 from pathlib import Path
+import plistlib
 import re
 import subprocess
 import sys
@@ -22,7 +24,7 @@ If you deliberately trust this preview and Open Anyway is unavailable, run exact
 
     xattr -dr com.apple.quarantine /Applications/TinyPrune.app
 
-Then open /Applications/TinyPrune.app again. This removes quarantine, not proof of safety; it does not notarize the app. Finder extension and launch-at-login may need separate approval in System Settings > General > Login Items & Extensions. In-app updates are disabled for unsigned previews; download updates manually. Preview signing does not guarantee Finder extension or login-item activation on every Mac.'''
+Then open /Applications/TinyPrune.app again. This removes quarantine, not proof of safety; it does not notarize the app. Finder extension and launch-at-login may need separate approval in System Settings > General > Login Items & Extensions. Direct builds with a configured update public key support EdDSA-authenticated in-app updates; without that key, download updates manually. Homebrew updates only through the cask. EdDSA authentication is not Apple trust or notarization. Preview signing does not guarantee Finder extension or login-item activation on every Mac.'''
 
 def run(*args, **kwargs):
     return subprocess.run(args, check=True, **kwargs)
@@ -91,25 +93,97 @@ def render():
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(cask_text(tag()[1:], digest(dmg), url, metadata['signing']))
 
-def verify_bundle_key(root, dmg, signature):
+def valid_public_key(value):
+    try:
+        return isinstance(value, str) and len(base64.b64decode(value, validate=True)) == 32
+    except (ValueError, TypeError):
+        return False
+
+def release_build(value):
+    if not isinstance(value, str) or not re.fullmatch(r'[1-9][0-9]*', value):
+        raise ValueError('Release CFBundleVersion must be a positive decimal github.run_number')
+    return int(value)
+
+def bundle_configuration(info, metadata):
+    if info.get('TinyPruneDistribution') != 'direct':
+        raise ValueError('Only direct bundles may enter the Sparkle feed')
+    signing = 'developer-id' if metadata['signing'] == 'signed' else 'ad-hoc'
+    if info.get('TinyPruneSigning') != signing:
+        raise ValueError('Released bundle signing mode does not match metadata')
+    public_key = info.get('SUPublicEDKey', '')
+    if not public_key:
+        if info.get('TinyPruneUpdatesEnabled') or info.get('SUEnableAutomaticChecks'):
+            raise ValueError('Keyless direct bundle unexpectedly enables updates')
+        return None
+    build = info.get('CFBundleVersion')
+    release_build(build)
+    if info.get('CFBundleShortVersionString') != tag()[1:] or metadata.get('build') != build:
+        raise ValueError('Released app version/build does not match release metadata')
+    if not valid_public_key(public_key):
+        raise ValueError('Released app has an invalid Ed25519 public key')
+    expected_key = os.environ.get('SPARKLE_ED25519_PUBLIC_KEY')
+    if expected_key and public_key != expected_key:
+        raise ValueError('Released app public key does not match update-feed configuration')
+    if (info.get('TinyPruneUpdatesEnabled') is not True
+            or info.get('SUEnableAutomaticChecks') is not True
+            or info.get('SURequireSignedFeed') is not True
+            or info.get('SUVerifyUpdateBeforeExtraction') is not True
+            or info.get('SUSignedFeedFailureExpirationInterval') != 0
+            or info.get('SUAllowsAutomaticUpdates') is not False
+            or info.get('SUAutomaticallyUpdate') is not False):
+        raise ValueError('Released direct app update verification policy is invalid')
+    return public_key, build
+
+def released_configuration(root, dmg, metadata):
     mount = root / 'verify-update-mount'
     mount.mkdir(exist_ok=True)
     run('hdiutil', 'attach', str(dmg), '-readonly', '-nobrowse', '-mountpoint', str(mount))
     try:
-        plist = mount / 'TinyPrune.app/Contents/Info.plist'
-        public_key = subprocess.check_output(['plutil', '-extract', 'SUPublicEDKey', 'raw', '-o', '-', str(plist)], text=True).strip()
-        enabled = subprocess.check_output(['plutil', '-extract', 'TinyPruneUpdatesEnabled', 'raw', '-o', '-', str(plist)], text=True).strip()
-        if enabled != 'true' or not public_key:
-            raise ValueError('Released direct app has no enabled, public-key-configured updater')
-        run('swift', 'Scripts/verify-update-signature.swift', public_key, str(dmg), signature)
+        app = mount / 'TinyPrune.app'
+        arguments = ['Scripts/verify-signing.sh']
+        if metadata['signing'] == 'signed':
+            arguments.append('--release')
+        run(*arguments, str(app))
+        with (app / 'Contents/Info.plist').open('rb') as stream:
+            return bundle_configuration(plistlib.load(stream), metadata)
     finally:
         run('hdiutil', 'detach', str(mount))
 
+def item_build(item):
+    value = item.findtext('{' + NS + '}version')
+    if value is None:
+        enclosure = item.find('enclosure')
+        value = enclosure.get('{' + NS + '}version') if enclosure is not None else None
+    enclosure = item.find('enclosure')
+    enclosure_value = enclosure.get('{' + NS + '}version') if enclosure is not None else None
+    if enclosure_value is not None and enclosure_value != value:
+        raise ValueError('Appcast contains conflicting sparkle:version values')
+    return value
+
+def validate_feed_builds(tree, url, build):
+    current = release_build(build)
+    matched = 0
+    for item in tree.findall('./channel/item'):
+        enclosure = item.find('enclosure')
+        if enclosure is None:
+            continue
+        value = item_build(item)
+        if enclosure.get('url') == url:
+            matched += 1
+            if value != build:
+                raise ValueError('Appcast sparkle:version does not match released CFBundleVersion')
+        elif release_build(value) >= current:
+            raise ValueError('Release build must exceed every retained prior appcast build')
+    if matched != 1:
+        raise ValueError('Appcast must contain exactly one released enclosure')
+
 def feed():
     root, dmg, metadata, url = download('direct')
-    if metadata['signing'] != 'signed':
-        print('Unsigned preview: stable Sparkle feed publication skipped.')
+    configuration = released_configuration(root, dmg, metadata)
+    if configuration is None:
+        print('Update feed skipped: released direct app has no embedded public key.')
         return
+    public_key, build = configuration
     bin_path = tools(root)
     notes = subprocess.check_output(['gh', 'release', 'view', tag(), '--repo', os.environ['GITHUB_REPOSITORY'], '--json', 'body', '--jq', '.body'], text=True)
     note = '<!doctype html><html lang="en"><meta charset="utf-8"><title>TinyPrune ' + tag()[1:] + '</title><body><pre>' + html.escape(notes) + '</pre></body></html>'
@@ -123,7 +197,8 @@ def feed():
     key_input = (os.environ['SPARKLE_ED25519_PRIVATE_KEY'] + '\n').encode()
     signature = run(str(bin_path / 'sign_update'), '--ed-key-file', '-', '-p', str(dmg), input=key_input, stdout=subprocess.PIPE).stdout.decode().strip()
     run(str(bin_path / 'sign_update'), '--verify', '--ed-key-file', '-', str(dmg), signature, input=key_input)
-    verify_bundle_key(root, dmg, signature)
+    run('swift', 'Scripts/verify-update-signature.swift', public_key, str(dmg), signature)
+    validate_feed_builds(tree, url, build)
     ET.register_namespace('sparkle', NS)
     matched = 0
     note_path = output / (tag()[1:] + '.html')
@@ -138,10 +213,11 @@ def feed():
             if enclosure.get('length') != str(dmg.stat().st_size):
                 raise ValueError('Generated enclosure length mismatch')
             notes_link = item.find('{' + NS + '}releaseNotesLink')
-            if notes_link is not None:
-                notes_link.text = 'https://tinyprune.com/updates/' + tag()[1:] + '.html'
-                notes_link.set('{' + NS + '}edSignature', note_signature)
-                notes_link.set('{' + NS + '}length', str(note_path.stat().st_size))
+            if notes_link is None:
+                raise ValueError('Generated appcast is missing release notes')
+            notes_link.text = 'https://tinyprune.com/updates/' + tag()[1:] + '.html'
+            notes_link.set('{' + NS + '}edSignature', note_signature)
+            notes_link.set('{' + NS + '}length', str(note_path.stat().st_size))
     if matched != 1:
         raise ValueError('Generated appcast must contain exactly one released enclosure')
     tree.write(output / 'appcast.xml', encoding='utf-8', xml_declaration=True)
@@ -151,9 +227,11 @@ def feed():
 
 def verify():
     root, dmg, metadata, url = download('direct')
-    if metadata['signing'] != 'signed':
-        print('Unsigned preview has no stable feed entry; verification skipped.')
+    configuration = released_configuration(root, dmg, metadata)
+    if configuration is None:
+        print('Public feed verification skipped: released direct app has no embedded public key.')
         return
+    public_key, build = configuration
     bin_path = tools(root)
     key_input = (os.environ['SPARKLE_ED25519_PRIVATE_KEY'] + '\n').encode()
     public_feed = root / 'public-appcast.xml'
@@ -161,6 +239,11 @@ def verify():
         public_feed.write_bytes(response.read())
     run(str(bin_path / 'sign_update'), '--verify', '--ed-key-file', '-', str(public_feed), input=key_input)
     tree = ET.parse(public_feed).getroot()
+    # Historical entries may be verified after a newer release has reached the feed.
+    item = next((item for item in tree.findall('./channel/item')
+                 if item.find('enclosure') is not None and item.find('enclosure').get('url') == url), None)
+    if item is None or item_build(item) != build:
+        raise ValueError('Public sparkle:version does not match released CFBundleVersion')
     matches = [e for e in tree.findall('./channel/item/enclosure') if e.get('url') == url]
     if len(matches) != 1 or matches[0].get('length') != str(dmg.stat().st_size):
         raise ValueError('Public feed enclosure URL/length does not match release')
@@ -168,8 +251,7 @@ def verify():
     if not signature:
         raise ValueError('Public enclosure has no EdDSA signature')
     run(str(bin_path / 'sign_update'), '--verify', '--ed-key-file', '-', str(dmg), signature, input=key_input)
-    verify_bundle_key(root, dmg, signature)
-    item = next(item for item in tree.findall('./channel/item') if item.find('enclosure') is not None and item.find('enclosure').get('url') == url)
+    run('swift', 'Scripts/verify-update-signature.swift', public_key, str(dmg), signature)
     notes_link = item.find('{' + NS + '}releaseNotesLink')
     expected_notes_url = 'https://tinyprune.com/updates/' + tag()[1:] + '.html'
     if notes_link is None or notes_link.text != expected_notes_url:
@@ -188,7 +270,9 @@ if __name__ == '__main__':
     if command == 'notes':
         print(WARNING if os.environ['SIGNING_MODE'] == 'unsigned' else 'Developer ID signed and notarized universal macOS release.')
     elif command == 'metadata':
-        (Path(os.environ['RUNNER_TEMP']) / f'TinyPrune-{tag()[1:]}.json').write_text(json.dumps({'tag': tag(), 'signing': os.environ['SIGNING_MODE']}))
+        build = os.environ['TINYPRUNE_BUILD']
+        release_build(build)
+        (Path(os.environ['RUNNER_TEMP']) / f'TinyPrune-{tag()[1:]}.json').write_text(json.dumps({'tag': tag(), 'signing': os.environ['SIGNING_MODE'], 'build': build}))
     elif command == 'cask':
         render()
     elif command == 'feed':

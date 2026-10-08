@@ -1,6 +1,5 @@
 import AppKit
 import Combine
-import Security
 import ServiceManagement
 import Sparkle
 import SwiftUI
@@ -13,6 +12,7 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
     @Published private(set) var canCheckForUpdates = false
     @Published private(set) var availabilityReason: String?
     @Published private(set) var safetyStatus: String?
+    @Published private(set) var availableUpdateVersion: String?
     private var controller: SPUStandardUpdaterController?
     private let gate = UpdateInstallationGate()
     private var holdsInstallationGate = false
@@ -21,7 +21,7 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
     private var releaseNeedsRetry = false
     private var cancellables = Set<AnyCancellable>()
     private let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
-    /// Builds that cannot install updates in-app (unsigned, Homebrew, no feed key) offer a manual-download notice instead.
+    /// Homebrew and builds without a valid feed key offer a manual-download notice instead.
     private var usesReleaseNotifier = false
     private let releases = ReleaseNotifier()
 
@@ -29,18 +29,16 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
         super.init()
         defer { reconcileHaltStatus() }
         let bundle = Bundle.main
-        guard Self.isDeveloperIDSigned(), bundle.object(forInfoDictionaryKey: "TinyPruneSigning") as? String == "developer-id" else {
+        let isDirect = bundle.object(forInfoDictionaryKey: "TinyPruneDistribution") as? String == "direct"
+        let key = bundle.object(forInfoDictionaryKey: "SUPublicEDKey") as? String ?? ""
+        let updatesEnabled = isDirect
+            && bundle.object(forInfoDictionaryKey: "TinyPruneUpdatesEnabled") as? Bool == true
+            && Data(base64Encoded: key)?.count == 32
+        guard updatesEnabled else {
             usesReleaseNotifier = true
             availabilityReason = bundle.object(forInfoDictionaryKey: "TinyPruneDistribution") as? String == "homebrew"
                 ? "This copy is managed by Homebrew. Update with brew upgrade --cask tinyprune. In-app checks and installations are disabled."
-                : "Development and unsigned preview copies require manual downloads. In-app update checks and installations are disabled."
-            do {
-                if try gate.hasPendingInstallation() {
-                    safetyStatus = "A pending signed update is keeping pruning stopped. This development or unsigned copy cannot clear or resume its installation interlock. Launch the signed original app to resume the update, or manually install and launch its intended newer signed release."
-                }
-            } catch {
-                safetyStatus = "Update safety status could not be read: \(error.localizedDescription)"
-            }
+                : "This copy has no valid update verification public key or its update channel is disabled. Download a newer release manually."
             return
         }
         do {
@@ -57,30 +55,25 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
             do {
                 holdsInstallationGate = try gate.resumePendingInstallation(currentVersion: currentVersion)
                 retainsDownloadedUpdate = holdsInstallationGate
-                safetyStatus = "Pruning is stopped while a pending update is resumed. Check for Updates to finish it. If it cannot resume, manually install the intended newer signed release and launch that version; launching this old version alone will not resume pruning."
+                safetyStatus = "Pruning is stopped while a pending update is resumed. Check for Updates to finish it. If it cannot resume, manually install the intended newer release and launch that version; launching this old version alone will not resume pruning."
             } catch {
-                availabilityReason = "The pending update could not be resumed safely: \(error.localizedDescription) Manually finish installing its intended newer signed release, then launch that version."
+                availabilityReason = "The pending update could not be resumed safely: \(error.localizedDescription) Manually finish installing its intended newer release, then launch that version."
                 return
             }
         } catch {
-            availabilityReason = "Update safety coordination is unavailable: \(error.localizedDescription) If an update was interrupted, manually finish installing its intended newer signed release, then launch that version. The old version cannot resume pruning."
-            return
-        }
-        guard bundle.object(forInfoDictionaryKey: "TinyPruneDistribution") as? String != "homebrew" else {
-            usesReleaseNotifier = true
-            availabilityReason = "This copy is managed by Homebrew. Update with brew upgrade --cask tinyprune. In-app checks and installations are disabled."
-            return
-        }
-        guard bundle.object(forInfoDictionaryKey: "TinyPruneUpdatesEnabled") as? Bool == true,
-              let key = bundle.object(forInfoDictionaryKey: "SUPublicEDKey") as? String,
-              Data(base64Encoded: key)?.count == 32 else {
-            usesReleaseNotifier = true
-            availabilityReason = "This release has no configured update verification public key. Download a newer signed release manually."
+            availabilityReason = "Update safety coordination is unavailable: \(error.localizedDescription) If an update was interrupted, manually finish installing its intended newer release, then launch that version. The old version cannot resume pruning."
             return
         }
         let controller = SPUStandardUpdaterController(startingUpdater: false, updaterDelegate: self, userDriverDelegate: nil)
         self.controller = controller
         controller.updater.publisher(for: \.canCheckForUpdates).assign(to: &$canCheckForUpdates)
+        synchronizeAutomaticChecks()
+        NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                MainActor.assumeIsolated { self?.synchronizeAutomaticChecks() }
+            }
+            .store(in: &cancellables)
         do { try controller.updater.start() }
         catch { availabilityReason = "The updater could not start: \(error.localizedDescription)" }
     }
@@ -97,6 +90,13 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
 
     func checkForUpdates() {
         if usesReleaseNotifier {
+            if let availabilityReason {
+                let alert = NSAlert()
+                alert.messageText = "In-app installation unavailable"
+                alert.informativeText = availabilityReason + "\n\nYou can still check GitHub for a release to install manually."
+                alert.addButton(withTitle: "OK")
+                alert.runModal()
+            }
             releases.checkManually()
         } else if let availabilityReason {
             let alert = NSAlert()
@@ -107,6 +107,23 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
         } else {
             controller?.checkForUpdates(nil)
         }
+    }
+
+    private func synchronizeAutomaticChecks() {
+        let defaults = UserDefaults.standard
+        let enabled = defaults.object(forKey: "checkForNewVersions") == nil
+            || defaults.bool(forKey: "checkForNewVersions")
+        if controller?.updater.automaticallyChecksForUpdates != enabled {
+            controller?.updater.automaticallyChecksForUpdates = enabled
+        }
+    }
+
+    func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
+        availableUpdateVersion = item.displayVersionString
+    }
+
+    func updaterDidNotFindUpdate(_ updater: SPUUpdater) {
+        availableUpdateVersion = nil
     }
 
     func updater(_ updater: SPUUpdater, mayPerform updateCheck: SPUUpdateCheck) throws {
@@ -134,6 +151,7 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
         } else if choice == .skip {
             // Sparkle clears any retained download before completing this cycle.
             retainsDownloadedUpdate = false
+            availableUpdateVersion = nil
         }
     }
 
@@ -157,7 +175,7 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
         // Sparkle resumes downloaded updates without calling shouldProceedWithUpdate again.
         // A post-download error therefore must not reopen Trash while a resumable install exists.
         if installationScheduled || retainsDownloadedUpdate {
-            safetyStatus = "The update did not finish. Pruning remains stopped for safety. Try Check for Updates to resume it, or finish installing the intended newer signed release manually and launch it. \(error.localizedDescription)"
+            safetyStatus = "The update did not finish. Pruning remains stopped for safety. Try Check for Updates to resume it, or finish installing the intended newer release manually and launch it. \(error.localizedDescription)"
         } else {
             releaseGate()
         }
@@ -193,7 +211,7 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
         do {
             if try gate.hasPendingInstallation() {
                 if safetyStatus == nil {
-                    safetyStatus = "Pruning is stopped because an app update was started and not finished. Check for Updates to resume it, or manually install the intended newer signed release and launch that version."
+                    safetyStatus = "Pruning is stopped because an app update was started and not finished. Check for Updates to resume it, or manually install the intended newer release and launch that version."
                 }
             } else if safetyStatus != nil {
                 safetyStatus = nil
@@ -233,14 +251,6 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
         if availabilityReason == nil, controller != nil { controller?.checkForUpdates(nil) } else { showSafetyStatus() }
     }
 
-    private static func isDeveloperIDSigned() -> Bool {
-        var code: SecCode?
-        guard SecCodeCopySelf([], &code) == errSecSuccess, let code else { return false }
-        var requirement: SecRequirement?
-        let expression = "anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.13] exists"
-        guard SecRequirementCreateWithString(expression as CFString, [], &requirement) == errSecSuccess, let requirement else { return false }
-        return SecCodeCheckValidity(code, [], requirement) == errSecSuccess
-    }
 }
 
 struct UpdateCommand: View {
@@ -249,7 +259,11 @@ struct UpdateCommand: View {
     var body: some View {
         Button("Check for Updates…") { updater.checkForUpdates() }
             .disabled(updater.availabilityReason == nil && !updater.canCheckForUpdates)
-            .help(updater.usesGitHubReleaseCheck ? "Look for a newer release on GitHub. Nothing is installed automatically." : (updater.availabilityReason ?? "Check the signed direct-download update feed"))
+            .help(updater.availabilityReason ?? "Check the EdDSA-verified direct-download update feed")
+        if let version = updater.availableUpdateVersion {
+            Button("Update Now — TinyPrune \(version)") { updater.checkForUpdates() }
+                .disabled(!updater.canCheckForUpdates)
+        }
         if updater.safetyStatus != nil {
             Button("Update Safety Status…") { updater.showSafetyStatus() }
         }

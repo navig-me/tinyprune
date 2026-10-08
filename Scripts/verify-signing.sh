@@ -145,14 +145,19 @@ enabled="$(plist_value TinyPruneUpdatesEnabled)"
 [[ "$(plist_value SUSignedFeedFailureExpirationInterval)" == 0 ]] || fail "signed feed validation must fail closed"
 [[ "$(plist_value SUAllowsAutomaticUpdates)" == false && "$(plist_value SUAutomaticallyUpdate)" == false ]] \
   && pass "automatic installations disabled" || fail "automatic installation policy mismatch"
-if [[ "$channel" == homebrew || "$(plist_value TinyPruneSigning)" == ad-hoc ]]; then
+if [[ "$channel" == homebrew ]]; then
   [[ "$enabled" == false && "$(plist_value SUEnableAutomaticChecks)" == false ]] \
-    && pass "Homebrew/development updater disabled" || fail "Homebrew/development updater enabled"
+    && pass "Homebrew updater disabled" || fail "Homebrew updater enabled"
+fi
+public_key="$(plist_value SUPublicEDKey)"
+if [[ -n "$public_key" ]]; then
+  check "valid 32-byte Ed25519 public key" python3 -c 'import base64, sys; assert len(base64.b64decode(sys.argv[1], validate=True)) == 32' "$public_key"
 fi
 if [[ "$enabled" == true ]]; then
-  [[ "$channel" == direct && "$(plist_value TinyPruneSigning)" == developer-id ]] || fail "updater enabled outside signed direct channel"
-  [[ "$(plist_value SUPublicEDKey)" != "" && "$(plist_value SUEnableAutomaticChecks)" == true ]] \
-    && pass "enabled updater has public key and checks" || fail "enabled updater lacks public key/check policy"
+  [[ "$channel" == direct ]] || fail "updater enabled outside direct channel"
+  [[ "$(plist_value TinyPruneSigning)" == developer-id || "$(plist_value TinyPruneSigning)" == ad-hoc ]] || fail "unknown updater signing mode"
+  [[ -n "$public_key" && "$(plist_value SUEnableAutomaticChecks)" == true ]] \
+    && pass "enabled direct updater has public key and checks" || fail "enabled updater lacks public key/check policy"
 else
   [[ "$(plist_value SUEnableAutomaticChecks)" == false ]] || fail "disabled updater has automatic checks"
 fi

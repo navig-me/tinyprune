@@ -1,9 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.1.2 - 2026-10-08
 
 ### Updates
-- New-version notice for builds that cannot update in-app (unsigned previews, Homebrew, development): "Check for Updates…" asks github.com for the public release list, and, on by default (Settings > General > Check for new versions), it does so once a day. A banner and menu-bar item offer Download (direct), Copy Upgrade Command (Homebrew), Release Notes, Skip This Version and Later. Nothing is downloaded or installed automatically, only links on this repository are ever offered, and no identifiers are sent.
+- Key-enabled direct builds now support EdDSA-authenticated Sparkle updates without an Apple account, including ad-hoc releases. Signed feed XML, release notes and immutable direct DMGs remain required; Homebrew never constructs Sparkle. The existing Trash/update interlock also permits pending resume and matching-target recovery for key-enabled ad-hoc direct builds.
+- Automatic checks follow Settings > General > Check for new versions (on by default). Update Now opens Sparkle's native user-confirmation dialog; installation is never automatic. Release build numbers use `github.run_number` for both channels, and the stable feed accepts key-enabled ad-hoc GitHub prereleases.
+- New-version notice for builds that cannot update in-app (Homebrew and direct copies without a public key): "Check for Updates…" asks github.com for the public release list, and, on by default (Settings > General > Check for new versions), it does so once a day. A banner and menu-bar item offer Download (direct), Copy Upgrade Command (Homebrew), Release Notes, Skip This Version and Later. Nothing is downloaded or installed automatically by this fallback, only links on this repository are ever offered, and no identifiers are sent.
+- First-install Gatekeeper approval for ad-hoc downloads is unchanged. Sparkle replacements are expected not to repeat browser quarantine approval, but end-to-end installation remains unverified. ADR 0009 documents private-key custody/loss/rotation and the acceptance boundary.
 
 ## 0.1.1 - 2026-10-08
 

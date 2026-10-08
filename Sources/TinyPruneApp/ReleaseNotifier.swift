@@ -3,8 +3,8 @@ import Foundation
 import TinyPruneIPC
 import TinyPruneUI
 
-/// Tells the user a newer release exists when Sparkle cannot install it (unsigned previews, Homebrew copies,
-/// development builds). It only ever opens a link or copies a command; it never downloads or installs.
+/// Tells the user a newer release exists when Sparkle cannot install it (Homebrew copies or builds without
+/// a valid update key). It only ever opens a link or copies a command; it never downloads or installs.
 ///
 /// Network use is deliberate and narrow: one HTTPS GET of the public release list on github.com, either when the
 /// user chooses "Check for Updates…" or, unless they turned it off in Settings, at most once a day. No identifiers are sent.
