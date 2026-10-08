@@ -271,7 +271,7 @@ def verify():
     notes_signature = notes_link.get('{' + NS + '}edSignature')
     signed_length = notes_link.get('{' + NS + '}length')
     if not notes_signature or signed_length != str(public_notes.stat().st_size):
-        raise ValueError(f'Public release notes signature/length is missing or mismatched: signed={signed_length} fetched={public_notes.stat().st_size} final_url={final_url}')
+        raise ValueError(f'Public release notes signature/length is missing or mismatched: signed={signed_length} fetched={public_notes.stat().st_size} final_url={final_url}\n{public_notes.read_text(errors="replace")}')
     run(str(bin_path / 'sign_update'), '--verify', '--ed-key-file', '-', str(public_notes), notes_signature, input=key_input)
     print('Public signed feed, direct enclosure URL/length/signature and release notes verified.')
 
