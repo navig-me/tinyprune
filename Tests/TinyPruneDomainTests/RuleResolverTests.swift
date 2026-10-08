@@ -78,13 +78,41 @@ import Foundation
     }
 
 
-    @Test func testIdentityMismatchDoesNotApplyStaleItemOverrideAtReusedPath() throws {
+    @Test func testKeepFailsTowardProtectionWhenIdentityChangedAtKeptPath() throws {
         let original = candidate(path: "/Developer/project/node_modules", resource: Data([1]))
         let replacement = candidate(path: original.identity.pathHint, resource: Data([2]))
         let keep = ItemPolicyOverride(identity: original.identity, path: original.identity.pathHint, policy: .keep(protectDescendants: false))
         let rule = try makeRule(name: "Developer cleanup", scope: "/Developer", exactNames: ["node_modules"])
 
-        #expect(scheduledName(RuleResolver.resolve(candidate: replacement, rules: [rule], overrides: [keep])) == "Developer cleanup")
+        guard case .protected = RuleResolver.resolve(candidate: replacement, rules: [rule], overrides: [keep]) else {
+            Issue.record("A Keep must still protect whatever now lives at the kept path"); return
+        }
+    }
+
+    @Test func testKeepFollowsRenamedItemByIdentity() throws {
+        let original = candidate(path: "/Developer/project/node_modules", resource: Data([1]))
+        let renamed = candidate(path: "/Developer/project/renamed", resource: Data([1]))
+        let keep = ItemPolicyOverride(identity: original.identity, path: original.identity.pathHint, policy: .keep(protectDescendants: false))
+        guard case .protected = RuleResolver.resolve(candidate: renamed, rules: [], overrides: [keep]) else {
+            Issue.record("Keep must follow a renamed item by identity"); return
+        }
+    }
+
+    @Test func testKeepHelpersCoverDescendantsByHintAndByCurrentPathOfRenamedItem() throws {
+        let kept = candidate(path: "/Developer/legacy", resource: Data([7]))
+        let keep = ItemPolicyOverride(identity: kept.identity, path: "/Developer/legacy", policy: .keep(protectDescendants: true))
+        let child = candidate(path: "/Developer/legacy/node_modules", resource: Data([8]))
+        #expect(RuleResolver.keepCovers(candidateIdentity: child.identity, candidatePath: child.identity.pathHint, override: keep))
+        #expect(RuleResolver.keepProtectsDescendant(of: "/Developer/legacy", override: keep, childIdentity: child.identity, childPath: child.identity.pathHint))
+        // After the kept folder is renamed, its children live under the new path.
+        let movedChild = candidate(path: "/Developer/archive/node_modules", resource: Data([8]))
+        #expect(!RuleResolver.keepCovers(candidateIdentity: movedChild.identity, candidatePath: movedChild.identity.pathHint, override: keep))
+        #expect(RuleResolver.keepCovers(candidateIdentity: movedChild.identity, candidatePath: movedChild.identity.pathHint, override: keep, keptItemCurrentPath: "/Developer/archive"))
+        #expect(RuleResolver.keepProtectsDescendant(of: "/Developer/archive", override: keep, childIdentity: movedChild.identity, childPath: movedChild.identity.pathHint, keptItemCurrentPath: "/Developer/archive"))
+        // A sibling outside the ancestor is never a descendant.
+        #expect(!RuleResolver.keepProtectsDescendant(of: "/Developer/other", override: keep, childIdentity: child.identity, childPath: child.identity.pathHint))
+        let folderOnly = ItemPolicyOverride(identity: kept.identity, path: "/Developer/legacy", policy: .keep(protectDescendants: false))
+        #expect(!RuleResolver.keepCovers(candidateIdentity: child.identity, candidatePath: child.identity.pathHint, override: folderOnly))
     }
 
     @Test func testCustomExpiryUsesExplicitDateAndGlobalPauseSuppressesIt() throws {

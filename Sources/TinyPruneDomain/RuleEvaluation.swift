@@ -4,15 +4,61 @@ public struct FilesystemIdentity: Hashable, Codable, Sendable {
     public let volumeIdentifier: UUID
     public let resourceIdentifier: Data
     public let pathHint: String
+    /// Birth time of the item when known. Guards against inode reuse: when both sides carry it, it must match.
+    public let creationTime: Date?
+    /// Filesystem generation number (`st_gen`) when known; when both sides carry it, it must match.
+    public let generation: UInt32?
+    /// False when `volumeIdentifier` was derived from a device number (not stable across reboots/remounts),
+    /// so the identity must not be trusted after a restart.
+    public let isPersistent: Bool
 
-    public init(volumeIdentifier: UUID, resourceIdentifier: Data, pathHint: String) {
+    public init(
+        volumeIdentifier: UUID,
+        resourceIdentifier: Data,
+        pathHint: String,
+        creationTime: Date? = nil,
+        generation: UInt32? = nil,
+        isPersistent: Bool = true
+    ) {
         self.volumeIdentifier = volumeIdentifier
         self.resourceIdentifier = resourceIdentifier
         self.pathHint = pathHint
+        self.creationTime = creationTime
+        self.generation = generation
+        self.isPersistent = isPersistent
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case volumeIdentifier, resourceIdentifier, pathHint, creationTime, generation, isPersistent
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        volumeIdentifier = try container.decode(UUID.self, forKey: .volumeIdentifier)
+        resourceIdentifier = try container.decode(Data.self, forKey: .resourceIdentifier)
+        pathHint = try container.decode(String.self, forKey: .pathHint)
+        creationTime = try container.decodeIfPresent(Date.self, forKey: .creationTime)
+        generation = try container.decodeIfPresent(UInt32.self, forKey: .generation)
+        isPersistent = try container.decodeIfPresent(Bool.self, forKey: .isPersistent) ?? true
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(volumeIdentifier, forKey: .volumeIdentifier)
+        try container.encode(resourceIdentifier, forKey: .resourceIdentifier)
+        try container.encode(pathHint, forKey: .pathHint)
+        try container.encodeIfPresent(creationTime, forKey: .creationTime)
+        try container.encodeIfPresent(generation, forKey: .generation)
+        if !isPersistent { try container.encode(false, forKey: .isPersistent) }
+    }
+
+    /// Equal when volume and resource ids match and, for each of creation time / generation, either side
+    /// lacks the value or both agree. The hash uses only the always-present fields, which keeps it consistent.
     public static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.volumeIdentifier == rhs.volumeIdentifier && lhs.resourceIdentifier == rhs.resourceIdentifier
+        guard lhs.volumeIdentifier == rhs.volumeIdentifier, lhs.resourceIdentifier == rhs.resourceIdentifier else { return false }
+        if let l = lhs.creationTime, let r = rhs.creationTime, abs(l.timeIntervalSince(r)) > 0.001 { return false }
+        if let l = lhs.generation, let r = rhs.generation, l != r { return false }
+        return true
     }
 
     public func hash(into hasher: inout Hasher) {
@@ -176,6 +222,6 @@ public enum RuleEvaluator {
         case .itemSpecific, .exactPath, .template:
             components = [Substring(candidate.name)]
         }
-        return components.contains { $0.hasPrefix(".") }
+        return components.contains { ItemMatcher.isHiddenName(String($0)) }
     }
 }

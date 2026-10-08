@@ -85,10 +85,10 @@ package struct ActivityTrashRecovery: View {
                 .accessibilityLabel("Show \(item.identity?.pathHint ?? "item") in Trash")
                 .help("Reveal the recorded Trash location in Finder. This does not restore the item.")
             if !available {
-                Text("No longer in Trash").font(.caption).foregroundStyle(.secondary)
+                Text("No longer in Trash").font(.manropeCaption).foregroundStyle(.secondary)
             }
             Text("To restore, use Finder’s Put Back in Trash, if available. TinyPrune does not restore items.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.manropeCaption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .onAppear { available = action.destination(for: item) != nil }
@@ -135,7 +135,7 @@ struct ActivityPage: View {
                                     Text(item.title).foregroundStyle(item.isAttention ? PrunePalette.caution : .primary)
                                     if let path = item.identity?.pathHint { PathText(path: path) }
                                     if item.isAttention, let detail = item.detail {
-                                        Text(detail).font(.caption).foregroundStyle(.secondary)
+                                        Text(detail).font(.manropeCaption).foregroundStyle(.secondary)
                                     }
                                     if item.kind == .movedToTrash {
                                         ActivityTrashRecovery(item: item)
@@ -152,6 +152,7 @@ struct ActivityPage: View {
             .padding(32)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .font(.manropeBody)
     }
 }
 
@@ -177,6 +178,7 @@ struct TemplatesPage: View {
                         }
                         Spacer()
                         Button("Use template…") { applying = template }
+                            .accessibilityLabel("Use \(template.title) template")
                     }
                     .padding(.vertical, 16)
                     Divider()
@@ -185,6 +187,7 @@ struct TemplatesPage: View {
             .padding(32)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .font(.manropeBody)
         .sheet(item: $applying) { TemplateApplySheet(template: $0) }
     }
 }
@@ -229,10 +232,21 @@ package struct TemplateApplySheet: View {
             }
             if template == .temporaryWorkspace {
                 Stepper("Expire after \(Int(temporaryDays)) day\(temporaryDays == 1 ? "" : "s")", value: $temporaryDays, in: 1...365)
-            }
-            if folder?.isVeryBroad == true {
-                Label("This is a very broad folder, so the rules will start in Preview. Specific folders are recommended.", systemImage: "exclamationmark.triangle")
+                Label("Everything placed directly in this folder expires after this time, including items already there. Choose a dedicated scratch folder, never Desktop or Documents.", systemImage: "exclamationmark.triangle")
+                    .font(.manropeSubheadline)
                     .foregroundStyle(PrunePalette.caution)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if forcesPreview {
+                Label(
+                    template.isBroad
+                        ? "This template reaches deep through project folders, so its rules always start in Preview."
+                        : "This is a very broad folder, so the rules will start in Preview. Specific folders are recommended.",
+                    systemImage: "exclamationmark.triangle"
+                )
+                .font(.manropeSubheadline)
+                .foregroundStyle(PrunePalette.caution)
+                .fixedSize(horizontal: false, vertical: true)
             } else {
                 Toggle("Start in Preview", isOn: $startInPreview)
             }
@@ -249,8 +263,9 @@ package struct TemplateApplySheet: View {
         }
         .padding(28)
         }
+        .font(.manropeBody)
         .frame(minWidth: 540, idealWidth: 540, maxWidth: 760, maxHeight: 700)
-        .onAppear { startInPreview = previewByDefault || template.isBroad }
+        .onAppear { startInPreview = previewByDefault || forcesPreview }
         .alert("Could not create rules", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
             Button("OK", role: .cancel) { errorMessage = nil }
         } message: { Text(errorMessage ?? "") }
@@ -271,16 +286,25 @@ package struct TemplateApplySheet: View {
         } catch { errorMessage = error.localizedDescription }
     }
 
+    /// Broad templates and very broad folders may only start in Preview.
+    private var forcesPreview: Bool {
+        if template.isBroad { return true }
+        if folder?.root.isVeryBroad == true { return true }
+        let path = folder?.root.path ?? prefillPath
+        return path.map { RuleScope.isVeryBroad(path: $0) } ?? false
+    }
+
     @MainActor
     private func create() async {
         let scopePath = folder?.root.path ?? prefillPath
-        guard let scopePath else { return }
+        guard let scopePath, !isSaving else { return }
         isSaving = true
         defer { isSaving = false }
         do {
-            let state: RuleState = (startInPreview || folder?.isVeryBroad == true) ? .preview : .active
+            let state: RuleState = (forcesPreview || startInPreview) ? .preview : .active
             let rules = try template.rules(in: scopePath, state: state, temporaryLifetime: temporaryDays * 86_400)
-            try await model.addRules(rules, in: folder)
+            // One atomic policy write: either every rule (and its folder) is added, or nothing is.
+            try await model.addRules(rules, folders: folder.map { [$0] } ?? [])
             dismiss()
         } catch { errorMessage = error.localizedDescription }
     }
@@ -295,8 +319,9 @@ package struct ConfigExportReview {
     package init(policy: AgentPolicySnapshot) throws {
         text = ConfigDocument.render(policy: policy.rules, roots: policy.managedRoots, overrides: policy.overrides)
         let document = try ConfigDocument.parse(text, homeDirectory: NSHomeDirectory())
-        exportedCount = document.rules.count * document.roots.count
-        skippedCount = policy.rules.count - exportedCount
+        // The config format writes each supported rule once for its roots, so rules are counted once, not per root.
+        exportedCount = document.rules.count
+        skippedCount = max(0, policy.rules.count - exportedCount)
         omissions = text.split(separator: "\n").filter { $0.hasPrefix("# - ") }.map { String($0.dropFirst(4)) }
     }
 
@@ -320,6 +345,56 @@ struct SettingsPage: View {
     @State private var backupMessage: String?
     @State private var isRebuilding = false
     @State private var pendingImport: ImportPreview?
+    @State private var pendingRetention: Int?
+    @State private var confirmsRebuild = false
+    @State private var customGraceActive = false
+    @State private var customGraceHours = ""
+
+    private static let customGraceTag = -1.0
+    private static let gracePresets: [Double] = [0, 3_600, 21_600, 86_400]
+    private static let maximumGraceHours = 365.0 * 24
+
+    private static func formatHours(_ seconds: Double) -> String {
+        (seconds / 3_600).formatted(.number.precision(.fractionLength(0...4)).grouping(.never))
+    }
+
+    private var graceSelection: Double {
+        let current = model.settings.defaultGracePeriodSeconds
+        if customGraceActive || !Self.gracePresets.contains(current) { return Self.customGraceTag }
+        return current
+    }
+
+    private func selectGrace(_ value: Double) {
+        if value == Self.customGraceTag {
+            customGraceActive = true
+            customGraceHours = Self.formatHours(model.settings.defaultGracePeriodSeconds)
+        } else {
+            customGraceActive = false
+            updateSettings { $0.defaultGracePeriodSeconds = value }
+        }
+    }
+
+    private func applyCustomGrace() {
+        let text = customGraceHours.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parsed = Double(text) ?? (try? Double(text, format: .number))
+        guard let hours = parsed, hours.isFinite, hours >= 0, hours <= Self.maximumGraceHours else {
+            errorMessage = "Enter a grace period between 0 and 8,760 hours."
+            return
+        }
+        customGraceActive = false
+        updateSettings { $0.defaultGracePeriodSeconds = hours * 3_600 }
+    }
+
+    /// Shortening history deletes audit entries, so it is confirmed; lengthening is applied immediately.
+    private func setRetention(_ days: Int) {
+        let current = model.settings.activityRetentionDays
+        let shrinks = days != 0 && (current == 0 || days < current)
+        if shrinks { pendingRetention = days } else { updateSettings { $0.activityRetentionDays = days } }
+    }
+
+    private var installCommand: String {
+        "mkdir -p /usr/local/bin && ln -s \"\(cliPath)\" /usr/local/bin/tinyprune"
+    }
 
     var body: some View {
         Form {
@@ -336,56 +411,71 @@ struct SettingsPage: View {
                 ))
                 Toggle("Start new template rules in Preview", isOn: $previewByDefault)
                 Picker("Default grace period", selection: Binding(
-                    get: { model.settings.defaultGracePeriodSeconds },
-                    set: { value in updateSettings { $0.defaultGracePeriodSeconds = value } }
+                    get: { graceSelection },
+                    set: { value in selectGrace(value) }
                 )) {
                     Text("None").tag(0.0)
                     Text("1 hour").tag(3_600.0)
                     Text("6 hours").tag(21_600.0)
                     Text("1 day").tag(86_400.0)
+                    Text("Custom…").tag(Self.customGraceTag)
+                }
+                if graceSelection == Self.customGraceTag {
+                    HStack {
+                        TextField("Hours", text: $customGraceHours)
+                            .frame(width: 80)
+                            .accessibilityLabel("Custom default grace period in hours")
+                            .onSubmit(applyCustomGrace)
+                        Text("hours")
+                        Button("Set", action: applyCustomGrace)
+                    }
                 }
                 Toggle("Protect hidden files", isOn: Binding(
                     get: { model.settings.protectHiddenFiles },
                     set: { value in updateSettings { $0.protectHiddenFiles = value } }
                 ))
                 Text("Hidden items are skipped unless a rule names a dot-folder such as .venv. Grace applies to rules that set none of their own.")
-                    .font(.caption).foregroundStyle(.secondary)
-                Text("Everything TinyPrune removes goes to the macOS Trash. Keep always takes precedence.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.manropeCaption).foregroundStyle(.secondary)
+                Text("Everything TinyPrune removes goes to the macOS Trash, where it stays until you or macOS empty it. Keep always takes precedence.")
+                    .font(.manropeCaption).foregroundStyle(.secondary)
             }
             Section("Storage") {
                 LabeledContent("Scheduled items", value: overview.indexedItems.formatted())
                 LabeledContent("Database size", value: ByteCountFormatter.string(fromByteCount: overview.databaseBytes, countStyle: .file))
                 Picker("Activity history", selection: Binding(
                     get: { model.settings.activityRetentionDays },
-                    set: { value in updateSettings { $0.activityRetentionDays = value } }
+                    set: { value in setRetention(value) }
                 )) {
                     Text("Keep forever").tag(0)
                     Text("90 days").tag(90)
                     Text("30 days").tag(30)
                     Text("7 days").tag(7)
+                    if ![0, 90, 30, 7].contains(model.settings.activityRetentionDays) {
+                        Text("\(model.settings.activityRetentionDays) days").tag(model.settings.activityRetentionDays)
+                    }
                 }
                 HStack {
-                    Button("Rebuild index") {
-                        isRebuilding = true
-                        run { defer { isRebuilding = false }; try await model.rebuildIndex() }
-                    }
-                    .disabled(isRebuilding)
+                    Button("Rebuild index") { confirmsRebuild = true }
+                        .disabled(isRebuilding)
                     Button("Export activity log…", action: exportActivity)
                 }
             }
             Section("Developer") {
                 LabeledContent("Install CLI") {
-                    Text("ln -sf \"\(cliPath)\" /usr/local/bin/tinyprune")
-                        .font(Typography.mono(size: 12, relativeTo: .caption))
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .contextMenu {
-                            Button("Copy install command") {
-                                NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString("ln -sf \"\(cliPath)\" /usr/local/bin/tinyprune", forType: .string)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(installCommand)
+                            .font(Typography.mono(size: 12, relativeTo: .caption))
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .contextMenu {
+                                Button("Copy install command") {
+                                    NSPasteboard.general.clearContents()
+                                    NSPasteboard.general.setString(installCommand, forType: .string)
+                                }
                             }
-                        }
+                        Text("Never replaces an existing tinyprune command; remove that one first to relink.")
+                            .font(.manropeCaption).foregroundStyle(.secondary)
+                    }
                 }
             }
             Section("Rule configuration") {
@@ -394,9 +484,9 @@ struct SettingsPage: View {
                     Button("Import rules…", action: importConfig)
                 }
                 Text("This config format is not a complete backup: it exports only supported rules shared by every managed root, and Keep overrides. Review skipped items before exporting. Import reviews additions, changes, and removals before applying; folder access must already be granted and new rules start in Preview.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.manropeCaption).foregroundStyle(.secondary)
                 Text("The same files work with `tinyprune config validate|preview|apply`.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.manropeCaption).foregroundStyle(.secondary)
                 if let backupMessage {
                     Text(backupMessage).textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
@@ -404,13 +494,36 @@ struct SettingsPage: View {
             }
         }
         .formStyle(.grouped)
-        .onAppear { launchesAtLogin = model.services.launchesAtLogin }
+        .font(.manropeBody)
+        .onAppear {
+            launchesAtLogin = model.services.launchesAtLogin
+            customGraceHours = Self.formatHours(model.settings.defaultGracePeriodSeconds)
+        }
         .scrollContentBackground(.hidden)
         .alert("Settings", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
             Button("OK", role: .cancel) { errorMessage = nil }
         } message: { Text(errorMessage ?? "") }
         .sheet(item: $pendingImport) { preview in
             ConfigImportSheet(preview: preview) { backupMessage = "Rules imported from \(preview.fileName). Review their state in Rules." }
+        }
+        .confirmationDialog("Shorten activity history?", isPresented: Binding(get: { pendingRetention != nil }, set: { if !$0 { pendingRetention = nil } }), titleVisibility: .visible) {
+            Button("Remove older history", role: .destructive) {
+                guard let days = pendingRetention else { return }
+                pendingRetention = nil
+                updateSettings { $0.activityRetentionDays = days }
+            }
+            Button("Cancel", role: .cancel) { pendingRetention = nil }
+        } message: {
+            Text("Activity entries older than \(pendingRetention ?? 0) days are removed from this Mac's audit history. Files in the Trash are not affected.")
+        }
+        .confirmationDialog("Rebuild the index?", isPresented: $confirmsRebuild, titleVisibility: .visible) {
+            Button("Rebuild index", role: .destructive) {
+                isRebuilding = true
+                run { defer { isRebuilding = false }; try await model.rebuildIndex() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("TinyPrune rescans every managed folder and recomputes scheduled matches. Nothing is moved to Trash, but Upcoming may be incomplete until the scan finishes, which can take a while on large folders.")
         }
     }
 
@@ -545,7 +658,7 @@ package struct ConfigImportSheet: View {
             }
             .frame(minHeight: 160)
             Text("Review the changes above before applying. Matching configuration rules may be updated; configuration rules absent from the file may be removed within its roots. App-created rules are kept.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.manropeCaption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             if !preview.plan.isApplicable {
                 Label("Add the unmanaged folders in TinyPrune first. Only the app can grant folder access.", systemImage: "exclamationmark.triangle")
@@ -572,6 +685,7 @@ package struct ConfigImportSheet: View {
             }
         }
         .padding(28)
+        .font(.manropeBody)
         .frame(minWidth: 560, idealWidth: 560, maxWidth: 820, minHeight: 420, idealHeight: 520, maxHeight: 760)
     }
 }

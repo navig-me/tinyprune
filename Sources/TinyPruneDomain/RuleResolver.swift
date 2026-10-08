@@ -25,10 +25,11 @@ public struct ItemPolicyOverride: Hashable, Codable, Sendable, Identifiable {
     }
 
     func protects(_ candidate: RuleCandidate) -> Bool {
-        guard case .keep(let protectDescendants) = policy else { return false }
-        let candidatePath = RuleScope.normalized(candidate.identity.pathHint)
-        if appliesExactly(to: candidate) { return true }
-        return protectDescendants && candidatePath.hasPrefix(path + "/")
+        RuleResolver.keepCovers(
+            candidateIdentity: candidate.identity,
+            candidatePath: candidate.identity.pathHint,
+            override: self
+        )
     }
 }
 
@@ -145,6 +146,48 @@ public enum RuleResolver {
         return false
     }
 
+    /// Whether a Keep override protects the item. Fails toward protection: the override matches when the
+    /// identity matches OR the normalized path matches (a replaced file at a kept path stays protected, and a
+    /// renamed kept item stays protected by identity). With `protectDescendants`, anything under the
+    /// override's recorded path is also covered, and — when the caller knows where the identity-matched kept
+    /// item lives now (`keptItemCurrentPath`) — anything under that current path too.
+    public static func keepCovers(
+        candidateIdentity: FilesystemIdentity?,
+        candidatePath: String,
+        override: ItemPolicyOverride,
+        keptItemCurrentPath: String? = nil
+    ) -> Bool {
+        guard case .keep(let protectDescendants) = override.policy else { return false }
+        let path = RuleScope.normalized(candidatePath)
+        if let candidateIdentity, let identity = override.identity, candidateIdentity == identity { return true }
+        if path == override.path { return true }
+        let current = keptItemCurrentPath.map(RuleScope.normalized)
+        if let current, path == current { return true }
+        guard protectDescendants else { return false }
+        if path.hasPrefix(override.path + "/") { return true }
+        if let current, path.hasPrefix(current + "/") { return true }
+        return false
+    }
+
+    /// Whether a Keep override protects `childPath`/`childIdentity`, an item inside the folder at
+    /// `ancestorPath` that is about to be removed whole. Used to refuse trashing a folder that contains
+    /// protected content.
+    public static func keepProtectsDescendant(
+        of ancestorPath: String,
+        override: ItemPolicyOverride,
+        childIdentity: FilesystemIdentity?,
+        childPath: String,
+        keptItemCurrentPath: String? = nil
+    ) -> Bool {
+        let ancestor = RuleScope.normalized(ancestorPath)
+        guard RuleScope.normalized(childPath).hasPrefix(ancestor + "/") else { return false }
+        return keepCovers(
+            candidateIdentity: childIdentity,
+            candidatePath: childPath,
+            override: override,
+            keptItemCurrentPath: keptItemCurrentPath
+        )
+    }
 }
 
 private struct RuleRankedMatch: Comparable {

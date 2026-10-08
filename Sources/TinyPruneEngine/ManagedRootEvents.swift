@@ -20,14 +20,27 @@ public struct ManagedRootEvent: Sendable {
     }
 }
 
+/// Owned jointly by the stream (via retain/release callbacks) and `ManagedRootEventStream`, so an in-flight
+/// callback can never observe a freed context. `deactivate()` makes later deliveries no-ops.
 private final class EventCallbackContext: @unchecked Sendable {
-    let handler: @Sendable (ManagedRootEvent) -> Void
+    private let lock = NSLock()
+    private var handler: (@Sendable (ManagedRootEvent) -> Void)?
+
     init(handler: @escaping @Sendable (ManagedRootEvent) -> Void) { self.handler = handler }
+
+    func deliver(_ event: ManagedRootEvent) {
+        let current = lock.withLock { handler }
+        current?(event)
+    }
+
+    func deactivate() {
+        lock.withLock { handler = nil }
+    }
 }
 
 public final class ManagedRootEventStream: @unchecked Sendable {
     private let stream: FSEventStreamRef
-    private let context: Unmanaged<EventCallbackContext>
+    private let context: EventCallbackContext
     private let queue: DispatchQueue
     private let stopLock = NSLock()
     private var stopped = false
@@ -38,36 +51,45 @@ public final class ManagedRootEventStream: @unchecked Sendable {
         handler: @escaping @Sendable (ManagedRootEvent) -> Void
     ) throws {
         let contextValue = EventCallbackContext(handler: handler)
-        let retainedContext = Unmanaged.passRetained(contextValue)
-        var context = FSEventStreamContext(
+        // The stream retains/releases `info` itself; it stays valid until the stream is deallocated.
+        var streamContext = FSEventStreamContext(
             version: 0,
-            info: retainedContext.toOpaque(),
-            retain: nil,
-            release: nil,
+            info: Unmanaged.passUnretained(contextValue).toOpaque(),
+            retain: { info in
+                guard let info else { return nil }
+                _ = Unmanaged<EventCallbackContext>.fromOpaque(info).retain()
+                return info
+            },
+            release: { info in
+                guard let info else { return }
+                Unmanaged<EventCallbackContext>.fromOpaque(info).release()
+            },
             copyDescription: nil
         )
         let watchedPaths = [rootPath] as CFArray
-        let flags = FSEventStreamCreateFlags(kFSEventStreamCreateFlagFileEvents)
+        // WatchRoot delivers RootChanged when the root itself is renamed, moved or deleted.
+        let flags = FSEventStreamCreateFlags(kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagWatchRoot)
         guard let stream = FSEventStreamCreate(
             kCFAllocatorDefault,
             Self.receiveEvents,
-            &context,
+            &streamContext,
             watchedPaths,
             eventID,
             latency,
             flags
         ) else {
-            retainedContext.release()
             throw ManagedRootEventError.streamCreationFailed(rootPath)
         }
         self.stream = stream
-        self.context = retainedContext
+        self.context = contextValue
         self.queue = DispatchQueue(label: "com.navig-me.tinyprune.fsevents.\(UUID().uuidString)", qos: .utility)
         FSEventStreamSetDispatchQueue(stream, queue)
         guard FSEventStreamStart(stream) else {
+            // Mark stopped first so `deinit` does not release the stream a second time.
+            stopLock.withLock { stopped = true }
+            contextValue.deactivate()
             FSEventStreamInvalidate(stream)
             FSEventStreamRelease(stream)
-            retainedContext.release()
             throw ManagedRootEventError.streamStartFailed(rootPath)
         }
     }
@@ -79,10 +101,10 @@ public final class ManagedRootEventStream: @unchecked Sendable {
             return true
         }
         guard shouldStop else { return }
+        context.deactivate()
         FSEventStreamStop(stream)
         FSEventStreamInvalidate(stream)
         FSEventStreamRelease(stream)
-        context.release()
     }
 
     deinit { stop() }
@@ -93,7 +115,7 @@ public final class ManagedRootEventStream: @unchecked Sendable {
         guard let info else { return }
         let callback = Unmanaged<EventCallbackContext>.fromOpaque(info).takeUnretainedValue()
         if eventCount > maximumEventsPerCallback {
-            callback.handler(ManagedRootEvent(
+            callback.deliver(ManagedRootEvent(
                 paths: [],
                 flags: [],
                 eventIDs: [eventIDs[eventCount - 1]],
@@ -114,7 +136,7 @@ public final class ManagedRootEventStream: @unchecked Sendable {
             flags.append(eventFlags[index])
             ids.append(eventIDs[index])
         }
-        callback.handler(ManagedRootEvent(paths: paths, flags: flags, eventIDs: ids))
+        callback.deliver(ManagedRootEvent(paths: paths, flags: flags, eventIDs: ids))
     }
 }
 

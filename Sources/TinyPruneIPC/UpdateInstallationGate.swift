@@ -96,14 +96,16 @@ public final class UpdateInstallationGate: @unchecked Sendable {
     }
 
     /// Only the original updater may cancel its own installation marker.
+    /// The marker is removed while the exclusive lock is still held, so a failed removal leaves the
+    /// gate retryable (descriptor kept) instead of wedged with a marker nobody owns.
     public func finishInstallation() throws {
         mutex.lock()
         defer { mutex.unlock() }
         guard installationDescriptor >= 0 else { return }
+        try removeMarkerIfPresent()
         close(installationDescriptor)
         installationDescriptor = -1
-        // Unlock while the marker still inhibits Trash; removing it then generates the wakeup.
-        try FileManager.default.removeItem(at: markerURL)
+        signalChange()
     }
 
     /// A launch of the unchanged old app cannot reopen cleanup during replacement.
@@ -124,10 +126,23 @@ public final class UpdateInstallationGate: @unchecked Sendable {
             throw UpdateInstallationError.recoveryRequired
         }
         try beforeResuming()
+        try removeMarkerIfPresent()
         close(descriptor)
         descriptor = -1
-        try FileManager.default.removeItem(at: markerURL)
+        signalChange()
         return true
+    }
+
+    private func removeMarkerIfPresent() throws {
+        do { try FileManager.default.removeItem(at: markerURL) }
+        catch let error as NSError where error.domain == NSCocoaErrorDomain && error.code == NSFileNoSuchFileError {}
+    }
+
+    /// Observers wake on directory changes. Marker removal happens while the lock is still held, so
+    /// emit one more directory event after the lock is released for waiters that raced it.
+    private func signalChange() {
+        let wake = directory.appendingPathComponent("update-installation.wake")
+        if (try? Data().write(to: wake)) != nil { try? FileManager.default.removeItem(at: wake) }
     }
 
     private var markerURL: URL { directory.appendingPathComponent("update-installation.json") }

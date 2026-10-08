@@ -14,9 +14,7 @@ public struct ManagedRoot: Hashable, Codable, Sendable, Identifiable {
         guard path.hasPrefix("/"), normalizedPath != "/", path == normalizedPath else {
             throw ManagedRootValidationError.invalidPath
         }
-        let protectedLocations = ["/Applications", "/System", "/Library", "/bin", "/sbin", "/usr", "/etc", "/var"]
-        guard !normalizedPath.hasSuffix("/Library"),
-              !protectedLocations.contains(where: { normalizedPath == $0 || normalizedPath.hasPrefix($0 + "/") }) else {
+        guard !Self.isDangerous(path: normalizedPath) else {
             throw ManagedRootValidationError.dangerousPath
         }
         guard !bookmarkData.isEmpty else { throw ManagedRootValidationError.emptyBookmark }
@@ -24,6 +22,20 @@ public struct ManagedRoot: Hashable, Codable, Sendable, Identifiable {
         self.displayName = displayName
         self.path = normalizedPath
         self.bookmarkData = bookmarkData
+    }
+
+    private static let protectedLocations = [
+        "/applications", "/system", "/library", "/bin", "/sbin", "/usr", "/etc", "/var",
+        "/private/etc", "/private/var/db", "/dev", "/cores",
+    ]
+
+    /// Case-insensitive, checked on both the normalized path and its symlink-resolved form so aliases like
+    /// `/applications` or a symlink into `/System` cannot bypass the denylist.
+    static func isDangerous(path: String) -> Bool {
+        RuleScope.comparisonForms(of: path).contains { form in
+            form.hasSuffix("/library")
+                || protectedLocations.contains { form == $0 || form.hasPrefix($0 + "/") }
+        }
     }
 }
 

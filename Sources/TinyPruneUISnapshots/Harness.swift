@@ -110,7 +110,8 @@ struct UnavailableTransport: AgentTransport {
     func request(_ request: AgentRequest) async throws -> AgentResponse { throw AgentClientError.unavailable }
 }
 
-/// Real agent for everything except `previewRule`, which can be scripted to show truncation and a stalled scan.
+/// Real agent for everything except scripted faults: `previewRule` can show truncation and a stalled scan, policy
+/// writes can report a stale revision, and overview loads can fail to prove the model keeps its last good state.
 final class ScriptedTransport: AgentTransport, @unchecked Sendable {
     enum PreviewMode: Sendable {
         case passthrough
@@ -123,6 +124,9 @@ final class ScriptedTransport: AgentTransport, @unchecked Sendable {
     private var mode = PreviewMode.passthrough
     private var previewCount = 0
     private var log: [AgentOperation] = []
+    private var pendingConflicts = 0
+    private var overviewFails = false
+    private var interruptsNextMutation = false
 
     init(base: any AgentTransport) { self.base = base }
 
@@ -130,9 +134,36 @@ final class ScriptedTransport: AgentTransport, @unchecked Sendable {
     var previewRequests: Int { lock.withLock { previewCount } }
     func requests(matching predicate: (AgentOperation) -> Bool) -> Int { lock.withLock { log.filter(predicate).count } }
 
+    /// The next `count` `replacePolicy` / `saveRule` requests are answered with `policyConflict` without reaching the agent.
+    func injectPolicyConflicts(_ count: Int) { lock.withLock { pendingConflicts = count } }
+    /// While set, `loadOverview` throws `AgentClientError.unavailable`.
+    func setOverviewFailing(_ failing: Bool) { lock.withLock { overviewFails = failing } }
+    /// The next mutating request throws `AgentClientError.interrupted` after it has been applied by the real agent.
+    func interruptNextMutationAfterApplying() { lock.withLock { interruptsNextMutation = true } }
+
+    private static func isMutation(_ operation: AgentOperation) -> Bool {
+        switch operation {
+        case .replacePolicy, .saveRule, .setItemOverride, .setItemOverrides, .clearItemOverride, .setGlobalPause, .pauseUntil,
+             .updateSettings, .deleteRule, .rebuildIndex:
+            return true
+        default:
+            return false
+        }
+    }
+
     func request(_ request: AgentRequest) async throws -> AgentResponse {
         lock.withLock { log.append(request.operation) }
-        if case .previewRule = request.operation {
+        switch request.operation {
+        case .loadOverview:
+            if lock.withLock({ overviewFails }) { throw AgentClientError.unavailable }
+        case .replacePolicy, .saveRule:
+            let conflict = lock.withLock { () -> Bool in
+                guard pendingConflicts > 0 else { return false }
+                pendingConflicts -= 1
+                return true
+            }
+            if conflict { return AgentResponse(payload: .failure(.policyConflict)) }
+        case .previewRule:
             let current = lock.withLock { () -> PreviewMode in previewCount += 1; return mode }
             switch current {
             case .passthrough: break
@@ -141,8 +172,18 @@ final class ScriptedTransport: AgentTransport, @unchecked Sendable {
                 // Resumes only when the caller cancels, so the cancel path is observable.
                 try await Task.sleep(for: .seconds(3_600))
             }
+        default:
+            break
         }
-        return try await base.request(request)
+        let response = try await base.request(request)
+        if Self.isMutation(request.operation), lock.withLock({ () -> Bool in
+            let interrupt = interruptsNextMutation
+            interruptsNextMutation = false
+            return interrupt
+        }) {
+            throw AgentClientError.interrupted
+        }
+        return response
     }
 }
 
@@ -177,8 +218,8 @@ final class LiveAgent {
         transport = ScriptedTransport(base: InProcessTransport(handler: handler))
     }
 
-    func model(services: StubServices) -> AgentViewModel {
-        AgentViewModel(transport: transport, services: services, postsNotifications: false)
+    func model(services: StubServices, defaults: UserDefaults = .standard, now: @escaping @Sendable () -> Date = { Date() }) -> AgentViewModel {
+        AgentViewModel(transport: transport, services: services, postsNotifications: false, defaults: defaults, now: now)
     }
 
     func stop() async { await runtime.stop() }

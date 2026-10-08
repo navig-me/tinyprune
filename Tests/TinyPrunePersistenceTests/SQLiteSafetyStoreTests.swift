@@ -295,6 +295,169 @@ import Testing
         #expect(afterChange.contains(change.id))
     }
 
+    @Test func testEveryPolicyMutationBumpsRevisionAndStaleReplaceIsRejected() async throws {
+        let harness = try makeStore()
+        defer { try? FileManager.default.removeItem(at: harness.directory) }
+        let store = harness.store
+        let initial = try await store.loadSnapshot()
+        #expect(initial.revision == 0)
+
+        let rule = try makeRule(name: "Rule")
+        try await store.replaceSnapshot(PolicySnapshot(rules: [rule], overrides: [], globallyPaused: false), expectedRevision: 0)
+        var revision = try await store.loadSnapshot().revision
+        #expect(revision == 1)
+
+        let keep = ItemPolicyOverride(path: "/Developer/keep", policy: .keep(protectDescendants: true))
+        try await store.setOverrides([keep], removingPaths: [], auditEvents: [TrashAuditEvent(occurredAt: Date(), kind: .itemProtected)])
+        #expect(try await store.loadSnapshot().revision == revision + 1)
+        revision += 1
+        try await store.setGlobalPause(true, auditEvent: TrashAuditEvent(occurredAt: Date(), kind: .globalPauseChanged))
+        #expect(try await store.loadSnapshot().revision == revision + 1)
+        revision += 1
+        try await store.updateSettings(AgentSettings(protectHiddenFiles: true), auditEvent: TrashAuditEvent(occurredAt: Date(), kind: .settingsChanged))
+        #expect(try await store.loadSnapshot().revision == revision + 1)
+        revision += 1
+        try await store.deleteRule(rule.id, auditEvent: TrashAuditEvent(occurredAt: Date(), kind: .ruleDeleted))
+        #expect(try await store.loadSnapshot().revision == revision + 1)
+        revision += 1
+
+        // A client holding the old revision must not overwrite newer state, and nothing is written when it tries.
+        let before = try await store.loadSnapshot()
+        await #expect(throws: SQLiteSafetyStoreError.revisionConflict) {
+            try await store.replaceSnapshot(PolicySnapshot(rules: [rule], overrides: [], globallyPaused: false), expectedRevision: revision - 1)
+        }
+        let after = try await store.loadSnapshot()
+        #expect(after.revision == before.revision)
+        #expect(after.rules.isEmpty)
+        #expect(after.overrides == before.overrides)
+    }
+
+    @Test func testSetOverridesIsOneTransactionWithUpsertAndRemoval() async throws {
+        let harness = try makeStore()
+        defer { try? FileManager.default.removeItem(at: harness.directory) }
+        let store = harness.store
+        let first = ItemPolicyOverride(path: "/Developer/a", policy: .keep(protectDescendants: false))
+        let second = ItemPolicyOverride(path: "/Developer/b", policy: .keep(protectDescendants: false))
+        try await store.setOverrides([first, second], removingPaths: [], auditEvents: [])
+        let replacement = ItemPolicyOverride(path: "/Developer/a", policy: .keep(protectDescendants: true))
+        let revisionBefore = try await store.loadSnapshot().revision
+
+        try await store.setOverrides([replacement], removingPaths: ["/Developer/b/"], auditEvents: [TrashAuditEvent(occurredAt: Date(), kind: .itemProtected)])
+
+        let snapshot = try await store.loadSnapshot()
+        #expect(snapshot.overrides == [replacement])
+        #expect(snapshot.revision == revisionBefore + 1)
+    }
+
+    @Test func testConditionalDeadlineRemovalKeepsFresherRowAndRuleDeletionIsRuleScoped() async throws {
+        let harness = try makeStore()
+        defer { try? FileManager.default.removeItem(at: harness.directory) }
+        let store = harness.store
+        let keepRule = try makeRule(name: "Kept rule")
+        let dropRule = try makeRule(name: "Dropped rule")
+        try await store.replaceSnapshot(PolicySnapshot(rules: [keepRule, dropRule], overrides: [], globallyPaused: false))
+        let identity = makeIdentity(resource: Data([1]), path: "/Developer/one.zip")
+        let other = makeIdentity(resource: Data([2]), path: "/Developer/two.zip")
+        let stale = makeDeadline(identity: identity, rule: keepRule, at: 10)
+        let fresh = makeDeadline(identity: identity, rule: keepRule, at: 500)
+        try await store.saveDeadline(fresh)
+        try await store.saveDeadline(makeDeadline(identity: other, rule: dropRule, at: 20))
+
+        let removedStale = try await store.removeDeadline(for: identity, scheduledAt: stale.scheduledAt)
+        #expect(!removedStale)
+        #expect(try await store.upcomingDeadlines().contains(fresh))
+
+        try await store.deleteRule(dropRule.id, auditEvent: TrashAuditEvent(occurredAt: Date(), kind: .ruleDeleted))
+        #expect(try await store.upcomingDeadlines() == [fresh])
+        let removedFresh = try await store.removeDeadline(for: identity, scheduledAt: fresh.scheduledAt)
+        #expect(removedFresh)
+        #expect(try await store.nextDeadline() == nil)
+    }
+
+    @Test func testProjectActivityScanBeginDoesNotDestroyConcurrentScanObservations() async throws {
+        let harness = try makeStore()
+        defer { try? FileManager.default.removeItem(at: harness.directory) }
+        let store = harness.store
+        let projectA = makeIdentity(resource: Data([21]), path: "/RootA/project")
+        let projectB = makeIdentity(resource: Data([22]), path: "/RootB/project")
+        let scanA = try await store.beginProjectActivityScan()
+        try await store.recordProjectActivities([PersistedProjectActivity(identity: projectA, lastActivityAt: Date(timeIntervalSince1970: 10))], scanID: scanA)
+        try await store.recordProjectObservations([ProjectActivityObservation(path: "/RootA/project/src/file", modifiedAt: Date(timeIntervalSince1970: 900))], scanID: scanA)
+
+        // A second root begins scanning while the first is still in flight.
+        let scanB = try await store.beginProjectActivityScan()
+        try await store.recordProjectActivities([PersistedProjectActivity(identity: projectB, lastActivityAt: Date(timeIntervalSince1970: 20))], scanID: scanB)
+        try await store.finishProjectActivityScan(scanID: scanB, atOrBelow: "/RootB")
+        try await store.finishProjectActivityScan(scanID: scanA, atOrBelow: "/RootA")
+
+        // Scan A's observation survived scan B starting and was folded into project A.
+        #expect(try await store.projectActivity(for: "/RootA/project/src") == Date(timeIntervalSince1970: 900))
+        #expect(try await store.projectActivity(for: "/RootB/project") == Date(timeIntervalSince1970: 20))
+    }
+
+    @Test func testInterruptedTrashAttemptsAreReconciledOnceAndCompletedOnesAreNot() async throws {
+        let clock = StoreTestClock(Date(timeIntervalSince1970: 5_000))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TinyPrune-SQLite-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try SQLiteSafetyStore(databaseURL: directory.appendingPathComponent("state.sqlite3"), clock: clock)
+        let interrupted = makeIdentity(resource: Data([31]), path: "/Developer/interrupted.zip")
+        let finished = makeIdentity(resource: Data([32]), path: "/Developer/finished.zip")
+        try await store.append(TrashAuditEvent(occurredAt: Date(timeIntervalSince1970: 100), kind: .trashAttempted, identity: interrupted))
+        try await store.append(TrashAuditEvent(occurredAt: Date(timeIntervalSince1970: 101), kind: .trashAttempted, identity: finished))
+        try await store.append(TrashAuditEvent(occurredAt: Date(timeIntervalSince1970: 102), kind: .movedToTrash, identity: finished))
+
+        #expect(try await store.reconcileInterruptedTrashAttempts() == 1)
+        #expect(try await store.reconcileInterruptedTrashAttempts() == 0)
+
+        let failures = try await store.auditEvents().filter { $0.kind == .trashFailed }
+        #expect(failures.count == 1)
+        #expect(failures.first?.identity == interrupted)
+    }
+
+    @Test func testDeviceFallbackIdentitiesAreNotRestoredAfterRestart() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TinyPrune-SQLite-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("state.sqlite3")
+        let rule = try makeRule(name: "Rule")
+        let volatile = FilesystemIdentity(
+            volumeIdentifier: UUID(), resourceIdentifier: Data([41]), pathHint: "/Developer/volatile.zip", isPersistent: false
+        )
+        let stable = makeIdentity(resource: Data([42]), path: "/Developer/stable.zip")
+        do {
+            let store = try SQLiteSafetyStore(databaseURL: url)
+            try await store.saveDeadline(makeDeadline(identity: volatile, rule: rule, at: 10))
+            try await store.saveDeadline(makeDeadline(identity: stable, rule: rule, at: 20))
+            #expect(try await store.indexedDeadlineCount() == 2)
+        }
+        let reopened = try SQLiteSafetyStore(databaseURL: url)
+        #expect(try await reopened.upcomingDeadlines().map(\.identity) == [stable])
+    }
+
+    @Test func testManagedRootBookmarkRefreshKeepsRootAndBumpsRevision() async throws {
+        let harness = try makeStore()
+        defer { try? FileManager.default.removeItem(at: harness.directory) }
+        let store = harness.store
+        let root = try ManagedRoot(displayName: "Developer", path: "/Developer", bookmarkData: Data([1]))
+        try await store.replaceSnapshot(PolicySnapshot(rules: [], overrides: [], managedRoots: [root], globallyPaused: false))
+        let revision = try await store.loadSnapshot().revision
+
+        try await store.updateManagedRootBookmark(rootID: root.id, bookmarkData: Data([9, 9]), auditEvent: nil)
+
+        let snapshot = try await store.loadSnapshot()
+        #expect(snapshot.managedRoots.map(\.bookmarkData) == [Data([9, 9])])
+        #expect(snapshot.managedRoots.first?.path == root.path)
+        #expect(snapshot.revision == revision + 1)
+    }
+
+    private func makeDeadline(identity: FilesystemIdentity, rule: LifetimeRule, at seconds: TimeInterval) -> PersistedDeadline {
+        let when = Date(timeIntervalSince1970: seconds)
+        let explanation = CandidateExplanation(
+            candidate: RuleCandidate(identity: identity, name: "item.zip", kind: .file, timestamps: CandidateTimestamps(modified: when)),
+            rule: rule, basisDate: when, eligibleAt: when, scheduledAt: when, disposition: .active
+        )
+        return PersistedDeadline(identity: identity, scheduledAt: when, explanation: explanation)
+    }
+
     private func makeStore() throws -> (directory: URL, store: SQLiteSafetyStore) {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TinyPrune-SQLite-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

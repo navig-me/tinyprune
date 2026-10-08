@@ -49,17 +49,26 @@ final class FinderSync: FIFinderSync {
         refreshMonitoredDirectories()
     }
 
+    private var refreshInFlight = false
+    private var monitoredRoots: Set<URL> = []
+
     private func refreshMonitoredDirectories() {
+        guard !refreshInFlight else { return }
+        refreshInFlight = true
         let client = self.client
         Task { @MainActor in
+            defer { self.refreshInFlight = false }
             do {
-                let response = try await client.request(AgentRequest(operation: .loadPolicy))
-                guard case .policy(let policy) = response.payload else {
+                let response = try await client.request(AgentRequest(operation: .loadRoots))
+                guard case .roots(let roots) = response.payload else {
                     throw FinderFailure.unexpected(response.payload)
                 }
-                FIFinderSyncController.default().directoryURLs = Set(policy.managedRoots.map {
-                    URL(fileURLWithPath: $0.path, isDirectory: true)
-                })
+                let urls = Set(roots.map { URL(fileURLWithPath: $0.path, isDirectory: true) })
+                // Reassigning identical roots would make Finder call beginObservingDirectory again.
+                if urls != self.monitoredRoots {
+                    self.monitoredRoots = urls
+                    FIFinderSyncController.default().directoryURLs = urls
+                }
             } catch {
                 // Menu invocation reports errors visibly; background refresh stays quiet
                 // so Finder is not spammed while the agent is starting.
@@ -72,7 +81,7 @@ final class FinderSync: FIFinderSync {
     override func menu(for menuKind: FIMenuKind) -> NSMenu {
         let menu = NSMenu(title: "")
         guard menuKind == .contextualMenuForItems else { return menu }
-        refreshMonitoredDirectories()
+        // Roots are refreshed on launch, mount, and root-change notifications, never per menu build.
 
         let urls = FIFinderSyncController.default().selectedItemURLs() ?? []
         guard !urls.isEmpty else { return menu }
@@ -144,62 +153,48 @@ final class FinderSync: FIFinderSync {
             }
             openApp(route: "expire", path: url.path)
         case .keep:
-            await mutate(urls, client: client, success: "Kept") { .setItemOverride(path: $0, policy: .keep(protectDescendants: false)) }
+            await apply(.keep(protectDescendants: false), to: urls, client: client, success: "Kept")
         case .protectFolder:
-            await mutate(urls.filter(isDirectory), client: client, success: "Protected") {
-                .setItemOverride(path: $0, policy: .keep(protectDescendants: true))
-            }
+            await apply(.keep(protectDescendants: true), to: urls.filter(isDirectory), client: client, success: "Protected")
         case .inherit:
-            await mutate(urls, client: client, success: "Now uses folder rules for") { .clearItemOverride(path: $0) }
+            await apply(nil, to: urls, client: client, success: "Now uses folder rules for")
         case .tonight, .tomorrow, .sevenDays, .thirtyDays:
-            let date = expiry(for: action, now: Date())
-            await mutate(urls, client: client, success: "Expiry set for") {
-                .setItemOverride(path: $0, policy: .customExpiry(date, state: .active))
-            }
+            let date = preset(for: action).date(from: Date(), calendar: .current)
+            await apply(.customExpiry(date, state: .active), to: urls, client: client, success: "Expiry set for")
         case .why:
             await explain(urls, client: client)
         }
     }
 
-    private static func expiry(for action: Action, now: Date) -> Date {
-        let calendar = Calendar.current
+    private static func preset(for action: Action) -> ExpiryPreset {
         switch action {
-        case .tonight:
-            let tonight = calendar.date(bySettingHour: 23, minute: 59, second: 0, of: now) ?? now
-            return tonight > now ? tonight : now.addingTimeInterval(3_600)
-        case .tomorrow: return calendar.date(byAdding: .day, value: 1, to: now) ?? now.addingTimeInterval(86_400)
-        case .sevenDays: return now.addingTimeInterval(7 * 86_400)
-        default: return now.addingTimeInterval(30 * 86_400)
+        case .tonight: return .tonight
+        case .tomorrow: return .tomorrow
+        case .sevenDays: return .days(7)
+        default: return .days(30)
         }
     }
 
+    /// One batched, atomic request for the whole selection. `policy == nil` clears the override.
     @MainActor
-    private static func mutate(
-        _ urls: [URL],
+    private static func apply(
+        _ policy: ItemOverridePolicy?,
+        to urls: [URL],
         client: TinyPruneAgentClient,
-        success: String,
-        operation: (String) -> AgentOperation
+        success: String
     ) async {
-        var failures: [String] = []
-        var succeeded = 0
-        for url in urls {
-            do {
-                let response = try await client.request(AgentRequest(operation: operation(url.path)))
-                switch response.payload {
-                case .acknowledged: succeeded += 1
-                default: throw FinderFailure.unexpected(response.payload)
-                }
-            } catch {
-                failures.append("\(url.lastPathComponent): \(describe(error))")
+        guard !urls.isEmpty else { return }
+        let changes = urls.map { AgentItemOverrideChange(path: $0.path, policy: policy) }
+        let noun = "item\(urls.count == 1 ? "" : "s")"
+        do {
+            let response = try await client.request(AgentRequest(operation: .setItemOverrides(changes: changes)))
+            switch response.payload {
+            case .acknowledged: notify(title: "TinyPrune", body: "\(success) \(urls.count) \(noun).")
+            case .failure(let failure): throw FinderFailure.service(failure)
+            default: throw FinderFailure.unexpected(response.payload)
             }
-        }
-        if !failures.isEmpty {
-            showAlert(
-                title: "TinyPrune could not update \(failures.count) item\(failures.count == 1 ? "" : "s")",
-                message: failures.joined(separator: "\n")
-            )
-        } else if succeeded > 0 {
-            notify(title: "TinyPrune", body: "\(success) \(succeeded) item\(succeeded == 1 ? "" : "s").")
+        } catch {
+            showAlert(title: "TinyPrune could not update \(urls.count) \(noun)", message: describe(error))
         }
     }
 
@@ -209,10 +204,11 @@ final class FinderSync: FIFinderSync {
         for url in urls.prefix(5) {
             do {
                 let response = try await client.request(AgentRequest(operation: .explainItem(path: url.path)))
+                if case .failure(let failure) = response.payload { throw FinderFailure.service(failure) }
                 guard case .itemExplanation(let explanation) = response.payload else {
                     throw FinderFailure.unexpected(response.payload)
                 }
-                sections.append(summary(explanation))
+                sections.append(ExplanationFormatter.summary(explanation, now: Date(), calendar: .current, locale: .current))
             } catch {
                 sections.append("\(url.path)\nCould not explain: \(describe(error))")
             }
@@ -221,56 +217,21 @@ final class FinderSync: FIFinderSync {
         showAlert(title: "Why will this expire?", message: sections.joined(separator: "\n\n"))
     }
 
-    private static func summary(_ explanation: AgentItemExplanation) -> String {
-        var lines = [explanation.path]
-        switch explanation.resolution {
-        case .scheduled(let item):
-            lines.append("Scheduled: \(item.scheduledAt.formatted(date: .abbreviated, time: .shortened)) (\(item.disposition.rawValue))")
-            lines.append("Matched rule: \(item.matchedRuleName)")
-            lines.append("Reason: \(item.expiryBasis.rawValue) since \(item.basisDate.formatted(date: .abbreviated, time: .shortened))")
-        case .customExpiry(let item):
-            lines.append("Scheduled: \(item.expiresAt.formatted(date: .abbreviated, time: .shortened)) (\(item.disposition.rawValue))")
-            lines.append("Reason: explicit expiry set on this item")
-        case .protected(let item):
-            lines.append("Protected by Keep on \(item.protectedPath)\(item.protectsDescendants ? " (including descendants)" : "")")
-        case .suppressed(let reason):
-            lines.append("Not scheduled: \(reason.rawValue)")
-        case .noRule:
-            lines.append("No rule applies; TinyPrune will do nothing.")
-        case .ambiguousRules(let ids):
-            lines.append("Not scheduled: \(ids.count) rules tie; TinyPrune will not guess.")
-        case .ambiguousOverrides(let ids):
-            lines.append("Not scheduled: \(ids.count) conflicting overrides.")
-        }
-        if explanation.globallyPaused { lines.append("TinyPrune is paused globally.") }
-        return lines.joined(separator: "\n")
-    }
-
     // MARK: Presentation
 
     private enum FinderFailure: Error {
         case unexpected(AgentResponsePayload)
+        case service(AgentServiceError)
     }
 
     private static func describe(_ error: Error) -> String {
         switch error {
-        case AgentClientError.unavailable:
-            return "The TinyPrune agent is not running or is unreachable. Open TinyPrune and make sure its background agent is enabled."
-        case AgentClientError.unsupportedProtocol(let version):
-            return "The agent speaks protocol version \(version), which this Finder extension does not support. Update TinyPrune."
-        case AgentClientError.invalidReply, AgentClientError.encodingFailed:
-            return "The agent sent an unreadable reply."
-        case FinderFailure.unexpected(.failure(let failure)):
-            switch failure {
-            case .invalidRequest(let message): return "The agent rejected the request: \(message)"
-            case .storageUnavailable(let message): return "The agent's storage is unavailable: \(message)"
-            case .unsupportedProtocol(let expected, let received):
-                return "Protocol mismatch (agent expects \(expected), extension sent \(received))."
-            }
+        case FinderFailure.service(let failure):
+            return AgentErrorDescription.message(for: failure)
         case FinderFailure.unexpected:
             return "The agent returned an unexpected response."
         default:
-            return error.localizedDescription
+            return AgentErrorDescription.message(for: error)
         }
     }
 

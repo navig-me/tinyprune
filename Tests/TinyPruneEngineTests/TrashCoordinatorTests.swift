@@ -12,9 +12,9 @@ import TinyPruneIPC
         try updater.beginInstallation(targetVersion: "2", currentVersion: "1")
         let candidate = makeCandidate()
         let rule = try makeRule(state: .active)
-        let store = MockPolicyStore(snapshot: PolicySnapshot(rules: [rule], overrides: [], globallyPaused: false))
+        let store = MockPolicyStore(snapshot: PolicySnapshot(rules: [rule], overrides: [], managedRoots: [try makeRoot()], globallyPaused: false))
         let audit = MockAudit()
-        let access = MockTrashFileAccess(candidate: candidate, protectedDescendant: false, trashError: nil)
+        let access = MockTrashFileAccess(candidate: candidate, walkResult: DescendantProtection.none, symlinkAncestor: false, trashError: nil)
         let coordinator = TrashCoordinator(
             policyStore: store, fileAccess: access, audit: audit,
             clock: FixedClock(Date(timeIntervalSinceReferenceDate: 1_000)),
@@ -97,22 +97,143 @@ import TinyPruneIPC
         #expect(moves == 0)
     }
 
-    @Test func testKeepAddedDuringTrashAuditClosesFinalPreflightRace() async throws {
+    @Test func testKeepAddedBeforeFinalPolicyReloadBlocksMoveAndWritesNoAttempt() async throws {
         let candidate = makeCandidate()
         let rule = try makeRule(state: .active)
+        let root = try makeRoot()
         let keep = ItemPolicyOverride(identity: candidate.identity, path: candidate.identity.pathHint, policy: .keep(protectDescendants: false))
-        let store = MockPolicyStore(snapshot: PolicySnapshot(rules: [rule], overrides: [], globallyPaused: false))
-        let audit = PolicyFlipAudit(store: store, replacement: PolicySnapshot(rules: [rule], overrides: [keep], globallyPaused: false))
-        let fileAccess = MockTrashFileAccess(candidate: candidate, protectedDescendant: false, trashError: nil)
+        let store = SequencedPolicyStore(snapshots: [
+            PolicySnapshot(rules: [rule], overrides: [], managedRoots: [root], globallyPaused: false),
+            PolicySnapshot(rules: [rule], overrides: [keep], managedRoots: [root], globallyPaused: false)
+        ])
+        let audit = MockAudit()
+        let fileAccess = MockTrashFileAccess(candidate: candidate, walkResult: DescendantProtection.none, symlinkAncestor: false, trashError: nil)
         let coordinator = TrashCoordinator(policyStore: store, fileAccess: fileAccess, audit: audit, clock: FixedClock(Date(timeIntervalSinceReferenceDate: 1_000)))
 
         let outcome = try await coordinator.execute(request(for: candidate, rule: rule))
 
-        #expect(outcome == .skipped("policy changed at the Trash boundary"))
-        let moves = await fileAccess.moveCount()
-        let events = await audit.events()
-        #expect(moves == 0)
-        #expect(events.map(\.kind) == [.trashAttempted, .safetySkipped])
+        #expect(outcome == .skipped("item is protected by Keep"))
+        #expect(await fileAccess.moveCount() == 0)
+        // The attempt is only audited once every check has passed, so a blocked move leaves no dangling attempt.
+        #expect(await audit.events().map(\.kind) == [.safetySkipped])
+    }
+
+    @Test func testAttemptIsAuditedImmediatelyBeforeMove() async throws {
+        let candidate = makeCandidate()
+        let rule = try makeRule(state: .active)
+        let harness = makeCoordinator(candidate: candidate, rules: [rule])
+
+        _ = try await harness.coordinator.execute(request(for: candidate, rule: rule))
+
+        #expect(await harness.audit.events().map(\.kind) == [.trashAttempted, .movedToTrash])
+        #expect(await harness.fileAccess.eventLog() == ["inspect", "inspect", "move"])
+    }
+
+    @Test func testItemOutsideEveryManagedRootIsSkipped() async throws {
+        let candidate = makeCandidate()
+        let rule = try makeRule(state: .active)
+        let otherRoot = try ManagedRoot(displayName: "Other", path: "/Elsewhere", bookmarkData: Data([1]))
+        let harness = makeCoordinator(candidate: candidate, rules: [rule], managedRoots: [otherRoot])
+
+        let outcome = try await harness.coordinator.execute(request(for: candidate, rule: rule))
+
+        #expect(outcome == .skipped("item is outside every managed root"))
+        #expect(await harness.fileAccess.moveCount() == 0)
+    }
+
+    @Test func testManagedRootItselfIsNotAnItemInsideTheRoot() async throws {
+        let candidate = makeCandidate()
+        let rule = try makeRule(state: .active)
+        let root = try ManagedRoot(displayName: "Self", path: candidate.identity.pathHint, bookmarkData: Data([1]))
+        let harness = makeCoordinator(candidate: candidate, rules: [rule], managedRoots: [root])
+
+        let outcome = try await harness.coordinator.execute(request(for: candidate, rule: rule))
+
+        #expect(outcome == .skipped("item is outside every managed root"))
+    }
+
+    @Test func testSymbolicLinkAncestorBelowRootIsSkipped() async throws {
+        let candidate = makeCandidate()
+        let rule = try makeRule(state: .active)
+        let harness = makeCoordinator(candidate: candidate, rules: [rule], symlinkAncestor: true)
+
+        let outcome = try await harness.coordinator.execute(request(for: candidate, rule: rule))
+
+        #expect(outcome == .skipped("item is reached through a symbolic link"))
+        #expect(await harness.fileAccess.moveCount() == 0)
+    }
+
+    @Test func testPausedRuleAndGlobalPauseAreDeferredNotTerminal() async throws {
+        let candidate = makeCandidate()
+        let pausedRule = try makeRule(state: .paused)
+        let pausedHarness = makeCoordinator(candidate: candidate, rules: [pausedRule])
+        #expect(try await pausedHarness.coordinator.execute(request(for: candidate, rule: pausedRule)) == .deferred("rule is paused"))
+
+        let activeRule = try makeRule(state: .active)
+        let globalHarness = makeCoordinator(candidate: candidate, rules: [activeRule], globallyPaused: true)
+        #expect(try await globalHarness.coordinator.execute(request(for: candidate, rule: activeRule)) == .deferred("pruning is paused"))
+        #expect(await globalHarness.fileAccess.moveCount() == 0)
+        #expect(await globalHarness.audit.events().isEmpty)
+    }
+
+    @Test func testDeletedRuleIsTerminalSkip() async throws {
+        let candidate = makeCandidate()
+        let rule = try makeRule(state: .active)
+        let harness = makeCoordinator(candidate: candidate, rules: [])
+
+        #expect(try await harness.coordinator.execute(request(for: candidate, rule: rule)) == .skipped("rule no longer exists"))
+    }
+
+    @Test func testPersistedActivityHydrationLetsObservedBasisRuleExecute() async throws {
+        let candidate = makeCandidate()
+        let rule = try makeRule(state: .active, basis: .firstObserved)
+        let observed = Date(timeIntervalSinceReferenceDate: 0)
+        let hydrated = RuleCandidate(
+            identity: candidate.identity, name: candidate.name, kind: candidate.kind,
+            timestamps: CandidateTimestamps(modified: candidate.timestamps.modified, firstObserved: observed)
+        )
+        let hydratedHarness = makeCoordinator(candidate: candidate, rules: [rule], hydrated: hydrated)
+        let outcome = try await hydratedHarness.coordinator.execute(request(for: candidate, rule: rule))
+        #expect(outcome == .movedToTrash(originalPath: candidate.identity.pathHint, trashedPath: "/.Trash/node_modules"))
+
+        // Without persisted activity the basis timestamp is missing and nothing may move.
+        let bareHarness = makeCoordinator(candidate: candidate, rules: [rule])
+        let bare = try await bareHarness.coordinator.execute(request(for: candidate, rule: rule))
+        #expect(bare == .skipped("candidate is no longer eligible"))
+        #expect(await bareHarness.fileAccess.moveCount() == 0)
+    }
+
+    @Test func testUnboundedFolderWalkDefersInsteadOfTrashing() async throws {
+        let candidate = makeCandidate()
+        let rule = try makeRule(state: .active)
+        let harness = makeCoordinator(candidate: candidate, rules: [rule], walkResult: .indeterminate)
+
+        let outcome = try await harness.coordinator.execute(request(for: candidate, rule: rule))
+
+        #expect(outcome == .deferred("folder is too large to verify before moving to Trash"))
+        #expect(await harness.fileAccess.moveCount() == 0)
+    }
+
+    @Test func testHiddenProtectionIsRequestedFromWalkOnlyForNonDotCandidates() async throws {
+        let candidate = makeCandidate()
+        let rule = try makeRule(state: .active)
+        let harness = makeCoordinator(candidate: candidate, rules: [rule], settings: AgentSettings(protectHiddenFiles: true))
+        _ = try await harness.coordinator.execute(request(for: candidate, rule: rule))
+        #expect(await harness.fileAccess.lastProtectHiddenFiles() == true)
+
+        let off = makeCoordinator(candidate: candidate, rules: [rule])
+        _ = try await off.coordinator.execute(request(for: candidate, rule: rule))
+        #expect(await off.fileAccess.lastProtectHiddenFiles() == false)
+    }
+
+    @Test func testHiddenDescendantOfTrashedFolderBlocksMove() async throws {
+        let candidate = makeCandidate()
+        let rule = try makeRule(state: .active)
+        let harness = makeCoordinator(candidate: candidate, rules: [rule], settings: AgentSettings(protectHiddenFiles: true), protectedDescendant: true)
+
+        let outcome = try await harness.coordinator.execute(request(for: candidate, rule: rule))
+
+        #expect(outcome == .skipped("folder contains a protected descendant"))
     }
 
     @Test func testGlobalPauseAtExecutionTimeBlocksMove() async throws {
@@ -122,7 +243,7 @@ import TinyPruneIPC
 
         let outcome = try await harness.coordinator.execute(request(for: candidate, rule: rule))
 
-        #expect(outcome == .skipped("candidate is no longer eligible"))
+        #expect(outcome == .deferred("pruning is paused"))
         let moves = await harness.fileAccess.moveCount()
         #expect(moves == 0)
     }
@@ -133,7 +254,7 @@ import TinyPruneIPC
         let staleRequest = TrashRequest(candidateIdentity: candidate.identity, source: .rule(rule.id), scheduledAt: Date(timeIntervalSinceReferenceDate: 100))
         let staleHarness = makeCoordinator(candidate: candidate, rules: [rule])
         let staleOutcome = try await staleHarness.coordinator.execute(staleRequest)
-        #expect(staleOutcome == .skipped("scheduled deadline changed"))
+        #expect(staleOutcome == .deferred("scheduled deadline changed; waiting for re-index"))
         let staleMoves = await staleHarness.fileAccess.moveCount()
         #expect(staleMoves == 0)
 
@@ -162,33 +283,49 @@ import TinyPruneIPC
         #expect(failureEvents.map(\.kind) == [.trashAttempted, .trashFailed])
     }
 
+    private func makeRoot() throws -> ManagedRoot {
+        try ManagedRoot(displayName: "Developer", path: "/Developer", bookmarkData: Data([1]))
+    }
+
     private func makeCoordinator(
         candidate: RuleCandidate,
         rules: [LifetimeRule],
         overrides: [ItemPolicyOverride] = [],
+        managedRoots: [ManagedRoot]? = nil,
         globallyPaused: Bool = false,
+        settings: AgentSettings = .default,
         protectedDescendant: Bool = false,
+        walkResult: DescendantProtection? = nil,
+        symlinkAncestor: Bool = false,
+        hydrated: RuleCandidate? = nil,
         trashError: Error? = nil,
         now: Date = Date(timeIntervalSinceReferenceDate: 1_000)
     ) -> (coordinator: TrashCoordinator, fileAccess: MockTrashFileAccess, audit: MockAudit) {
-        let fileAccess = MockTrashFileAccess(candidate: candidate, protectedDescendant: protectedDescendant, trashError: trashError)
+        let fileAccess = MockTrashFileAccess(
+            candidate: candidate,
+            walkResult: walkResult ?? (protectedDescendant ? .protected : DescendantProtection.none),
+            symlinkAncestor: symlinkAncestor,
+            trashError: trashError
+        )
         let audit = MockAudit()
+        let roots = managedRoots ?? [try! makeRoot()]
         let coordinator = TrashCoordinator(
-            policyStore: MockPolicyStore(snapshot: PolicySnapshot(rules: rules, overrides: overrides, globallyPaused: globallyPaused)),
+            policyStore: MockPolicyStore(snapshot: PolicySnapshot(rules: rules, overrides: overrides, managedRoots: roots, globallyPaused: globallyPaused, settings: settings)),
             fileAccess: fileAccess,
             audit: audit,
-            clock: FixedClock(now)
+            clock: FixedClock(now),
+            candidateHydrator: hydrated.map { StubHydrator(result: $0) }
         )
         return (coordinator, fileAccess, audit)
     }
 
-    private func makeRule(state: RuleState, lifetime: TimeInterval = 100) throws -> LifetimeRule {
+    private func makeRule(state: RuleState, lifetime: TimeInterval = 100, basis: ExpiryBasis = .modified) throws -> LifetimeRule {
         try LifetimeRule(
             id: UUID(uuidString: "00000000-0000-0000-0000-000000000011")!,
             name: "Old Node Modules",
             scope: try RuleScope(path: "/Developer", recursive: true),
             matcher: try ItemMatcher(itemKind: .directory, exactNames: ["node_modules"]),
-            expiryBasis: .modified,
+            expiryBasis: basis,
             lifetime: try RuleDuration(seconds: lifetime),
             action: .trashItem,
             state: state
@@ -226,51 +363,57 @@ private actor MockPolicyStore: PolicySnapshotProviding {
     func replace(_ snapshot: PolicySnapshot) { self.snapshot = snapshot }
 }
 
+private struct StubHydrator: CandidateHydrating {
+    let result: RuleCandidate
+    func hydrate(_ candidate: RuleCandidate, rules: [LifetimeRule], now: Date) async throws -> RuleCandidate { result }
+}
+
+private actor SequencedPolicyStore: PolicySnapshotProviding {
+    private var snapshots: [PolicySnapshot]
+    init(snapshots: [PolicySnapshot]) { self.snapshots = snapshots }
+    func loadSnapshot() async throws -> PolicySnapshot {
+        snapshots.count > 1 ? snapshots.removeFirst() : snapshots[0]
+    }
+}
+
 private actor MockTrashFileAccess: TrashFileAccess {
     let candidate: RuleCandidate
-    let protectedDescendant: Bool
+    let walkResult: DescendantProtection
+    let symlinkAncestor: Bool
     let trashError: Error?
     private(set) var moves = 0
+    private var log: [String] = []
+    private var protectHidden: Bool?
 
-    init(candidate: RuleCandidate, protectedDescendant: Bool, trashError: Error?) {
+    init(candidate: RuleCandidate, walkResult: DescendantProtection, symlinkAncestor: Bool, trashError: Error?) {
         self.candidate = candidate
-        self.protectedDescendant = protectedDescendant
+        self.walkResult = walkResult
+        self.symlinkAncestor = symlinkAncestor
         self.trashError = trashError
     }
 
-    func inspect(path: String) async throws -> RuleCandidate? { candidate }
-    func hasProtectedDescendant(path: String, overrides: [ItemPolicyOverride]) async throws -> Bool { protectedDescendant }
+    func inspect(path: String) async throws -> RuleCandidate? {
+        log.append("inspect")
+        return candidate
+    }
+    func hasSymbolicLinkAncestor(of path: String, below rootPath: String) async throws -> Bool { symlinkAncestor }
+    func hasProtectedDescendant(path: String, overrides: [ItemPolicyOverride], protectHiddenFiles: Bool, budget: DescendantWalkBudget) async throws -> DescendantProtection {
+        protectHidden = protectHiddenFiles
+        return walkResult
+    }
     func moveToTrash(path: String, expectedIdentity: FilesystemIdentity) async throws -> String {
         moves += 1
+        log.append("move")
         if let trashError { throw trashError }
         return "/.Trash/\(URL(fileURLWithPath: path).lastPathComponent)"
     }
     func moveCount() -> Int { moves }
+    func eventLog() -> [String] { log }
+    func lastProtectHiddenFiles() -> Bool? { protectHidden }
 }
 
 private actor MockAudit: TrashAuditRecording {
     private(set) var recorded: [TrashAuditEvent] = []
     func append(_ event: TrashAuditEvent) async throws { recorded.append(event) }
-    func events() -> [TrashAuditEvent] { recorded }
-}
-private actor PolicyFlipAudit: TrashAuditRecording {
-    private let store: MockPolicyStore
-    private let replacement: PolicySnapshot
-    private var recorded: [TrashAuditEvent] = []
-    private var didFlip = false
-
-    init(store: MockPolicyStore, replacement: PolicySnapshot) {
-        self.store = store
-        self.replacement = replacement
-    }
-
-    func append(_ event: TrashAuditEvent) async throws {
-        recorded.append(event)
-        if event.kind == .trashAttempted && !didFlip {
-            didFlip = true
-            await store.replace(replacement)
-        }
-    }
-
     func events() -> [TrashAuditEvent] { recorded }
 }

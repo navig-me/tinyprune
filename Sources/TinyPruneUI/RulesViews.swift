@@ -8,8 +8,10 @@ struct RulesPage: View {
     @EnvironmentObject private var router: AppRouter
     let overview: AgentOverviewSnapshot
 
+    @StateObject private var previews = RulePreviewStore()
     @State private var editorTarget: RuleEditorTarget?
     @State private var ruleToDelete: LifetimeRule?
+    @State private var ruleToActivate: LifetimeRule?
     @State private var mutationError: String?
 
     var body: some View {
@@ -41,8 +43,10 @@ struct RulesPage: View {
                         ForEach(overview.policy.rules) { rule in
                             RuleRow(
                                 rule: rule,
+                                preview: previews.controller(for: rule.id),
                                 onEdit: { editorTarget = .edit(rule) },
                                 onDelete: { ruleToDelete = rule },
+                                onActivate: { ruleToActivate = rule },
                                 perform: perform
                             )
                                 .id(rule.id)
@@ -57,11 +61,15 @@ struct RulesPage: View {
                 }
             }
         }
+        .font(.manropeBody)
         .sheet(item: $editorTarget) { target in
             RuleEditorSheet(target: target, overview: overview)
         }
         .onAppear(perform: consumePendingPath)
         .onChange(of: router.pendingRulePath) { _, _ in consumePendingPath() }
+        // A path that arrived while another editor was open is queued; open it once that editor closes.
+        .onChange(of: editorTarget?.id) { _, id in if id == nil { consumePendingPath() } }
+        .onChange(of: overview.policy.rules.map(\.id)) { _, ids in previews.prune(keeping: Set(ids)) }
         .confirmationDialog(
             "Delete \(ruleToDelete?.name ?? "rule")?",
             isPresented: Binding(get: { ruleToDelete != nil }, set: { if !$0 { ruleToDelete = nil } }),
@@ -74,6 +82,19 @@ struct RulesPage: View {
         } message: {
             Text("Scheduled matches for this rule are cleared. Files already in Trash are not affected.")
         }
+        .confirmationDialog(
+            "Activate \(ruleToActivate?.name ?? "rule")?",
+            isPresented: Binding(get: { ruleToActivate != nil }, set: { if !$0 { ruleToActivate = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Activate rule", role: .destructive) {
+                guard let rule = ruleToActivate else { return }
+                perform { try await model.setState(.active, for: rule) }
+            }
+            Button("Cancel", role: .cancel) { ruleToActivate = nil }
+        } message: {
+            Text(activationMessage(for: ruleToActivate))
+        }
         .alert("Could not update rule", isPresented: Binding(get: { mutationError != nil }, set: { if !$0 { mutationError = nil } })) {
             Button("OK", role: .cancel) { mutationError = nil }
         } message: {
@@ -81,8 +102,22 @@ struct RulesPage: View {
         }
     }
 
+    private func activationMessage(for rule: LifetimeRule?) -> String {
+        guard let rule else { return "" }
+        var lines: [String] = []
+        if let result = previews.controller(for: rule.id).finishedResult(for: rule) {
+            lines.append("Last preview: \(RulePreviewText.headline(result)).")
+            if result.truncated { lines.append("That scan was cut short, so the real numbers may be higher.") }
+        } else {
+            lines.append("This rule has not been previewed since it last changed. Run Preview matches first to see what would be pruned.")
+        }
+        lines.append("Once active, matching items move to the Trash when they expire. Items stay in the Trash until you or macOS empty it. Use Put Back in Finder to restore.")
+        if rule.isBroad { lines.append("This rule is broad: review its matches carefully before activating.") }
+        return lines.joined(separator: "\n\n")
+    }
+
     private func consumePendingPath() {
-        guard let path = router.pendingRulePath else { return }
+        guard editorTarget == nil, let path = router.pendingRulePath else { return }
         router.pendingRulePath = nil
         editorTarget = .new(prefillPath: path)
     }
@@ -98,11 +133,11 @@ private struct RuleRow: View {
     @EnvironmentObject private var model: AgentViewModel
     @EnvironmentObject private var router: AppRouter
     let rule: LifetimeRule
+    @ObservedObject var preview: RulePreviewController
     let onEdit: () -> Void
     let onDelete: () -> Void
+    let onActivate: () -> Void
     let perform: (@escaping () async throws -> Void) -> Void
-
-    @StateObject private var preview = RulePreviewController()
 
     var body: some View {
         let stats = model.stats(for: rule)
@@ -113,34 +148,49 @@ private struct RuleRow: View {
                 Spacer()
                 if let stats {
                     Text("\(stats.matches) match\(stats.matches == 1 ? "" : "es") · \(stats.due) eligible")
-                        .font(.subheadline)
+                        .font(.manropeSubheadline)
                         .foregroundStyle(.secondary)
                 }
             }
             Text(rule.naturalDescription())
             PathText(path: rule.scope.path)
             if rule.state == .preview {
-                Text("Preview schedules matches but never moves anything to Trash.")
-                    .font(.caption)
+                Text(rule.isVeryBroad
+                    ? "This folder is very broad, so the rule can only run in Preview. Preview schedules matches but never moves anything to Trash."
+                    : "Preview schedules matches but never moves anything to Trash.")
+                    .font(.manropeCaption)
+                    .foregroundStyle(PrunePalette.caution)
+            } else if rule.state == .active && rule.isVeryBroad {
+                Text("This folder is very broad. Return the rule to Preview; very broad rules cannot stay Active.")
+                    .font(.manropeCaption)
                     .foregroundStyle(PrunePalette.caution)
             }
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), alignment: .leading)], alignment: .leading, spacing: 12) {
                 Button("Edit", action: onEdit)
+                    .accessibilityLabel("Edit \(rule.name)")
                 Button("Preview matches") { preview.start(rule, model: model) }
                     .disabled(preview.isRunning)
+                    .accessibilityLabel("Preview matches for \(rule.name)")
                     .help("Run a read-only scan of this rule's folder now")
                 if rule.state == .paused {
                     Button("Resume in Preview") { perform { try await model.setState(.preview, for: rule) } }
+                        .accessibilityLabel("Resume \(rule.name) in Preview")
                 } else {
                     Button("Pause") { perform { try await model.setState(.paused, for: rule) } }
+                        .accessibilityLabel("Pause \(rule.name)")
                 }
-                if rule.state == .preview {
-                    Button("Activate") { perform { try await model.setState(.active, for: rule) } }
+                if rule.state == .preview && !rule.isVeryBroad {
+                    Button("Activate", action: onActivate)
+                        .accessibilityLabel("Activate \(rule.name)")
                 } else if rule.state == .active {
                     Button("Return to Preview") { perform { try await model.setState(.preview, for: rule) } }
+                        .accessibilityLabel("Return \(rule.name) to Preview")
                 }
                 Button("Duplicate") { perform { try await model.duplicate(rule) } }
+                    .accessibilityLabel("Duplicate \(rule.name)")
                 Button("Delete", role: .destructive, action: onDelete)
+                    .foregroundStyle(.red)
+                    .accessibilityLabel("Delete \(rule.name)")
             }
             .buttonStyle(.link)
 
@@ -150,6 +200,7 @@ private struct RuleRow: View {
                     if case .finished(let result) = preview.phase, result.matches > 0 {
                         Button("Show scheduled matches in Upcoming") { router.previewMatches(of: rule.id) }
                             .buttonStyle(.link)
+                            .accessibilityLabel("Show scheduled matches of \(rule.name) in Upcoming")
                     }
                 }
                 .padding(12)
@@ -159,6 +210,8 @@ private struct RuleRow: View {
         .padding(.vertical, 16)
         .padding(.horizontal, 10)
         .background(router.focusedRuleID == rule.id ? PrunePalette.plum.opacity(0.07) : .clear, in: RoundedRectangle(cornerRadius: 8))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(rule.name), \(rule.state.label)")
     }
 }
 
@@ -182,6 +235,11 @@ private enum DurationUnit: String, CaseIterable, Identifiable {
 
 private let selectableBases: [ExpiryBasis] = [.modified, .created, .firstObserved, .observedActivity, .accessed, .projectActivity]
 
+/// Longest lifetime the editor accepts: 100 years.
+private let maximumLifetimeSeconds: TimeInterval = 100 * 365 * 86_400
+/// Longest grace period the editor accepts: one year.
+private let maximumGraceHours: Double = 365 * 24
+
 private extension ExpiryBasis {
     var pickerLabel: String {
         switch self {
@@ -194,6 +252,21 @@ private extension ExpiryBasis {
         case .explicitDate: "Explicit date"
         }
     }
+}
+
+/// Everything the user can change in the editor, for unsaved-changes detection.
+private struct EditorFields: Equatable {
+    var name = ""
+    var scopePath = ""
+    var recursive = true
+    var kind: ItemKind = .fileOrDirectory
+    var names = ""
+    var globs = ""
+    var basis: ExpiryBasis = .modified
+    var amountText = ""
+    var unit: DurationUnit = .days
+    var graceText = ""
+    var exceptions: [String] = []
 }
 
 package struct RuleEditorSheet: View {
@@ -223,14 +296,20 @@ package struct RuleEditorSheet: View {
     @State private var names = ""
     @State private var globs = ""
     @State private var basis: ExpiryBasis = .modified
-    @State private var amount = 30.0
+    @State private var amountText = "30"
     @State private var unit: DurationUnit = .days
-    @State private var graceHours = 0.0
+    @State private var graceText = "0"
     @State private var exceptions: [String] = []
+    /// Exceptions that already existed when the editor opened; only differences from this set are written.
+    @State private var originalExceptions: [String] = []
+    /// Existing exceptions the user explicitly removed (as opposed to ones hidden by moving the folder).
+    @State private var removedExceptions: Set<String> = []
     @State private var isSaving = false
     @State private var errorMessage: String?
-    @State private var confirmsBroadActivation = false
+    @State private var pendingActivation = false
+    @State private var confirmsDiscard = false
     @State private var editing: LifetimeRule?
+    @State private var initialFields: EditorFields?
 
     package var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -257,6 +336,15 @@ package struct RuleEditorSheet: View {
                             Button("Choose folder…", action: chooseFolder)
                         }
                         Toggle("Include subfolders", isOn: $recursive)
+                        if isVeryBroad {
+                            Label("This folder is very broad. The rule can only run in Preview.", systemImage: "exclamationmark.triangle")
+                                .font(.manropeSubheadline)
+                                .foregroundStyle(PrunePalette.caution)
+                        } else if isBroad {
+                            Label("This rule is broad. Review its matches in Preview before activating it.", systemImage: "exclamationmark.triangle")
+                                .font(.manropeSubheadline)
+                                .foregroundStyle(PrunePalette.caution)
+                        }
                     }
 
                     editorSection("What") {
@@ -269,7 +357,7 @@ package struct RuleEditorSheet: View {
                         // Verbatim: the glob example contains `**`, which Markdown-aware Text would swallow.
                         TextField("Glob patterns", text: $globs, prompt: Text(verbatim: "Glob patterns, comma separated (*.dmg, **/.cache/**)"))
                         Text("Leave both empty to match every \(kind == .file ? "file" : kind == .directory ? "folder" : "item").")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.manropeCaption).foregroundStyle(.secondary)
                     }
 
                     editorSection("When") {
@@ -277,27 +365,34 @@ package struct RuleEditorSheet: View {
                             ForEach(selectableBases, id: \.self) { Text($0.pickerLabel).tag($0) }
                         }
                         HStack {
-                            TextField("Amount", value: $amount, format: .number)
+                            TextField("Amount", text: $amountText)
                                 .frame(width: 80)
+                                .accessibilityLabel("Amount of time before an item expires")
                             Picker("Unit", selection: $unit) {
                                 ForEach(DurationUnit.allCases) { Text($0.rawValue).tag($0) }
                             }
                             .labelsHidden()
                             .frame(width: 100)
                         }
+                        if let amountIssue {
+                            Text(amountIssue).font(.manropeCaption).foregroundStyle(PrunePalette.caution)
+                        }
                         HStack {
                             Text("Grace period")
-                            TextField("Hours", value: $graceHours, format: .number)
+                            TextField("Hours", text: $graceText)
                                 .frame(width: 60)
                                 .accessibilityLabel("Grace period in hours")
                             Text("hours (0 for none)").foregroundStyle(.secondary)
+                        }
+                        if let graceIssue {
+                            Text(graceIssue).font(.manropeCaption).foregroundStyle(PrunePalette.caution)
                         }
                     }
 
                     editorSection("Then") {
                         Text("Move the matching item to Trash")
-                        Text("Items always go to the macOS Trash, never permanently deleted.")
-                            .font(.caption).foregroundStyle(.secondary)
+                        Text("Items go to the macOS Trash, never permanently deleted. They stay there until you or macOS empty it; use Put Back in Finder to restore.")
+                            .font(.manropeCaption).foregroundStyle(.secondary)
                     }
 
                     editorSection("Except") {
@@ -305,14 +400,14 @@ package struct RuleEditorSheet: View {
                             HStack {
                                 PathText(path: path)
                                 Spacer()
-                                Button { exceptions.removeAll { $0 == path } } label: { Image(systemName: "minus.circle") }
+                                Button { removeException(path) } label: { Image(systemName: "minus.circle") }
                                     .buttonStyle(.borderless)
                                     .accessibilityLabel("Remove exception \(path)")
                             }
                         }
                         Button("Add exception…", action: addException)
                         Text("Exceptions are Keep protections for the item and everything inside it.")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.manropeCaption).foregroundStyle(.secondary)
                     }
 
                     impactPreview.id("impact")
@@ -329,28 +424,37 @@ package struct RuleEditorSheet: View {
 
             HStack {
                 Spacer()
-                Button("Cancel", role: .cancel) { dismiss() }
+                Button("Cancel", role: .cancel, action: requestCancel)
                     .keyboardShortcut(.cancelAction)
-                Button("Activate rule") {
-                    if isBroad { confirmsBroadActivation = true } else { Task { await save(state: .active) } }
+                ForEach(secondaryActions, id: \.self) { state in
+                    Button(secondaryLabel(for: state)) { requestSave(state) }
+                        .disabled(!canSave)
                 }
-                .disabled(!canSave)
-                Button("Save as Preview") { Task { await save(state: .preview) } }
+                Button(primaryLabel) { requestSave(primaryState) }
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
                     .disabled(!canSave)
             }
             .padding(.top, 14)
         }
+        .font(.manropeBody)
         .padding(28)
         .frame(minWidth: 620, idealWidth: 620, maxWidth: 820, minHeight: 480, idealHeight: 720, maxHeight: 900)
+        .interactiveDismissDisabled(isDirty || isSaving)
         .onAppear { load(); nameIsFocused = true }
-        .confirmationDialog("Activate a broad rule?", isPresented: $confirmsBroadActivation, titleVisibility: .visible) {
-            Button("Activate anyway", role: .destructive) { Task { await save(state: .active) } }
+        .onDisappear { preview.cancel() }
+        .confirmationDialog(activationTitle, isPresented: $pendingActivation, titleVisibility: .visible) {
+            Button(editing?.state == .active ? "Save changes" : "Activate rule", role: .destructive) { Task { await save(state: .active) } }
             Button("Save as Preview instead") { Task { await save(state: .preview) } }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This rule covers your whole home folder or reaches deep through a tree. Review its matches in Preview first.")
+            Text(activationMessage)
+        }
+        .confirmationDialog("Discard your changes?", isPresented: $confirmsDiscard, titleVisibility: .visible) {
+            Button("Discard changes", role: .destructive) { dismiss() }
+            Button("Keep editing", role: .cancel) {}
+        } message: {
+            Text("This rule has unsaved changes.")
         }
         .alert("Could not save rule", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
             Button("OK", role: .cancel) { errorMessage = nil }
@@ -359,10 +463,12 @@ package struct RuleEditorSheet: View {
         }
     }
 
+    // MARK: Impact preview
+
     private var impactPreview: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
-                Text("IMPACT PREVIEW").font(.caption.weight(.bold)).foregroundStyle(PrunePalette.plum)
+                Text("IMPACT PREVIEW").font(.manropeCaptionBold).foregroundStyle(PrunePalette.plum)
                 Spacer()
                 Button(preview.phase == .idle ? "Preview matches" : "Preview again", action: startPreview)
                     .disabled(!canSave || preview.isRunning)
@@ -372,11 +478,11 @@ package struct RuleEditorSheet: View {
             }
             if let editing, let stats = model.stats(for: editing) {
                 Text("Currently \(stats.matches) scheduled match\(stats.matches == 1 ? "" : "es"), \(stats.due) eligible now. Saving re-evaluates affected items.")
-                    .font(.subheadline).foregroundStyle(.secondary)
+                    .font(.manropeSubheadline).foregroundStyle(.secondary)
             }
             if preview.phase == .idle {
                 Text("Preview matches runs a read-only scan of this folder when you click it. Nothing is changed and nothing moves to Trash.")
-                    .font(.subheadline).foregroundStyle(.secondary)
+                    .font(.manropeSubheadline).foregroundStyle(.secondary)
             }
             RulePreviewResultView(controller: preview, isStale: previewIsStale)
         }
@@ -384,22 +490,141 @@ package struct RuleEditorSheet: View {
 
     private func editorSection<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(title.uppercased()).font(.caption.weight(.bold)).foregroundStyle(PrunePalette.plum)
+            Text(title.uppercased()).font(.manropeCaptionBold).foregroundStyle(PrunePalette.plum)
                 .accessibilityAddTraits(.isHeader)
             content()
         }
     }
 
+    // MARK: Validation and derived state
+
+    private static func parse(_ text: String) -> Double? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if let value = Double(trimmed) { return value }
+        return try? Double(trimmed, format: .number)
+    }
+
+    private static func format(_ value: Double) -> String {
+        value.formatted(.number.precision(.fractionLength(0...4)).grouping(.never))
+    }
+
+    private var parsedAmount: Double? { Self.parse(amountText) }
+
+    /// An empty grace field means none.
+    private var parsedGrace: Double? {
+        graceText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0 : Self.parse(graceText)
+    }
+
+    private var amountIssue: String? {
+        guard let amount = parsedAmount else { return "Enter a number of hours or days, for example 30." }
+        guard amount.isFinite, amount > 0 else { return "The amount must be greater than zero." }
+        if amount * unit.seconds > maximumLifetimeSeconds { return "The amount is too large. The longest lifetime is 100 years." }
+        return nil
+    }
+
+    private var graceIssue: String? {
+        guard let grace = parsedGrace else { return "Grace period must be a number of hours, or 0 for none." }
+        guard grace.isFinite, grace >= 0 else { return "Grace period cannot be negative." }
+        if grace > maximumGraceHours { return "Grace period is too long. The longest is 8,760 hours (one year)." }
+        return nil
+    }
+
+    /// The rule as currently drafted, or nil while the fields are incomplete or invalid.
+    private var currentDraft: LifetimeRule? {
+        try? draftRule(state: .preview)
+    }
+
+    private var isVeryBroad: Bool {
+        (currentDraft?.isVeryBroad ?? false) || (chosenFolder?.root.isVeryBroad ?? false)
+            || (!scopePath.isEmpty && RuleScope.isVeryBroad(path: scopePath))
+    }
+
     private var isBroad: Bool {
-        scopePath == NSHomeDirectory() || (chosenFolder?.isVeryBroad ?? false) || (basis == .projectActivity && recursive)
+        isVeryBroad || (currentDraft?.isBroad ?? false)
     }
 
     private var canSave: Bool {
-        !isSaving && !scopePath.isEmpty && amount > 0
+        !isSaving && !scopePath.isEmpty && amountIssue == nil && graceIssue == nil
             && !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    private var currentFields: EditorFields {
+        EditorFields(
+            name: name, scopePath: scopePath, recursive: recursive, kind: kind, names: names, globs: globs,
+            basis: basis, amountText: amountText, unit: unit, graceText: graceText, exceptions: exceptions
+        )
+    }
+
+    private var isDirty: Bool {
+        guard let initialFields else { return false }
+        return currentFields != initialFields
+    }
+
+    // MARK: Save buttons
+
+    /// The state a plain save keeps: new rules begin in Preview, existing rules keep theirs.
+    private var baseState: RuleState { editing?.state ?? .preview }
+
+    private func resolved(_ state: RuleState) -> RuleState { isVeryBroad && state == .active ? .preview : state }
+
+    private var primaryState: RuleState { resolved(baseState) }
+
+    private var primaryLabel: String {
+        if editing == nil || primaryState != baseState { return "Save as Preview" }
+        return "Save"
+    }
+
+    private var secondaryActions: [RuleState] {
+        var states: [RuleState] = []
+        if primaryState != .preview { states.append(.preview) }
+        if primaryState != .active && !isVeryBroad { states.append(.active) }
+        return states
+    }
+
+    private func secondaryLabel(for state: RuleState) -> String {
+        state == .active ? "Activate rule" : "Save as Preview"
+    }
+
+    private func requestCancel() {
+        if isDirty && !isSaving { confirmsDiscard = true } else { dismiss() }
+    }
+
+    private func requestSave(_ requested: RuleState) {
+        let state = resolved(requested)
+        if needsActivationConfirmation(state) { pendingActivation = true } else { Task { await save(state: state) } }
+    }
+
+    /// Activation, or edits that change what an already Active rule would trash, are confirmed.
+    private func needsActivationConfirmation(_ state: RuleState) -> Bool {
+        guard state == .active else { return false }
+        guard let editing, editing.state == .active, let draft = currentDraft else { return true }
+        return !(draft.scope == editing.scope && draft.matcher == editing.matcher
+            && draft.expiryBasis == editing.expiryBasis && draft.lifetime == editing.lifetime
+            && draft.gracePeriod == editing.gracePeriod)
+    }
+
+    private var activationTitle: String {
+        editing?.state == .active ? "Save changes to an Active rule?" : "Activate this rule?"
+    }
+
+    private var activationMessage: String {
+        var lines: [String] = []
+        if let draft = try? draftRule(state: .preview), let result = preview.finishedResult(for: draft) {
+            lines.append("Last preview: \(RulePreviewText.headline(result)).")
+            if result.truncated { lines.append("That scan was cut short, so the real numbers may be higher.") }
+        } else {
+            lines.append("This rule has not been previewed with these settings. Run Preview matches to see what would be pruned.")
+        }
+        lines.append("Active rules move matching items to the Trash when they expire. Items stay in the Trash until you or macOS empty it.")
+        if isBroad { lines.append("This rule is broad. Review its matches carefully.") }
+        return lines.joined(separator: "\n\n")
+    }
+
+    // MARK: Loading
+
     private func load() {
+        guard initialFields == nil else { return }
         switch target {
         case .edit(let rule):
             editing = rule
@@ -411,14 +636,20 @@ package struct RuleEditorSheet: View {
             globs = rule.matcher.globPatterns.sorted().joined(separator: ", ")
             basis = rule.expiryBasis
             if rule.lifetime.seconds.truncatingRemainder(dividingBy: 86_400) == 0 {
-                unit = .days; amount = rule.lifetime.seconds / 86_400
+                unit = .days; amountText = Self.format(rule.lifetime.seconds / 86_400)
             } else {
-                unit = .hours; amount = rule.lifetime.seconds / 3_600
+                unit = .hours; amountText = Self.format(rule.lifetime.seconds / 3_600)
             }
-            graceHours = (rule.gracePeriod?.seconds ?? 0) / 3_600
+            graceText = Self.format((rule.gracePeriod?.seconds ?? 0) / 3_600)
+            let kept = model.overrides(under: rule.scope.path).compactMap { override -> String? in
+                if case .keep = override.policy { override.path } else { nil }
+            }
+            exceptions = kept.sorted()
+            originalExceptions = exceptions
         case .new(let prefill):
             if let prefill { scopePath = prefill }
         }
+        initialFields = currentFields
     }
 
     private func split(_ text: String) -> Set<String> {
@@ -431,8 +662,15 @@ package struct RuleEditorSheet: View {
             if let folder = try ChosenFolder.choose(startingAt: start) {
                 chosenFolder = folder
                 scopePath = folder.root.path
+                // Exceptions only make sense inside the new folder; the stored Keeps for the old folder stay untouched.
+                exceptions.removeAll { !($0 == scopePath || $0.hasPrefix(scopePath + "/")) }
             }
         } catch { errorMessage = error.localizedDescription }
+    }
+
+    private func removeException(_ path: String) {
+        exceptions.removeAll { $0 == path }
+        if originalExceptions.contains(path) { removedExceptions.insert(path) }
     }
 
     private func addException() {
@@ -448,19 +686,23 @@ package struct RuleEditorSheet: View {
             errorMessage = "Exceptions must be inside the rule’s folder."
             return
         }
+        removedExceptions.remove(path)
         if !exceptions.contains(path) { exceptions.append(path) }
     }
 
+    // MARK: Drafting, preview, save
+
     private func draftRule(state: RuleState) throws -> LifetimeRule {
-        try LifetimeRule(
+        guard let amount = parsedAmount, let grace = parsedGrace else { throw RuleValidationError.invalidDuration }
+        return try LifetimeRule(
             id: editing?.id ?? draftID,
             name: name.trimmingCharacters(in: .whitespacesAndNewlines),
             scope: RuleScope(path: scopePath, recursive: recursive),
             matcher: ItemMatcher(itemKind: kind, exactNames: split(names), globPatterns: split(globs)),
             expiryBasis: basis,
             lifetime: RuleDuration(seconds: amount * unit.seconds),
-            gracePeriod: graceHours > 0 ? RuleDuration(seconds: graceHours * 3_600) : nil,
-            action: .trashItem,
+            gracePeriod: grace > 0 ? RuleDuration(seconds: grace * 3_600) : nil,
+            action: editing?.action ?? .trashItem,
             state: state,
             matchMode: editing?.matchMode ?? .scoped
         )
@@ -479,13 +721,16 @@ package struct RuleEditorSheet: View {
 
     @MainActor
     private func save(state: RuleState) async {
+        guard !isSaving else { return }
         isSaving = true
         defer { isSaving = false }
         do {
-            let forcedState: RuleState = (chosenFolder?.isVeryBroad ?? false) ? .preview : state
-            let rule = try draftRule(state: forcedState)
-            try await model.upsert(rule: rule, folder: chosenFolder)
-            for path in exceptions { try await model.keep(path: path, protectDescendants: true) }
+            let rule = try draftRule(state: resolved(state))
+            let added = exceptions.filter { !originalExceptions.contains($0) }
+            let removed = originalExceptions.filter { removedExceptions.contains($0) && !exceptions.contains($0) }
+            // One atomic agent operation: the rule, its root, and its exceptions are saved together or not at all.
+            try await model.saveRule(rule, folder: chosenFolder, keepPaths: added, unkeepPaths: removed)
+            initialFields = currentFields
             dismiss()
         } catch {
             errorMessage = error.localizedDescription

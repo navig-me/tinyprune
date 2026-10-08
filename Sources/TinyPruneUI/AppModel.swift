@@ -27,6 +27,11 @@ package enum PolicyMutationError: Error, LocalizedError {
     case agentRejected(String)
     case unexpectedResponse
     case dangerousFolder(String)
+    /// Another writer changed the policy three times in a row.
+    case policyConflict
+    /// The request timed out or was interrupted after it was sent; the agent may have applied it.
+    case outcomeUnknown
+    case ruleMissing
 
     package var errorDescription: String? {
         switch self {
@@ -34,20 +39,31 @@ package enum PolicyMutationError: Error, LocalizedError {
         case .agentRejected(let message): "The local agent rejected the change: \(message)"
         case .unexpectedResponse: "The local agent returned an unexpected response."
         case .dangerousFolder(let message): message
+        case .policyConflict: "TinyPrune was changed somewhere else while you were editing. The latest state is loaded; review it and try again."
+        case .outcomeUnknown: "The local agent did not confirm the change, so it may or may not have been applied. The latest state has been reloaded; check it before trying again."
+        case .ruleMissing: "That rule no longer exists."
         }
+    }
+}
+
+/// A button the application offers beside `pruningHaltedReason` to resolve it.
+package struct PruningHaltResolution {
+    package let title: String
+    package let perform: @MainActor () -> Void
+
+    package init(title: String, perform: @escaping @MainActor () -> Void) {
+        self.title = title
+        self.perform = perform
     }
 }
 
 /// A folder the user picked, converted to a security-scoped managed root.
 package struct ChosenFolder {
     package let root: ManagedRoot
-    /// Home folders and similarly wide scopes must start in Preview.
-    package let isVeryBroad: Bool
+    /// Home folders and similarly wide scopes: Domain's definition, never a local copy.
+    package var isVeryBroad: Bool { root.isVeryBroad }
 
-    package init(root: ManagedRoot, isVeryBroad: Bool) {
-        self.root = root
-        self.isVeryBroad = isVeryBroad
-    }
+    package init(root: ManagedRoot) { self.root = root }
 
     @MainActor
     static func choose(startingAt directory: URL? = nil, prompt: String = "Use Folder") throws -> ChosenFolder? {
@@ -70,8 +86,8 @@ package struct ChosenFolder {
         } catch ManagedRootValidationError.dangerousPath {
             throw PolicyMutationError.dangerousFolder("TinyPrune does not manage system locations such as \(path).")
         }
-        let home = NSHomeDirectory()
-        return ChosenFolder(root: root, isVeryBroad: path == home || path == "/Users" || path == "/Volumes")
+        // Very broad roots are allowed but flagged (`isVeryBroad`) so rules on them can only be Previews.
+        return ChosenFolder(root: root)
     }
 }
 
@@ -113,30 +129,83 @@ package final class AgentViewModel: ObservableObject {
     @Published package private(set) var activity: [AgentActivityItem] = []
     @Published package private(set) var settings = AgentSettings.default
     @Published package private(set) var isLoading = false
-    @Published package private(set) var errorMessage: String?
+    /// Why the last refresh failed. The previous good `overview` is kept while this is set.
+    @Published package private(set) var connectionIssue: String?
     @Published package private(set) var refreshedAt: Date?
     @Published package private(set) var registrationStatus: SMAppService.Status = .notRegistered
+    /// Set by the application when the updater has stopped pruning (an update is offered, downloaded, or installing).
+    @Published package var pruningHaltedReason: String?
+    /// Optional one-tap way out of `pruningHaltedReason`, supplied by the application (for example "Review Update…").
+    @Published package var pruningHaltResolution: PruningHaltResolution?
+    /// Failure of the last menu-bar or quick action, shown where the action was offered.
+    @Published package private(set) var actionError: String?
+    @Published private var attentionSeenAt: Date?
+
+    /// First load failure or a lost connection with nothing cached.
+    package var errorMessage: String? { overview == nil ? connectionIssue : nil }
 
     private let transport: any AgentTransport
     package let services: any AgentSystemServices
     private let now: @Sendable () -> Date
+    private let defaults: UserDefaults
     private var notifiedFailureIDs: Set<UUID> = []
     private var hasSeededNotifications = false
     private let postsNotifications: Bool
+    private var isRefreshing = false
+    private var refreshPending = false
+    private var refreshWaiters: [CheckedContinuation<Void, Never>] = []
+    private var backgroundTask: Task<Void, Never>?
+
+    private static let onboardingKey = "onboardingCompleted"
+    private static let attentionSeenKey = "attentionSeenAt"
+    private static let maxPolicyAttempts = 3
 
     package init(
         transport: any AgentTransport = TinyPruneAgentClient(),
         services: any AgentSystemServices = SMAppSystemServices(),
         postsNotifications: Bool = true,
+        defaults: UserDefaults = .standard,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.transport = transport
         self.services = services
         self.postsNotifications = postsNotifications
+        self.defaults = defaults
         self.now = now
+        attentionSeenAt = defaults.object(forKey: Self.attentionSeenKey) as? Date
     }
 
     package var policy: AgentPolicySnapshot? { overview?.policy }
+    package var currentDate: Date { now() }
+
+    /// True while no managed folder or rule exists and the user has not finished onboarding.
+    /// Derived from the latest policy every time, so it follows refreshes instead of latching.
+    package var needsOnboarding: Bool {
+        guard let policy = overview?.policy else { return false }
+        return !defaults.bool(forKey: Self.onboardingKey) && policy.managedRoots.isEmpty && policy.rules.isEmpty
+    }
+
+    package func completeOnboarding() { defaults.set(true, forKey: Self.onboardingKey) }
+
+    // MARK: Background refresh
+
+    /// Keeps the model honest while the window is closed or the Mac was asleep: refreshes on a timer and
+    /// whenever the app becomes active. Idempotent.
+    package func startBackgroundRefresh(interval: Duration = .seconds(30)) {
+        guard backgroundTask == nil else { return }
+        backgroundTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: interval)
+                guard !Task.isCancelled, let self else { return }
+                await self.refresh()
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in await self?.refresh() }
+        }
+    }
 
     // MARK: Agent registration
 
@@ -148,7 +217,7 @@ package final class AgentViewModel: ObservableObject {
             refreshRegistrationStatus()
             await refresh()
         } catch {
-            errorMessage = "Could not register the TinyPrune background agent: \(error)"
+            connectionIssue = "Could not register the TinyPrune background agent: \(error)"
         }
     }
 
@@ -156,93 +225,193 @@ package final class AgentViewModel: ObservableObject {
 
     // MARK: Requests
 
-    private func send(_ operation: AgentOperation) async throws -> AgentResponsePayload {
-        let response = try await transport.request(AgentRequest(operation: operation))
+    /// `mutating` requests that end in a timeout or interruption may still have been applied by the agent.
+    private func send(_ operation: AgentOperation, mutating: Bool = false) async throws -> AgentResponsePayload {
+        let response: AgentResponse
+        do {
+            response = try await transport.request(AgentRequest(operation: operation))
+        } catch let error as AgentClientError where mutating && (error == .timedOut || error == .interrupted) {
+            await refresh()
+            throw PolicyMutationError.outcomeUnknown
+        }
         if case .failure(let error) = response.payload {
-            let message: String
             switch error {
-            case .invalidRequest(let detail), .storageUnavailable(let detail): message = detail
+            case .invalidRequest(let detail), .storageUnavailable(let detail): throw PolicyMutationError.agentRejected(detail)
             case .unsupportedProtocol:
-                message = "The app and background agent use different protocol versions. Quit and reopen TinyPrune to load the matching agent."
+                throw PolicyMutationError.agentRejected("The app and background agent use different protocol versions. Quit and reopen TinyPrune to load the matching agent.")
+            case .policyConflict: throw PolicyMutationError.policyConflict
+            case .rootUnavailable(let path):
+                throw PolicyMutationError.agentRejected("The folder \(path) is not available. Reopen TinyPrune or choose the folder again.")
             }
-            throw PolicyMutationError.agentRejected(message)
         }
         return response.payload
     }
 
     private func mutate(_ operation: AgentOperation) async throws {
-        guard case .acknowledged = try await send(operation) else { throw PolicyMutationError.unexpectedResponse }
+        guard case .acknowledged = try await send(operation, mutating: true) else { throw PolicyMutationError.unexpectedResponse }
         await refresh()
     }
 
+    private static func describe(_ error: any Error) -> String {
+        if let client = error as? AgentClientError {
+            switch client {
+            case .unavailable: return "The local TinyPrune agent is unavailable."
+            case .timedOut: return "The local TinyPrune agent did not answer in time."
+            case .interrupted: return "The connection to the local TinyPrune agent was interrupted."
+            default: return "The local TinyPrune agent returned an unreadable reply."
+            }
+        }
+        if let mutation = error as? PolicyMutationError {
+            return "The TinyPrune agent could not load local state: \(mutation.localizedDescription)"
+        }
+        return "The local TinyPrune agent is unavailable."
+    }
+
+    /// Reloads agent state. Concurrent calls coalesce: a call made while a load is running schedules exactly one
+    /// more load and returns when it has finished, so callers always observe state at least as new as their call.
+    /// A failed load keeps the last good overview and sets `connectionIssue`.
     package func refresh() async {
         registrationStatus = services.agentStatus
-        guard !isLoading else { return }
+        if isRefreshing {
+            refreshPending = true
+            await withCheckedContinuation { refreshWaiters.append($0) }
+            return
+        }
+        isRefreshing = true
         isLoading = true
-        defer { isLoading = false }
+        repeat {
+            refreshPending = false
+            await loadState()
+        } while refreshPending
+        isLoading = false
+        isRefreshing = false
+        let waiters = refreshWaiters
+        refreshWaiters = []
+        for waiter in waiters { waiter.resume() }
+    }
+
+    private func loadState() async {
         do {
-            guard case .overview(let overview) = try await send(.loadOverview) else {
-                self.overview = nil
-                errorMessage = "The TinyPrune agent returned an unexpected response."
+            guard case .overview(let loaded) = try await send(.loadOverview) else {
+                connectionIssue = "The TinyPrune agent returned an unexpected response."
                 return
             }
-            let previousRoots = self.overview?.policy.managedRoots
-            self.overview = overview
-            if previousRoots != overview.policy.managedRoots {
+            let previousRoots = overview?.policy.managedRoots
+            overview = loaded
+            if previousRoots != loaded.policy.managedRoots {
                 DistributedNotificationCenter.default().postNotificationName(
                     Notification.Name("com.navig-me.tinyprune.managedRootsChanged"),
                     object: nil, userInfo: nil, deliverImmediately: true
                 )
             }
-            errorMessage = nil
+            connectionIssue = nil
             refreshedAt = now()
-            if case .settings(let loaded) = try await send(.loadSettings) { settings = loaded }
-            if case .activity(let items) = try await send(.loadActivity(limit: 200)) {
-                activity = items
-                await notifyAboutFailures(items)
-            }
-        } catch let error as PolicyMutationError {
-            overview = nil
-            errorMessage = "The TinyPrune agent could not load local state: \(error.localizedDescription)"
+        } catch is CancellationError {
+            return
         } catch {
-            overview = nil
-            errorMessage = "The local TinyPrune agent is unavailable."
+            connectionIssue = Self.describe(error)
+            return
+        }
+        // Secondary loads never discard the overview that just loaded.
+        if case .settings(let loaded)? = try? await send(.loadSettings) { settings = loaded }
+        if case .activity(let items)? = try? await send(.loadActivity(limit: 200)) {
+            activity = items
+            await notifyAboutFailures(items)
         }
     }
 
+    /// Runs a quick action, remembering its failure for the surface that offered it.
+    package func perform(_ action: () async throws -> Void) async {
+        actionError = nil
+        do { try await action() }
+        catch { actionError = error.localizedDescription }
+    }
+
+    package func clearActionError() { actionError = nil }
+
     // MARK: Policy edits
 
-    package func replacePolicy(rules: [LifetimeRule]? = nil, roots: [ManagedRoot]? = nil) async throws {
-        guard let current = overview?.policy else { throw PolicyMutationError.policyUnavailable }
-        try await mutate(.replacePolicy(AgentPolicySnapshot(
-            rules: rules ?? current.rules,
-            overrides: current.overrides,
-            managedRoots: roots ?? current.managedRoots,
-            globallyPaused: current.globallyPaused
-        )))
+    private func loadFreshPolicy() async throws -> AgentPolicySnapshot {
+        guard case .policy(let policy) = try await send(.loadPolicy) else { throw PolicyMutationError.unexpectedResponse }
+        return policy
     }
 
-    /// Adds `root` when it is not already covered by a managed root.
-    package func mergedRoots(adding root: ManagedRoot) -> [ManagedRoot] {
-        let existing = overview?.policy.managedRoots ?? []
-        if existing.contains(where: { $0.path == root.path }) { return existing }
-        return existing + [root]
+    /// Reads the agent's current policy, applies `transform`, and writes it back against the revision that was read.
+    /// A concurrent change (`policyConflict`) reloads and reapplies the transform, at most three times.
+    package func updatePolicy(_ transform: (inout AgentPolicySnapshot) throws -> Void) async throws {
+        for _ in 0..<Self.maxPolicyAttempts {
+            let fresh = try await loadFreshPolicy()
+            var edited = fresh
+            try transform(&edited)
+            let proposal = AgentPolicySnapshot(
+                rules: edited.rules,
+                overrides: edited.overrides,
+                managedRoots: edited.managedRoots,
+                globallyPaused: edited.globallyPaused,
+                pausedUntil: edited.pausedUntil,
+                revision: fresh.revision
+            )
+            do {
+                guard case .acknowledged = try await send(.replacePolicy(proposal), mutating: true) else { throw PolicyMutationError.unexpectedResponse }
+                await refresh()
+                return
+            } catch PolicyMutationError.policyConflict {
+                continue
+            }
+        }
+        await refresh()
+        throw PolicyMutationError.policyConflict
     }
 
-    package func addRules(_ newRules: [LifetimeRule], in folder: ChosenFolder?) async throws {
-        guard let current = overview?.policy else { throw PolicyMutationError.policyUnavailable }
-        try await replacePolicy(rules: current.rules + newRules, roots: folder.map { mergedRoots(adding: $0.root) })
+    /// Atomically saves one rule, optionally adds its folder, and applies Keep exceptions in a single agent transaction.
+    package func saveRule(_ rule: LifetimeRule, folder: ChosenFolder?, keepPaths: [String], unkeepPaths: [String]) async throws {
+        for _ in 0..<Self.maxPolicyAttempts {
+            let fresh = try await loadFreshPolicy()
+            let roots = folder.map { Self.merge(fresh.managedRoots, adding: $0.root) }
+            do {
+                guard case .acknowledged = try await send(
+                    .saveRule(rule: rule, roots: roots, keepPaths: keepPaths, unkeepPaths: unkeepPaths, revision: fresh.revision),
+                    mutating: true
+                ) else { throw PolicyMutationError.unexpectedResponse }
+                await refresh()
+                return
+            } catch PolicyMutationError.policyConflict {
+                continue
+            }
+        }
+        await refresh()
+        throw PolicyMutationError.policyConflict
     }
 
-    package func upsert(rule: LifetimeRule, folder: ChosenFolder?) async throws {
-        guard let current = overview?.policy else { throw PolicyMutationError.policyUnavailable }
-        var rules = current.rules
-        if let index = rules.firstIndex(where: { $0.id == rule.id }) { rules[index] = rule } else { rules.append(rule) }
-        try await replacePolicy(rules: rules, roots: folder.map { mergedRoots(adding: $0.root) })
+    private static func merge(_ existing: [ManagedRoot], adding root: ManagedRoot) -> [ManagedRoot] {
+        existing.contains(where: { $0.path == root.path }) ? existing : existing + [root]
+    }
+
+    /// Adds rules and their folders in one atomic replace. Rules already present (same id) are left alone.
+    package func addRules(_ newRules: [LifetimeRule], folders: [ChosenFolder]) async throws {
+        try await updatePolicy { policy in
+            var rules = policy.rules
+            let known = Set(rules.map(\.id))
+            rules.append(contentsOf: newRules.filter { !known.contains($0.id) })
+            var roots = policy.managedRoots
+            for folder in folders { roots = Self.merge(roots, adding: folder.root) }
+            policy = AgentPolicySnapshot(
+                rules: rules, overrides: policy.overrides, managedRoots: roots,
+                globallyPaused: policy.globallyPaused, pausedUntil: policy.pausedUntil, revision: policy.revision
+            )
+        }
     }
 
     package func setState(_ state: RuleState, for rule: LifetimeRule) async throws {
-        try await upsert(rule: rule.with(state: state), folder: nil)
+        try await updatePolicy { policy in
+            guard let index = policy.rules.firstIndex(where: { $0.id == rule.id }) else { throw PolicyMutationError.ruleMissing }
+            var rules = policy.rules
+            rules[index] = try rules[index].with(state: state)
+            policy = AgentPolicySnapshot(
+                rules: rules, overrides: policy.overrides, managedRoots: policy.managedRoots,
+                globallyPaused: policy.globallyPaused, pausedUntil: policy.pausedUntil, revision: policy.revision
+            )
+        }
     }
 
     package func duplicate(_ rule: LifetimeRule) async throws {
@@ -257,7 +426,7 @@ package final class AgentViewModel: ObservableObject {
             state: .preview,
             matchMode: rule.matchMode
         )
-        try await upsert(rule: copy, folder: nil)
+        try await addRules([copy], folders: [])
     }
 
     package func delete(_ rule: LifetimeRule) async throws { try await mutate(.deleteRule(rule.id)) }
@@ -265,7 +434,7 @@ package final class AgentViewModel: ObservableObject {
     package func pause(until date: Date) async throws { try await mutate(.pauseUntil(date)) }
 
     package func updateSettings(_ updated: AgentSettings) async throws {
-        guard case .settings(let saved) = try await send(.updateSettings(updated)) else { throw PolicyMutationError.unexpectedResponse }
+        guard case .settings(let saved) = try await send(.updateSettings(updated), mutating: true) else { throw PolicyMutationError.unexpectedResponse }
         settings = saved
         await refresh()
     }
@@ -281,18 +450,39 @@ package final class AgentViewModel: ObservableObject {
     }
 
     /// Applies an imported configuration with the same plan the CLI uses. Returns a short summary.
+    /// The plan's rule delta (not its precomputed merge) is applied to the freshest policy, so concurrent edits survive.
     package func applyConfig(_ plan: ConfigPlan) async throws -> String {
         guard plan.isApplicable else { throw PolicyMutationError.dangerousFolder("Add these folders in TinyPrune first: \(plan.unmanagedRoots.joined(separator: ", "))") }
-        if plan.hasRuleChanges { try await replacePolicy(rules: plan.merged) }
-        for override in plan.newExceptions {
-            try await mutate(.setItemOverride(path: override.path, policy: override.policy))
+        if plan.hasRuleChanges {
+            try await updatePolicy { policy in
+                let removedIDs = Set(plan.removed.map(\.id))
+                let replacements = Dictionary(plan.changed.map { ($0.after.id, $0.after) }, uniquingKeysWith: { _, last in last })
+                var rules: [LifetimeRule] = policy.rules
+                    .filter { !removedIDs.contains($0.id) }
+                    .map { replacements[$0.id] ?? $0 }
+                let known = Set(rules.map(\.id))
+                rules.append(contentsOf: plan.added.filter { !known.contains($0.id) })
+                policy = AgentPolicySnapshot(
+                    rules: rules, overrides: policy.overrides, managedRoots: policy.managedRoots,
+                    globallyPaused: policy.globallyPaused, pausedUntil: policy.pausedUntil, revision: policy.revision
+                )
+            }
+        }
+        if !plan.newExceptions.isEmpty {
+            try await mutate(.setItemOverrides(changes: plan.newExceptions.map { AgentItemOverrideChange(path: $0.path, policy: $0.policy) }))
         }
         return "\(plan.added.count) added, \(plan.changed.count) changed, \(plan.removed.count) removed, \(plan.newExceptions.count) exception(s) set."
     }
+
     /// Explicit, user-requested dry run. Nothing is persisted and nothing is moved to Trash.
     package func previewRule(_ rule: LifetimeRule) async throws -> AgentRulePreview {
         guard case .rulePreview(let preview) = try await send(.previewRule(rule)) else { throw PolicyMutationError.unexpectedResponse }
         return preview
+    }
+
+    /// Asks the agent to stop a running preview scan.
+    package func cancelPreview() async {
+        _ = try? await send(.cancelPreview)
     }
 
     package func rebuildIndex() async throws { try await mutate(.rebuildIndex) }
@@ -304,11 +494,47 @@ package final class AgentViewModel: ObservableObject {
     }
     package func inherit(path: String) async throws { try await mutate(.clearItemOverride(path: path)) }
 
+    /// Keep overrides inside `scopePath`, from the latest overview, for the editor's Except list.
+    package func overrides(under scopePath: String) -> [ItemPolicyOverride] {
+        let prefix = scopePath.hasSuffix("/") ? scopePath : scopePath + "/"
+        return (overview?.policy.overrides ?? []).filter { override in
+            guard case .keep = override.policy else { return false }
+            return override.path == scopePath || override.path.hasPrefix(prefix)
+        }
+    }
+
     package func explain(path: String) async throws -> AgentItemExplanation {
         guard case .itemExplanation(let explanation) = try await send(.explainItem(path: path)) else {
             throw PolicyMutationError.unexpectedResponse
         }
         return explanation
+    }
+
+    // MARK: Derived honesty
+
+    /// Matches that will really move to Trash.
+    package var activeUpcoming: [AgentUpcomingItem] { overview?.upcoming.filter { $0.explanation.disposition == .active } ?? [] }
+    /// Matches from Preview rules, which never touch files.
+    package var previewUpcoming: [AgentUpcomingItem] { overview?.upcoming.filter { $0.explanation.disposition == .preview } ?? [] }
+
+    /// Trash failures from the last 24 hours that the user has not seen in Activity and that were not later resolved.
+    package var attentionItems: [AgentActivityItem] {
+        let cutoff = max(now().addingTimeInterval(-86_400), attentionSeenAt ?? .distantPast)
+        let recent = activity.filter { $0.occurredAt > cutoff }
+        return recent.filter { failure in
+            guard failure.isAttention else { return false }
+            guard let identity = failure.identity else { return true }
+            return !recent.contains { $0.kind == .movedToTrash && $0.identity == identity && $0.occurredAt > failure.occurredAt }
+        }
+    }
+
+    package var needsAttention: Bool { !attentionItems.isEmpty }
+
+    /// Called when the user opens Activity from the attention notice.
+    package func acknowledgeAttention() {
+        let date = now()
+        attentionSeenAt = date
+        defaults.set(date, forKey: Self.attentionSeenKey)
     }
 
     package func stats(for rule: LifetimeRule) -> AgentRuleStats? {
@@ -371,7 +597,7 @@ struct PathText: View {
     let path: String
     var body: some View {
         Text(path)
-            .font(Typography.mono(size: 12, relativeTo: .caption))
+            .font(Typography.path)
             .foregroundStyle(.secondary)
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
@@ -388,7 +614,7 @@ struct SectionTitle: View {
     let text: String
     init(_ text: String) { self.text = text }
     var body: some View {
-        Text(text).font(Typography.display(size: 22))
+        Text(text).font(Typography.sectionTitle)
             .accessibilityAddTraits(.isHeader)
     }
 }

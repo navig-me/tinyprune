@@ -3,9 +3,21 @@ import TinyPruneUI
 
 @main
 struct TinyPruneApp: App {
-    @StateObject private var model = AgentViewModel()
+    @StateObject private var model: AgentViewModel
     @StateObject private var router = AppRouter()
-    @StateObject private var updater = AppUpdater()
+    @StateObject private var updater: AppUpdater
+
+    @MainActor
+    init() {
+        let model = AgentViewModel()
+        let updater = AppUpdater()
+        // The updater's pruning halt is shown in Overview, the header, and the menu bar.
+        updater.bind(to: model)
+        // Menu-bar state stays fresh without a window: timer plus app activation.
+        model.startBackgroundRefresh()
+        _model = StateObject(wrappedValue: model)
+        _updater = StateObject(wrappedValue: updater)
+    }
     @AppStorage("showMenuBarIcon") private var showMenuBarIcon = true
 
     var body: some Scene {

@@ -64,6 +64,8 @@ public enum SQLiteSafetyStoreError: Error, Equatable, Sendable {
     case openFailed(String)
     case statementFailed(String)
     case encodingFailed(String)
+    /// `replaceSnapshot` was given an expected revision that no longer matches the stored policy.
+    case revisionConflict
 }
 
 public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
@@ -72,6 +74,8 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
     private let clock: any SafetyClock
+    /// Project-activity scans currently in flight; observation rows of any other scan id are orphans.
+    private var activeProjectScans: Set<String> = []
 
     public init(databaseURL: URL, clock: any SafetyClock = SystemSafetyClock()) throws {
         self.databaseURL = databaseURL
@@ -94,6 +98,10 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
         try Self.migrate(database!)
         try Self.execute(database!, "PRAGMA journal_mode=WAL")
         try Self.execute(database!, "PRAGMA synchronous=FULL")
+        // Identities derived from device numbers (`np:` keys) are not stable across restarts or remounts; drop them.
+        try Self.execute(database!, "DELETE FROM deadlines WHERE identity_key LIKE 'np:%'")
+        try Self.execute(database!, "DELETE FROM observed_activity WHERE identity_key LIKE 'np:%'")
+        try Self.execute(database!, "DELETE FROM project_activity WHERE identity_key LIKE 'np:%'")
     }
 
     deinit {
@@ -102,21 +110,45 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
 
     public func loadSnapshot() async throws -> PolicySnapshot {
         try lapseExpiredPause()
-        let rules = try loadPayloads(table: "rules", as: LifetimeRule.self)
-        let overrides = try loadPayloads(table: "item_overrides", as: ItemPolicyOverride.self)
-        let managedRoots = try loadPayloads(table: "managed_roots", as: ManagedRoot.self)
-        let state = try loadSettingsRow()
-        let now = clock.now()
-        let pausedUntil = state.pausedUntil.flatMap { $0 > now ? $0 : nil }
-        let effectivelyPaused = state.globallyPaused && (state.pausedUntil == nil || pausedUntil != nil)
-        return PolicySnapshot(
-            rules: rules,
-            overrides: overrides,
-            managedRoots: managedRoots,
-            globallyPaused: effectivelyPaused,
-            pausedUntil: effectivelyPaused ? pausedUntil : nil,
-            settings: state.settings
-        )
+        // One read transaction: rules, overrides, roots, settings and revision are a single consistent view.
+        try execute("BEGIN")
+        do {
+            let rules = try loadPayloads(table: "rules", as: LifetimeRule.self)
+            let overrides = try loadPayloads(table: "item_overrides", as: ItemPolicyOverride.self)
+            let managedRoots = try loadPayloads(table: "managed_roots", as: ManagedRoot.self)
+            let state = try loadSettingsRow()
+            let revision = try currentPolicyRevision()
+            try execute("COMMIT")
+            let now = clock.now()
+            let pausedUntil = state.pausedUntil.flatMap { $0 > now ? $0 : nil }
+            let effectivelyPaused = state.globallyPaused && (state.pausedUntil == nil || pausedUntil != nil)
+            return PolicySnapshot(
+                rules: rules,
+                overrides: overrides,
+                managedRoots: managedRoots,
+                globallyPaused: effectivelyPaused,
+                pausedUntil: effectivelyPaused ? pausedUntil : nil,
+                settings: state.settings,
+                revision: revision
+            )
+        } catch {
+            try? execute("ROLLBACK")
+            throw error
+        }
+    }
+
+    private func currentPolicyRevision() throws -> Int {
+        let statement = try prepare("SELECT policy_revision FROM settings WHERE id = 1")
+        defer { sqlite3_finalize(statement) }
+        guard try rowAvailable(statement) else {
+            throw SQLiteSafetyStoreError.statementFailed("settings row is missing")
+        }
+        return Int(sqlite3_column_int64(statement, 0))
+    }
+
+    /// Must be called inside the transaction that performs the policy mutation.
+    private func bumpPolicyRevision() throws {
+        try execute("UPDATE settings SET policy_revision = policy_revision + 1 WHERE id = 1")
     }
 
     public func loadSettings() async throws -> AgentSettings {
@@ -133,6 +165,7 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
             try check(sqlite3_bind_int(statement, 2, settings.protectHiddenFiles ? 1 : 0))
             try check(sqlite3_bind_int64(statement, 3, Int64(settings.activityRetentionDays)))
             try stepDone(statement)
+            try bumpPolicyRevision()
             try insertAuditEvent(auditEvent)
             try pruneAuditEvents(retentionDays: settings.activityRetentionDays, keeping: auditEvent.id)
             try execute("COMMIT")
@@ -186,6 +219,7 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
             try stepDone(statement)
             if sqlite3_changes(database) == 1 {
                 try insertAuditEvent(TrashAuditEvent(occurredAt: now, kind: .globalPauseChanged, detail: "resumed automatically"))
+                try bumpPolicyRevision()
             }
             try execute("COMMIT")
         } catch {
@@ -204,9 +238,14 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
         try stepDone(statement)
     }
 
-    public func replaceSnapshot(_ snapshot: PolicySnapshot, auditEvents: [TrashAuditEvent] = []) throws {
+    /// Replaces the whole policy atomically. When `expectedRevision` is given and no longer matches the stored
+    /// revision (checked inside the write transaction) nothing is written and `revisionConflict` is thrown.
+    public func replaceSnapshot(_ snapshot: PolicySnapshot, auditEvents: [TrashAuditEvent] = [], expectedRevision: Int? = nil) throws {
         try execute("BEGIN IMMEDIATE")
         do {
+            if let expectedRevision, try currentPolicyRevision() != expectedRevision {
+                throw SQLiteSafetyStoreError.revisionConflict
+            }
             try execute("DELETE FROM rules")
             try execute("DELETE FROM item_overrides")
             try execute("DELETE FROM managed_roots")
@@ -228,8 +267,9 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
                 try check(sqlite3_bind_null(statement, 2))
             }
             try stepDone(statement)
+            try bumpPolicyRevision()
             try insertAuditEvent(TrashAuditEvent(
-                occurredAt: Date(),
+                occurredAt: clock.now(),
                 kind: .policyReplaced,
                 detail: "rules=\(snapshot.rules.count); overrides=\(snapshot.overrides.count); roots=\(snapshot.managedRoots.count); globallyPaused=\(snapshot.globallyPaused)"
             ))
@@ -242,27 +282,31 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
     }
 
     public func setOverride(_ override: ItemPolicyOverride, auditEvent: TrashAuditEvent) throws {
-        var overrides = try loadPayloads(table: "item_overrides", as: ItemPolicyOverride.self)
-        overrides.removeAll { $0.path == override.path }
-        overrides.append(override)
-        try replaceOverrides(overrides, auditEvent: auditEvent)
+        try setOverrides([override], removingPaths: [], auditEvents: [auditEvent])
     }
 
     public func removeOverrides(at path: String, auditEvent: TrashAuditEvent) throws {
-        let normalizedPath = RuleScope.normalized(path)
-        var overrides = try loadPayloads(table: "item_overrides", as: ItemPolicyOverride.self)
-        overrides.removeAll { $0.path == normalizedPath }
-        try replaceOverrides(overrides, auditEvent: auditEvent)
+        try setOverrides([], removingPaths: [path], auditEvents: [auditEvent])
     }
 
-    private func replaceOverrides(_ overrides: [ItemPolicyOverride], auditEvent: TrashAuditEvent) throws {
+    /// Applies a batch of override upserts and removals in one transaction (read-modify-write happens inside it).
+    /// An upsert replaces any existing override at the same normalized path; later upserts win over earlier ones.
+    public func setOverrides(_ upserts: [ItemPolicyOverride], removingPaths: [String], auditEvents: [TrashAuditEvent]) throws {
+        let removed = Set(removingPaths.map(RuleScope.normalized))
         try execute("BEGIN IMMEDIATE")
         do {
+            var overrides = try loadPayloads(table: "item_overrides", as: ItemPolicyOverride.self)
+            overrides.removeAll { removed.contains($0.path) }
+            for upsert in upserts {
+                overrides.removeAll { $0.path == upsert.path }
+                overrides.append(upsert)
+            }
             try execute("DELETE FROM item_overrides")
             for (position, override) in overrides.enumerated() {
                 try insertPayload(table: "item_overrides", id: override.id.uuidString, position: position, value: override)
             }
-            try insertAuditEvent(auditEvent)
+            try bumpPolicyRevision()
+            for event in auditEvents { try insertAuditEvent(event) }
             try execute("COMMIT")
         } catch {
             try? execute("ROLLBACK")
@@ -282,6 +326,7 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
                 try check(sqlite3_bind_null(statement, 2))
             }
             try stepDone(statement)
+            try bumpPolicyRevision()
             try insertAuditEvent(auditEvent)
             try execute("COMMIT")
         } catch {
@@ -300,10 +345,11 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
             guard sqlite3_changes(database) == 1 else {
                 throw SQLiteSafetyStoreError.statementFailed("rule does not exist")
             }
-            let deadlines = try prepare("DELETE FROM deadlines WHERE json_extract(CAST(payload AS TEXT), '$.explanation.matchedRuleID') = ? AND json_extract(CAST(payload AS TEXT), '$.explanation.customOverrideID') IS NULL")
+            let deadlines = try prepare("DELETE FROM deadlines WHERE rule_id = ?")
             defer { sqlite3_finalize(deadlines) }
             try bind(ruleID.uuidString, to: deadlines, at: 1)
             try stepDone(deadlines)
+            try bumpPolicyRevision()
             try insertAuditEvent(auditEvent)
             try execute("COMMIT")
         } catch {
@@ -337,6 +383,74 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
         return result
     }
 
+    /// Replaces the stored security-scoped bookmark of a managed root after the agent re-resolved a stale one.
+    public func updateManagedRootBookmark(rootID: UUID, bookmarkData: Data, auditEvent: TrashAuditEvent?) throws {
+        try execute("BEGIN IMMEDIATE")
+        do {
+            let select = try prepare("SELECT payload FROM managed_roots WHERE id = ?")
+            defer { sqlite3_finalize(select) }
+            try bind(rootID.uuidString, to: select, at: 1)
+            guard try rowAvailable(select) else {
+                throw SQLiteSafetyStoreError.statementFailed("managed root does not exist")
+            }
+            let current = try decode(ManagedRoot.self, from: columnData(select, at: 0))
+            let refreshed: ManagedRoot
+            do {
+                refreshed = try ManagedRoot(id: current.id, displayName: current.displayName, path: current.path, bookmarkData: bookmarkData)
+            } catch {
+                throw SQLiteSafetyStoreError.encodingFailed("refreshed bookmark rejected: \(error)")
+            }
+            let update = try prepare("UPDATE managed_roots SET payload = ? WHERE id = ?")
+            defer { sqlite3_finalize(update) }
+            try bind(try encode(refreshed), to: update, at: 1)
+            try bind(rootID.uuidString, to: update, at: 2)
+            try stepDone(update)
+            try bumpPolicyRevision()
+            if let auditEvent { try insertAuditEvent(auditEvent) }
+            try execute("COMMIT")
+        } catch {
+            try? execute("ROLLBACK")
+            throw error
+        }
+    }
+
+    /// Startup reconciliation: a `trashAttempted` event with no later `movedToTrash`/`trashFailed` for the same
+    /// identity means the agent stopped mid-operation. Records a `trashFailed` event for each so the audit log
+    /// never claims an attempt is still in flight. Idempotent. Returns the number of attempts reconciled.
+    @discardableResult
+    public func reconcileInterruptedTrashAttempts() throws -> Int {
+        let statement = try prepare("SELECT payload FROM audit_events WHERE kind IN ('trashAttempted', 'movedToTrash', 'trashFailed') ORDER BY occurred_at ASC, rowid ASC")
+        var latest: [String: TrashAuditEvent] = [:]
+        do {
+            defer { sqlite3_finalize(statement) }
+            while try rowAvailable(statement) {
+                let event = try decode(TrashAuditEvent.self, from: columnData(statement, at: 0))
+                guard let identity = event.identity else { continue }
+                latest[Self.identityKey(identity)] = event
+            }
+        }
+        let dangling = latest.values.filter { $0.kind == .trashAttempted }.sorted { $0.occurredAt < $1.occurredAt }
+        guard !dangling.isEmpty else { return 0 }
+        try execute("BEGIN IMMEDIATE")
+        do {
+            let now = clock.now()
+            for attempt in dangling {
+                try insertAuditEvent(TrashAuditEvent(
+                    occurredAt: now,
+                    kind: .trashFailed,
+                    identity: attempt.identity,
+                    ruleID: attempt.ruleID,
+                    detail: "interrupted before the outcome was recorded; the item may or may not have been moved to Trash"
+                ))
+            }
+            try execute("COMMIT")
+        } catch {
+            try? execute("ROLLBACK")
+            throw error
+        }
+        return dangling.count
+    }
+
     public func saveDeadline(_ deadline: PersistedDeadline) throws {
         try persistDeadline(deadline)
     }
@@ -354,20 +468,42 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
     }
 
     private func persistDeadline(_ deadline: PersistedDeadline) throws {
-        let statement = try prepare("INSERT INTO deadlines(identity_key, scheduled_at, path_hint, payload) VALUES(?, ?, ?, ?) ON CONFLICT(identity_key) DO UPDATE SET scheduled_at=excluded.scheduled_at, path_hint=excluded.path_hint, payload=excluded.payload")
+        let statement = try prepare("""
+        INSERT INTO deadlines(identity_key, scheduled_at, path_hint, payload, rule_id) VALUES(?, ?, ?, ?, ?)
+        ON CONFLICT(identity_key) DO UPDATE SET scheduled_at=excluded.scheduled_at, path_hint=excluded.path_hint, payload=excluded.payload, rule_id=excluded.rule_id
+        """)
         defer { sqlite3_finalize(statement) }
         try bind(Self.identityKey(deadline.identity), to: statement, at: 1)
         try check(sqlite3_bind_double(statement, 2, deadline.scheduledAt.timeIntervalSince1970))
         try bind(deadline.identity.pathHint, to: statement, at: 3)
         try bind(try encode(deadline), to: statement, at: 4)
+        if deadline.explanation.customOverrideID == nil {
+            try bind(deadline.explanation.matchedRuleID.uuidString, to: statement, at: 5)
+        } else {
+            try check(sqlite3_bind_null(statement, 5))
+        }
         try stepDone(statement)
     }
 
+    /// Unconditional removal: for callers that are authoritative about the item no longer being eligible
+    /// (the indexer after re-evaluating it, or rule removal). A scheduler that merely finished executing a
+    /// deadline it read earlier must use `removeDeadline(for:scheduledAt:)` so a fresher row survives.
     public func removeDeadline(for identity: FilesystemIdentity) throws {
         let statement = try prepare("DELETE FROM deadlines WHERE identity_key = ?")
         defer { sqlite3_finalize(statement) }
         try bind(Self.identityKey(identity), to: statement, at: 1)
         try stepDone(statement)
+    }
+
+    /// Removes the deadline only if it still has the `scheduledAt` the caller acted on; returns whether a row was deleted.
+    @discardableResult
+    public func removeDeadline(for identity: FilesystemIdentity, scheduledAt: Date) throws -> Bool {
+        let statement = try prepare("DELETE FROM deadlines WHERE identity_key = ? AND scheduled_at = ?")
+        defer { sqlite3_finalize(statement) }
+        try bind(Self.identityKey(identity), to: statement, at: 1)
+        try check(sqlite3_bind_double(statement, 2, scheduledAt.timeIntervalSince1970))
+        try stepDone(statement)
+        return sqlite3_changes(database) > 0
     }
     public func removeDeadlines(atOrBelow path: String) throws {
         let root = RuleScope.normalized(path)
@@ -490,9 +626,36 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
         try execute("PRAGMA optimize")
     }
 
+    /// Starts a scan. Observation rows of scans that are no longer running (crashed or abandoned) are dropped;
+    /// observations of scans still in flight (other roots scanning concurrently) are left alone.
     public func beginProjectActivityScan() throws -> String {
-        try execute("DELETE FROM project_activity_observations")
-        return UUID().uuidString
+        let listing = try prepare("SELECT DISTINCT scan_id FROM project_activity_observations")
+        var orphans: [String] = []
+        do {
+            defer { sqlite3_finalize(listing) }
+            while try rowAvailable(listing) {
+                let id = String(cString: sqlite3_column_text(listing, 0))
+                if !activeProjectScans.contains(id) { orphans.append(id) }
+            }
+        }
+        for orphan in orphans {
+            let delete = try prepare("DELETE FROM project_activity_observations WHERE scan_id = ?")
+            defer { sqlite3_finalize(delete) }
+            try bind(orphan, to: delete, at: 1)
+            try stepDone(delete)
+        }
+        let scanID = UUID().uuidString
+        activeProjectScans.insert(scanID)
+        return scanID
+    }
+
+    /// Releases a scan that ended without `finishProjectActivityScan` (cancelled or failed).
+    public func endProjectActivityScan(scanID: String) throws {
+        activeProjectScans.remove(scanID)
+        let delete = try prepare("DELETE FROM project_activity_observations WHERE scan_id = ?")
+        defer { sqlite3_finalize(delete) }
+        try bind(scanID, to: delete, at: 1)
+        try stepDone(delete)
     }
 
     public func recordProjectActivities(_ projects: [PersistedProjectActivity], scanID: String) throws {
@@ -610,6 +773,7 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
             try bind(scanID, to: clearObservations, at: 1)
             try stepDone(clearObservations)
             try execute("COMMIT")
+            activeProjectScans.remove(scanID)
         } catch {
             try? execute("ROLLBACK")
             throw error
@@ -684,9 +848,8 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
     /// Per-rule counts of scheduled candidates, read from the persisted deadline index only.
     public func deadlineCountsByRule(now: Date) throws -> [UUID: (matches: Int, due: Int)] {
         let statement = try prepare("""
-        SELECT json_extract(CAST(payload AS TEXT), '$.explanation.matchedRuleID') AS rule_id,
-               COUNT(*), SUM(CASE WHEN scheduled_at <= ? THEN 1 ELSE 0 END)
-        FROM deadlines WHERE json_extract(CAST(payload AS TEXT), '$.explanation.customOverrideID') IS NULL GROUP BY rule_id
+        SELECT rule_id, COUNT(*), SUM(CASE WHEN scheduled_at <= ? THEN 1 ELSE 0 END)
+        FROM deadlines WHERE rule_id IS NOT NULL GROUP BY rule_id
         """)
         defer { sqlite3_finalize(statement) }
         try check(sqlite3_bind_double(statement, 1, now.timeIntervalSince1970))
@@ -850,7 +1013,9 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
 
     private static func identityKey(_ identity: FilesystemIdentity) -> String {
         let resource = identity.resourceIdentifier.map { String(format: "%02x", $0) }.joined()
-        return "\(identity.volumeIdentifier.uuidString):\(resource)"
+        let key = "\(identity.volumeIdentifier.uuidString):\(resource)"
+        // Device-number volume ids are only meaningful until the next restart/remount; the prefix lets startup purge them.
+        return identity.isPersistent ? key : "np:" + key
     }
 
     private static func migrate(_ database: OpaquePointer) throws {
@@ -982,6 +1147,21 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
             ALTER TABLE settings ADD COLUMN activity_retention_days INTEGER NOT NULL DEFAULT 0 CHECK(activity_retention_days >= 0);
             INSERT INTO schema_migrations(version, applied_at) VALUES(7, strftime('%s', 'now'));
             PRAGMA user_version = 7;
+            COMMIT;
+            """
+            do { try Self.execute(database, migration) }
+            catch { sqlite3_exec(database, "ROLLBACK", nil, nil, nil); throw error }
+        }
+        if version < 8 {
+            let migration = """
+            BEGIN IMMEDIATE;
+            ALTER TABLE settings ADD COLUMN policy_revision INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE deadlines ADD COLUMN rule_id TEXT;
+            UPDATE deadlines SET rule_id = json_extract(CAST(payload AS TEXT), '$.explanation.matchedRuleID')
+                WHERE json_extract(CAST(payload AS TEXT), '$.explanation.customOverrideID') IS NULL;
+            CREATE INDEX deadline_rule_idx ON deadlines(rule_id);
+            INSERT INTO schema_migrations(version, applied_at) VALUES(8, strftime('%s', 'now'));
+            PRAGMA user_version = 8;
             COMMIT;
             """
             do { try Self.execute(database, migration) }

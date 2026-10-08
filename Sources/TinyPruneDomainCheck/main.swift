@@ -299,4 +299,23 @@ try expectConfigError("version: 1\nroots:\n  - ~/a\n  - ~/a/b\n", line: 4, conta
 try expectConfigError("version: 1\nroots:\n  - ~/a\nrules:\n  - name: R\n    match:\n      globs:\n        - *.dmg\n    expiry:\n      after: 1d\n      since: created\n", line: 8, contains: "wrap the value in quotes")
 try expectConfigError("version: 1\nroots:\n  - ~/a\nrules:\n  - name: R\n    match: {names: [a]}\n", line: 6, contains: "Inline mappings")
 
+// Glob basename semantics, broadness, Keep fail-toward-protection.
+let basenameMatcher = try ItemMatcher(itemKind: .file, exactNames: [], globPatterns: ["*.log"])
+guard basenameMatcher.matches(name: "a.log", relativePath: "x/y/a.log", kind: .file),
+      RuleScope.isVeryBroad(path: "/users/example"), RuleScope.isVeryBroad(path: "/Volumes"),
+      !RuleScope.isVeryBroad(path: "/Users/example/Developer") else { throw SmokeFailure.incorrectResolution }
+for template in [RuleTemplate.downloads, .temporaryWorkspace] {
+    guard try template.rules(in: "/Users/example/Work", state: .active).allSatisfy({ !$0.scope.recursive }) else {
+        throw SmokeFailure.incorrectResolution
+    }
+}
+let keptOriginal = candidate
+let keptReplacement = RuleCandidate(
+    identity: FilesystemIdentity(volumeIdentifier: UUID(), resourceIdentifier: Data([9]), pathHint: candidate.identity.pathHint),
+    name: candidate.name, kind: candidate.kind, timestamps: candidate.timestamps
+)
+let keepOverride = ItemPolicyOverride(identity: keptOriginal.identity, path: keptOriginal.identity.pathHint, policy: .keep(protectDescendants: false))
+guard case .protected = RuleResolver.resolve(candidate: keptReplacement, rules: [], overrides: [keepOverride]) else {
+    throw SmokeFailure.incorrectResolution
+}
 print("TinyPrune domain smoke passed")

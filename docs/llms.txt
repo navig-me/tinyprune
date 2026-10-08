@@ -5,11 +5,15 @@
 ## Key facts
 
 - Requires macOS 14 or later. Releases are universal (Intel and Apple silicon). Version 0.1.0 is an unsigned, not notarized pre-release.
-- Items only move to the macOS Trash. TinyPrune never permanently deletes files.
+- Items only move to the macOS Trash. TinyPrune never permanently deletes files. Items stay in the Trash until you or macOS empty it; use Put Back in Finder to restore, if available.
 - Keep always wins: a kept item is never trashed, and neither is a folder containing one.
 - Preview runs matching and scheduling without trashing anything. Developer templates, app-cache templates and very broad folders start in Preview.
-- Local-first: no account, filesystem metadata only (no file contents), no network access needed for core cleanup.
+- Local-first: the app has no telemetry and needs no account; filesystem metadata only (no file contents); no network access needed for core cleanup. The tinyprune.com website, separately, uses Google Analytics and PostHog.
 - Optional signed direct-download update checks use HTTPS. Homebrew copies update only through Homebrew; unsigned previews require manual updates.
+- Very broad folders (home folder, /Users, /Volumes, /private, whole volumes) are Preview-only; Active rules on them are rejected. Dangerous system roots are refused.
+- Glob semantics: a glob without "/" matches the item name at any depth (gitignore-style); a glob with "/" matches the path relative to the folder; only *, ? and ** are supported (no classes, braces or negation). Keep matches by identity and falls back to the recorded path.
+- Downloads and Temporary Workspace templates act on top-level items only (non-recursive).
+- CLI exit codes: 0 ok, 64 usage, 65 invalid data, 69 agent unavailable, 70 agent error, 75 timed out/interrupted/busy (request may have applied; check `tinyprune status`), 78 config roots not managed. `--json` errors are JSON. `tonight` rolls to 23:59 tomorrow after 23:59.
 - Every decision is explained: rule, basis, deadline, overrides, and why an item was skipped.
 - Interfaces: the app, a Finder menu, and the `tinyprune` CLI with `--json` output and config commands (validate, preview, apply, export).
 - Install: `brew install --cask navig-me/tap/tinyprune`, or download the DMG from GitHub Releases, or build from source with `git clone https://github.com/navig-me/tinyprune && cd tinyprune && swift Scripts/package-app.swift && open .build/package/TinyPrune.app`

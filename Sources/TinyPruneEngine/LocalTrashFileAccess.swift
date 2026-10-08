@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import TinyPruneDomain
 
@@ -20,13 +21,38 @@ public final class LocalTrashFileAccess: TrashFileAccess, @unchecked Sendable {
         try inspectSynchronously(path: path)
     }
 
-    public func hasProtectedDescendant(path: String, overrides: [ItemPolicyOverride]) async throws -> Bool {
-        try hasProtectedDescendantSynchronously(path: path, overrides: overrides)
+    public func hasSymbolicLinkAncestor(of path: String, below rootPath: String) async throws -> Bool {
+        let root = RuleScope.normalized(rootPath)
+        var current = (RuleScope.normalized(path) as NSString).deletingLastPathComponent
+        // Walk from the item's parent up to (but excluding) the managed root. Anything not below the root fails closed.
+        guard current.hasPrefix(root + "/") || current == root else { return true }
+        while current != root, current.hasPrefix(root + "/") {
+            var info = stat()
+            guard lstat(current, &info) == 0 else { return true }
+            if (info.st_mode & S_IFMT) == S_IFLNK { return true }
+            current = (current as NSString).deletingLastPathComponent
+        }
+        return false
+    }
+
+    public func hasProtectedDescendant(
+        path: String,
+        overrides: [ItemPolicyOverride],
+        protectHiddenFiles: Bool,
+        budget: DescendantWalkBudget
+    ) async throws -> DescendantProtection {
+        try hasProtectedDescendantSynchronously(path: path, overrides: overrides, protectHiddenFiles: protectHiddenFiles, budget: budget)
     }
 
     private func inspectSynchronously(path: String) throws -> RuleCandidate? {
-        guard fileManager.fileExists(atPath: path) else { return nil }
-        let attributes = try fileManager.attributesOfItem(atPath: path)
+        let attributes: [FileAttributeKey: Any]
+        do {
+            attributes = try fileManager.attributesOfItem(atPath: path)
+        } catch let error as CocoaError where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile {
+            return nil
+        } catch let error as NSError where error.domain == NSPOSIXErrorDomain && error.code == Int(ENOENT) {
+            return nil
+        }
         if attributes[.type] as? FileAttributeType == .typeSymbolicLink {
             throw LocalFileAccessError.symbolicLink(path)
         }
@@ -39,14 +65,17 @@ public final class LocalTrashFileAccess: TrashFileAccess, @unchecked Sendable {
             .resourceValues(forKeys: [.volumeUUIDStringKey])
             .volumeUUIDString
             .flatMap(UUID.init(uuidString:))
+        let created = attributes[.creationDate] as? Date
         let identity = FilesystemIdentity(
             volumeIdentifier: volumeUUID ?? Self.volumeIdentifier(deviceNumber: device),
-            resourceIdentifier: withUnsafeBytes(of: inode.bigEndian) { Data($0) },
-            pathHint: RuleScope.normalized(path)
+            resourceIdentifier: Self.resourceIdentifier(inode: inode),
+            pathHint: RuleScope.normalized(path),
+            creationTime: created,
+            isPersistent: volumeUUID != nil
         )
         let kind: ItemKind = attributes[.type] as? FileAttributeType == .typeDirectory ? .directory : .file
         let timestamps = CandidateTimestamps(
-            created: attributes[.creationDate] as? Date,
+            created: created,
             modified: attributes[.modificationDate] as? Date
         )
         return RuleCandidate(
@@ -57,47 +86,92 @@ public final class LocalTrashFileAccess: TrashFileAccess, @unchecked Sendable {
         )
     }
 
-    private func hasProtectedDescendantSynchronously(path: String, overrides: [ItemPolicyOverride]) throws -> Bool {
+    private static func resourceIdentifier(inode: UInt64) -> Data {
+        withUnsafeBytes(of: inode.bigEndian) { Data($0) }
+    }
+
+    /// Decides whether trashing `path` whole would remove protected content. Fails toward protection: symlinks are
+    /// not skipped, enumeration errors surface as thrown errors, and a walk that exhausts its budget is
+    /// `.indeterminate` (the caller must not trash).
+    private func hasProtectedDescendantSynchronously(
+        path: String,
+        overrides: [ItemPolicyOverride],
+        protectHiddenFiles: Bool,
+        budget: DescendantWalkBudget
+    ) throws -> DescendantProtection {
         let rootPath = RuleScope.normalized(path)
-        let identityKeepOverrides = overrides.filter { override in
-            guard override.identity != nil else { return false }
+        let keeps = overrides.filter { override in
             if case .keep = override.policy { return true }
             return false
         }
+        // Path-addressed Keeps need no filesystem walk: the recorded path alone decides.
+        for keep in keeps where RuleResolver.keepProtectsDescendant(
+            of: rootPath, override: keep, childIdentity: nil, childPath: keep.path
+        ) {
+            return .protected
+        }
+        // Without identity-addressed Keeps or hidden protection there is nothing a walk could find.
+        let identityKeeps = keeps.filter { $0.identity != nil }
+        guard !identityKeeps.isEmpty || protectHiddenFiles else { return .none }
+        let keptInodes = Set(identityKeeps.compactMap { $0.identity?.resourceIdentifier })
+
         var enumerationError: Error?
         guard let enumerator = fileManager.enumerator(
             at: URL(fileURLWithPath: rootPath, isDirectory: true),
-            includingPropertiesForKeys: [.isSymbolicLinkKey],
+            includingPropertiesForKeys: nil,
             options: [],
             errorHandler: { _, error in
-                enumerationError = error
-                return false
+                if enumerationError == nil { enumerationError = error }
+                return true
             }
         ) else {
             throw CocoaError(.fileReadUnknown)
         }
 
-        for case let childURL as URL in enumerator {
+        var visited = 0
+        while let childURL = enumerator.nextObject() as? URL {
+            visited += 1
+            if visited > budget.maxEntries { return .indeterminate }
+            if visited % 256 == 0, budget.clock.now() >= budget.deadline { return .indeterminate }
             let childPath = RuleScope.normalized(childURL.path)
-            let isSymbolicLink = try childURL.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink ?? false
-            guard !isSymbolicLink else {
-                continue
+
+            if protectHiddenFiles, ItemMatcher.isHiddenName(childURL.lastPathComponent) {
+                return .protected
             }
-            if !identityKeepOverrides.isEmpty,
-               let child = try inspectSynchronously(path: childPath),
-               identityKeepOverrides.contains(where: { $0.identity == child.identity }) {
-                return true
+            guard !keptInodes.isEmpty else { continue }
+            var info = stat()
+            guard lstat(childPath, &info) == 0 else { continue }
+            guard keptInodes.contains(Self.resourceIdentifier(inode: UInt64(info.st_ino))) else { continue }
+            // Inode alone is not an identity: confirm volume and creation time before treating it as the kept item.
+            let isSymbolicLink = (info.st_mode & S_IFMT) == S_IFLNK
+            let childIdentity: FilesystemIdentity?
+            if isSymbolicLink {
+                childIdentity = try linkIdentity(path: childPath, info: info)
+            } else {
+                childIdentity = try inspectSynchronously(path: childPath)?.identity
             }
-            for override in overrides {
-                guard override.identity == nil,
-                      case .keep(let protectDescendants) = override.policy else { continue }
-                if childPath == override.path || (protectDescendants && childPath.hasPrefix(override.path + "/")) {
-                    return true
-                }
+            for keep in identityKeeps where RuleResolver.keepProtectsDescendant(
+                of: rootPath, override: keep, childIdentity: childIdentity, childPath: childPath
+            ) {
+                return .protected
             }
         }
         if let enumerationError { throw enumerationError }
-        return false
+        return .none
+    }
+
+    /// Identity of a symbolic link itself (never its target), used to fail closed on links that match a Keep.
+    private func linkIdentity(path: String, info: stat) throws -> FilesystemIdentity {
+        let volumeUUID = try URL(fileURLWithPath: path)
+            .resourceValues(forKeys: [.volumeUUIDStringKey])
+            .volumeUUIDString
+            .flatMap(UUID.init(uuidString:))
+        return FilesystemIdentity(
+            volumeIdentifier: volumeUUID ?? Self.volumeIdentifier(deviceNumber: UInt64(UInt32(bitPattern: info.st_dev))),
+            resourceIdentifier: Self.resourceIdentifier(inode: UInt64(info.st_ino)),
+            pathHint: path,
+            isPersistent: volumeUUID != nil
+        )
     }
 
     public func moveToTrash(path: String, expectedIdentity: FilesystemIdentity) async throws -> String {

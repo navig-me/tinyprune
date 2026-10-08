@@ -85,8 +85,8 @@ package final class AppRouter: ObservableObject {
 package struct TinyPruneRootView: View {
     @EnvironmentObject private var model: AgentViewModel
     @EnvironmentObject private var router: AppRouter
+    /// Observed so finishing onboarding re-evaluates the view; the model reads the same key.
     @AppStorage("onboardingCompleted") private var onboardingCompleted = false
-    @State private var onboardingLatched = false
 
     package init() {}
 
@@ -100,6 +100,7 @@ package struct TinyPruneRootView: View {
                 } else {
                     header
                     Divider()
+                    banners
                     content
                 }
             }
@@ -107,35 +108,37 @@ package struct TinyPruneRootView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .sheet(item: Binding(
-            get: { router.pendingExpiryPath.map(PathItem.init) },
+            get: { showsOnboarding ? nil : router.pendingExpiryPath.map(PathItem.init) },
             set: { if $0 == nil { router.pendingExpiryPath = nil } }
         )) { CustomExpirySheet(path: $0.path) }
         .sheet(item: Binding(
-            get: { router.pendingFolderPath.map(PathItem.init) },
+            get: { showsOnboarding || router.pendingExpiryPath != nil ? nil : router.pendingFolderPath.map(PathItem.init) },
             set: { if $0 == nil { router.pendingFolderPath = nil } }
         )) { TemplateApplySheet(template: .temporaryWorkspace, prefillPath: $0.path) }
         .task {
             model.refreshRegistrationStatus()
             await model.refresh()
-            if !onboardingCompleted, let policy = model.policy, policy.rules.isEmpty, policy.managedRoots.isEmpty {
-                onboardingLatched = true
-            }
+            model.startBackgroundRefresh()
         }
     }
 
-    private var showsOnboarding: Bool { !onboardingCompleted && onboardingLatched }
+    /// Reactive: follows every policy refresh. Completing onboarding (or any managed folder or rule appearing) ends it.
+    private var showsOnboarding: Bool { !onboardingCompleted && model.needsOnboarding }
 
     private var header: some View {
         HStack(alignment: .center) {
             VStack(alignment: .leading, spacing: 5) {
                 Text(router.selection?.rawValue ?? "Overview")
-                    .font(Typography.display(size: 30))
+                    .font(Typography.pageTitle)
+                    .accessibilityAddTraits(.isHeader)
                 Text(statusText)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            if model.policy?.globallyPaused == true {
+            if model.pruningHaltedReason != nil {
+                Pill(text: "Pruning stopped", color: PrunePalette.caution)
+            } else if model.policy?.globallyPaused == true {
                 Pill(text: pausedLabel(model.policy?.pausedUntil), color: PrunePalette.caution)
             }
             Button {
@@ -144,9 +147,32 @@ package struct TinyPruneRootView: View {
                 Label("Refresh", systemImage: "arrow.clockwise")
             }
             .disabled(model.isLoading)
+            .accessibilityLabel("Refresh local state")
         }
         .padding(.horizontal, 32)
         .padding(.vertical, 22)
+    }
+
+    @ViewBuilder
+    private var banners: some View {
+        if let reason = model.pruningHaltedReason {
+            Banner(
+                title: "Pruning is stopped",
+                message: reason,
+                symbol: "exclamationmark.octagon",
+                actionTitle: model.pruningHaltResolution?.title,
+                action: model.pruningHaltResolution.map { resolution in { resolution.perform() } }
+            )
+        }
+        if model.overview != nil, let issue = model.connectionIssue {
+            Banner(
+                title: "Showing the last known state",
+                message: "\(issue) Changes you see may be out of date.",
+                symbol: "bolt.horizontal.circle",
+                actionTitle: "Retry",
+                action: { Task { await model.refresh() } }
+            )
+        }
     }
 
     @ViewBuilder
@@ -176,10 +202,40 @@ package struct TinyPruneRootView: View {
 
     private var statusText: String {
         if model.isLoading { return "Refreshing local state" }
+        if model.overview != nil, model.connectionIssue != nil {
+            return "Agent unreachable · Last updated \(model.refreshedAt?.formatted(date: .omitted, time: .shortened) ?? "earlier")"
+        }
         if let refreshedAt = model.refreshedAt {
             return "Local agent connected · Updated \(refreshedAt.formatted(date: .omitted, time: .shortened))"
         }
         return "Local-first file lifetimes"
+    }
+}
+
+/// A prominent notice above the page content.
+private struct Banner: View {
+    let title: String
+    let message: String
+    let symbol: String
+    var actionTitle: String?
+    var action: (() -> Void)?
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Image(systemName: symbol).foregroundStyle(PrunePalette.caution).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.headline)
+                Text(message).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            if let actionTitle, let action {
+                Button(actionTitle, action: action)
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .padding(.horizontal, 32)
+        .padding(.vertical, 12)
+        .background(PrunePalette.caution.opacity(0.12))
     }
 }
 
@@ -220,23 +276,44 @@ package struct MenuBarContent: View {
     package init() {}
 
     package var body: some View {
+        Group {
         if let overview = model.overview {
-            Text(overview.policy.globallyPaused ? pausedLabel(overview.policy.pausedUntil) : "Running quietly")
+            Text(statusLine(overview))
+            if let issue = model.connectionIssue {
+                Text("Showing last known state. \(issue)")
+            }
+            if let reason = model.pruningHaltedReason {
+                Text(reason)
+                if let resolution = model.pruningHaltResolution {
+                    Button(resolution.title) { resolution.perform() }
+                }
+            }
             Divider()
-            Text("Upcoming: \(overview.upcoming.count) item\(overview.upcoming.count == 1 ? "" : "s")")
-            if let next = overview.upcoming.first {
+            let active = model.activeUpcoming
+            let preview = model.previewUpcoming
+            Text("Will move to Trash: \(active.count) item\(active.count == 1 ? "" : "s")")
+            if let next = active.first {
                 Text("Next: \(URL(fileURLWithPath: next.explanation.candidateIdentity.pathHint).lastPathComponent) · \(next.explanation.scheduledAt.formatted(date: .omitted, time: .shortened))")
+            }
+            if !preview.isEmpty {
+                Text("Preview matches: \(preview.count) (nothing is moved)")
+            }
+            if model.needsAttention {
+                Button("A cleanup needs a look…") { openActivity() }
             }
             Divider()
             if overview.policy.globallyPaused {
-                Button("Resume") { Task { try? await model.setGlobalPause(false) } }
+                Button("Resume") { Task { await model.perform { try await model.setGlobalPause(false) } } }
             } else {
                 Menu("Pause") {
-                    Button("1 hour") { Task { try? await model.pause(until: Date().addingTimeInterval(3_600)) } }
-                    Button("Today") { Task { try? await model.pause(until: endOfToday()) } }
-                    Button("Until tomorrow") { Task { try? await model.pause(until: tomorrowMorning()) } }
-                    Button("Until I resume") { Task { try? await model.setGlobalPause(true) } }
+                    Button("1 hour") { Task { await model.perform { try await model.pause(until: model.currentDate.addingTimeInterval(3_600)) } } }
+                    Button("Today") { Task { await model.perform { try await model.pause(until: endOfToday(now: model.currentDate)) } } }
+                    Button("Until tomorrow") { Task { await model.perform { try await model.pause(until: tomorrowMorning(now: model.currentDate)) } } }
+                    Button("Until I resume") { Task { await model.perform { try await model.setGlobalPause(true) } } }
                 }
+            }
+            if let failure = model.actionError {
+                Text("Could not change pause: \(failure)")
             }
         } else {
             Text(model.errorMessage ?? "Connecting…")
@@ -252,6 +329,27 @@ package struct MenuBarContent: View {
         Button("Quit TinyPrune") { NSApp.terminate(nil) }
             .keyboardShortcut("q")
             .help("Quits this app. The background agent keeps applying your rules.")
+        }
+        .task { await model.refresh() }
+    }
+
+    private func openActivity() {
+        NSApp.activate(ignoringOtherApps: true)
+        router.selection = .activity
+        if NSApp.windows.allSatisfy({ !$0.isVisible }) { openWindow(id: "main") }
+    }
+
+    /// Says what TinyPrune is really doing: Preview rules never move files.
+    private func statusLine(_ overview: AgentOverviewSnapshot) -> String {
+        if model.pruningHaltedReason != nil { return "Pruning is stopped" }
+        if overview.policy.globallyPaused { return pausedLabel(overview.policy.pausedUntil) }
+        let rules = overview.policy.rules
+        if rules.isEmpty { return "No rules yet" }
+        if rules.contains(where: { $0.state == .active }) {
+            return rules.contains(where: { $0.state == .preview }) ? "Running · some rules are Preview only" : "Running quietly"
+        }
+        if rules.contains(where: { $0.state == .preview }) { return "Preview only · nothing is moved" }
+        return "All rules are paused"
     }
 }
 
@@ -279,7 +377,7 @@ package struct TinyPruneSidebar: View {
             HStack(spacing: 8) {
                 BrandMarkView(size: 24)
                 Text("TinyPrune")
-                    .font(Typography.display(size: 17))
+                    .font(Typography.brand)
                     .foregroundStyle(PrunePalette.plum)
             }
             .accessibilityElement(children: .combine)

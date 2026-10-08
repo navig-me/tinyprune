@@ -80,7 +80,7 @@ package struct OnboardingFlow: View {
         VStack(alignment: .leading, spacing: 14) {
             BrandMarkView(size: 56)
             Text("Files don’t all need to live forever.")
-                .font(Typography.display(size: 40))
+                .font(Typography.hero)
                 .accessibilityAddTraits(.isHeader)
             Text("TinyPrune quietly moves files to Trash once they are no longer useful.")
                 .font(.title3)
@@ -91,7 +91,7 @@ package struct OnboardingFlow: View {
     private var chooser: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("What would you like to keep tidy?")
-                .font(Typography.display(size: 32))
+                .font(Typography.sheetTitle)
                 .accessibilityAddTraits(.isHeader)
             ForEach(choices) { choice in
                 HStack(alignment: .firstTextBaseline) {
@@ -117,10 +117,10 @@ package struct OnboardingFlow: View {
         VStack(alignment: .leading, spacing: 16) {
             Image(systemName: "arrow.uturn.backward.circle").font(.system(size: 34)).foregroundStyle(PrunePalette.safe)
                 .accessibilityHidden(true)
-            Text("Always recoverable.")
-                .font(Typography.display(size: 40))
+            Text("Items go to the Trash.")
+                .font(Typography.hero)
                 .accessibilityAddTraits(.isHeader)
-            Text("TinyPrune moves items to Trash. It does not permanently delete them.")
+            Text("TinyPrune moves items to Trash. It does not permanently delete them. Items stay in the Trash until you or macOS empty it. Use Put Back in Finder to restore.")
                 .font(.title3)
                 .foregroundStyle(.secondary)
             Toggle("Start broad rules in Preview mode", isOn: $previewByDefault)
@@ -143,12 +143,17 @@ package struct OnboardingFlow: View {
         isSaving = true
         defer { isSaving = false }
         do {
+            // Build every rule first, then save all rules and folders in one atomic policy write:
+            // a failure leaves nothing half-configured.
+            var rules: [LifetimeRule] = []
+            var chosen: [ChosenFolder] = []
             for choice in choices {
                 guard let folder = folders[choice.id] else { continue }
                 let state: RuleState = (previewByDefault || folder.isVeryBroad) ? .preview : .active
-                let rules = try choice.template.rules(in: folder.root.path, state: state)
-                try await model.addRules(rules, in: folder)
+                rules += try choice.template.rules(in: folder.root.path, state: state)
+                chosen.append(folder)
             }
+            if !rules.isEmpty || !chosen.isEmpty { try await model.addRules(rules, folders: chosen) }
             finish()
         } catch { errorMessage = error.localizedDescription }
     }

@@ -13,6 +13,7 @@ public actor ManagedRootAgentRuntime {
     private let operationGate = ManagedRootRuntimeOperationGate()
     private var lifecycle: ManagedRootWorkspaceLifecycle?
     private var lifecycleGeneration: UUID?
+    private var previewTasks: [UUID: Task<AgentRulePreview, Error>] = [:]
 
     public init(
         store: SQLiteSafetyStore,
@@ -44,12 +45,14 @@ public actor ManagedRootAgentRuntime {
         let coordinator = TrashCoordinator(policyStore: store, fileAccess: fileAccess, audit: store, clock: clock)
         let scheduler = DeadlineScheduler(store: store, coordinator: coordinator, clock: clock)
         self.scheduler = scheduler
-        self.indexer = ManagedRootIndexer(store: store, resolver: resolver, clock: clock) {
+        self.indexer = ManagedRootIndexer(store: store, resolver: resolver, clock: clock, onDeadlinesChanged: {
             Task { await scheduler.signalChange() }
-        }
+        })
     }
 
-    public func start() async throws {
+    /// Never throws: a failing component leaves the agent running in a degraded state (audited, retried on the next
+    /// policy change, wake or mount event) so the app can still connect, read status and repair policy.
+    public func start() async {
         await operationGate.acquire()
         guard lifecycleGeneration == nil else {
             await operationGate.release()
@@ -71,18 +74,19 @@ public actor ManagedRootAgentRuntime {
         }
         self.lifecycle = lifecycle
         await lifecycle.start()
-        do {
-            try await indexer.start()
-            try await scheduler.start()
-            await operationGate.release()
-        } catch {
-            lifecycleGeneration = nil
-            await lifecycle.stop()
-            self.lifecycle = nil
-            await indexer.stop()
-            await operationGate.release()
-            throw error
-        }
+        do { try await indexer.start() }
+        catch { await auditStartupFailure("Indexer start", error) }
+        do { try await scheduler.start() }
+        catch { await auditStartupFailure("Scheduler start", error) }
+        await operationGate.release()
+    }
+
+    private func auditStartupFailure(_ component: String, _ error: Error) async {
+        try? await store.append(TrashAuditEvent(
+            occurredAt: clock.now(),
+            kind: .safetySkipped,
+            detail: "\(component) failed; the agent is running degraded: \(error)"
+        ))
     }
 
     public func policyDidChange() async throws {
@@ -97,7 +101,31 @@ public actor ManagedRootAgentRuntime {
         }
     }
 
+    /// Reconciles only the affected items/subtrees after Keep/expiry override changes; never reconfigures roots.
+    public func overridesDidChange(paths: [String]) async throws {
+        guard !paths.isEmpty else { return }
+        await operationGate.acquire()
+        do {
+            try await indexer.reconcileOverrides(paths: paths)
+            await scheduler.signalChange()
+            await operationGate.release()
+        } catch {
+            await operationGate.release()
+            throw error
+        }
+    }
+
+    public func rootStatuses() async -> [AgentRootStatus] {
+        await indexer.rootStatuses()
+    }
+
+    /// Cancels every running rule preview; the awaiting callers receive `CancellationError`.
+    public func cancelPreviews() async {
+        for task in previewTasks.values { task.cancel() }
+    }
+
     public func stop() async {
+        for task in previewTasks.values { task.cancel() }
         await operationGate.acquire()
         lifecycleGeneration = nil
         await lifecycle?.stop()
@@ -125,11 +153,6 @@ public actor ManagedRootAgentRuntime {
         return try await IndexedCandidateEvaluation.hydrate(candidate, rules: snapshot.rules, store: store, now: clock.now())
     }
 
-    public func reconcileItemOverride(at path: String) async throws {
-        try await indexer.reconcileManagedItem(path)
-        await scheduler.signalChange()
-    }
-
     /// Measures an item inside an available managed root on a detached task so scheduling is never blocked.
     /// Returns nil when the path is outside every available managed root or no longer exists.
     public func measureItem(path: String) async throws -> ItemSizeMeasurement? {
@@ -144,12 +167,22 @@ public actor ManagedRootAgentRuntime {
             throw RulePreviewError.invalidRequest("The rule's folder must be inside an available managed folder.")
         }
         let snapshot = try await store.loadSnapshot()
-        return try await RulePreviewer(
+        let previewer = RulePreviewer(
             store: store,
             fileAccess: LocalTrashFileAccess(),
             clock: clock,
             configuration: rulePreview
-        ).run(rule: rule, snapshot: snapshot, access: lease.access)
+        )
+        let access = lease.access
+        let task = Task { try await previewer.run(rule: rule, snapshot: snapshot, access: access) }
+        let taskID = UUID()
+        previewTasks[taskID] = task
+        defer { previewTasks[taskID] = nil }
+        return try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
     }
 
     public func rebuildIndex() async throws {
@@ -168,7 +201,7 @@ public actor ManagedRootAgentRuntime {
         }
         do {
             if event == .woke {
-                try await indexer.reconfigure()
+                try await indexer.resumeAfterWake()
             } else {
                 let snapshot = try await store.loadSnapshot()
                 let affectedRoots = event.affectedRootPaths(rootPaths: snapshot.managedRoots.map(\.path))

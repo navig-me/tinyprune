@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Testing
 @testable import TinyPruneIPC
@@ -110,5 +111,28 @@ import Testing
         #expect(try replacement.acquireTrashPermit() == nil)
         #expect(try replacement.recoverCompletedInstallation(currentVersion: "2"))
         #expect(try replacement.acquireTrashPermit() != nil)
+    }
+
+    @Test(.enabled(if: geteuid() != 0))
+    func failedMarkerRemovalKeepsGateRetryableInsteadOfWedged() throws {
+        let directory = try fixture()
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let updater = UpdateInstallationGate(directory: directory)
+        let agent = UpdateInstallationGate(directory: directory)
+        try updater.beginInstallation(targetVersion: "2", currentVersion: "1")
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: directory.path)
+        #expect(throws: (any Error).self) { try updater.finishInstallation() }
+        // Cleanup stays suspended while the marker exists...
+        #expect(try agent.acquireTrashPermit() == nil)
+
+        // ...and the updater still owns the lock, so a retry succeeds and reopens the gate.
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+        try updater.finishInstallation()
+        #expect(try !agent.hasPendingInstallation())
+        #expect(try agent.acquireTrashPermit() != nil)
     }
 }

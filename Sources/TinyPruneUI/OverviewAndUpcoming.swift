@@ -23,17 +23,31 @@ struct OverviewPage: View {
         overview.policy.managedRoots.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
     }
 
-    private var needsAttention: Bool {
-        model.activity.prefix(20).contains { $0.isAttention }
+    private var needsAttention: Bool { model.needsAttention }
+
+    /// Matches that will really move; Preview matches are shown separately and never counted as pruning.
+    private var nextItems: [AgentUpcomingItem] {
+        let active = model.activeUpcoming
+        return active.isEmpty ? model.previewUpcoming : active
     }
+
+    private var nextIsPreviewOnly: Bool { model.activeUpcoming.isEmpty && !model.previewUpcoming.isEmpty }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 32) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(headline)
-                        .font(Typography.display(size: 34))
+                        .font(Typography.headline)
+                        .accessibilityAddTraits(.isHeader)
                     Text(subline).foregroundStyle(.secondary)
+                    if needsAttention && model.pruningHaltedReason == nil {
+                        Button("See Activity") {
+                            model.acknowledgeAttention()
+                            router.selection = .activity
+                        }
+                        .buttonStyle(.link)
+                    }
                 }
 
                 VStack(alignment: .leading, spacing: 10) {
@@ -48,38 +62,58 @@ struct OverviewPage: View {
                         HStack(alignment: .firstTextBaseline) {
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(root.displayName)
-                                Text(rules.isEmpty ? "No rules" : rules.map(\.name).joined(separator: " · "))
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
+                                if rules.isEmpty {
+                                    Text("No rules").font(.subheadline).foregroundStyle(.secondary)
+                                }
+                                ForEach(rules) { rule in
+                                    Text("\(rule.name) · \(ConfigPlan.durationDescription(rule.lifetime.seconds))")
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
+                                }
                                 PathText(path: root.path)
                             }
                             Spacer()
-                            if let state = dominantState(rules) { Pill(text: state.label, color: state.color) }
+                            HStack(spacing: 6) {
+                                ForEach(states(of: rules), id: \.self) { state in
+                                    Pill(text: state.label, color: state.color)
+                                }
+                            }
                         }
                         .padding(.vertical, 8)
+                        .accessibilityElement(children: .combine)
                         Divider()
                     }
                 }
 
                 VStack(alignment: .leading, spacing: 10) {
-                    SectionTitle("Next to prune")
-                    if overview.upcoming.isEmpty {
+                    SectionTitle(nextIsPreviewOnly ? "Preview matches" : "Next to prune")
+                    if nextIsPreviewOnly {
+                        Text("These come from Preview rules. Nothing will move to Trash until you activate a rule.")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    }
+                    if nextItems.isEmpty {
                         Text("Nothing is scheduled.").foregroundStyle(.secondary)
                     }
-                    ForEach(overview.upcoming.prefix(3)) { item in
+                    ForEach(nextItems.prefix(3)) { item in
                         HStack {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(displayName(item.explanation.candidateIdentity.pathHint))
                                 PathText(path: item.explanation.candidateIdentity.pathHint)
                             }
                             Spacer()
-                            Text(relativeDay(item.explanation.scheduledAt)).foregroundStyle(.secondary)
+                            if item.explanation.disposition == .preview { Pill(text: "Preview", color: PrunePalette.caution) }
+                            Text(relativeDay(item.explanation.scheduledAt, now: model.currentDate)).foregroundStyle(.secondary)
                         }
                         .padding(.vertical, 4)
+                        .accessibilityElement(children: .combine)
                     }
-                    if overview.upcoming.count > 3 {
-                        Button("See all \(overview.upcoming.count) in Upcoming") { router.selection = .upcoming }
+                    if nextItems.count > 3 {
+                        Button("See all \(nextItems.count) in Upcoming") { router.selection = .upcoming }
                             .buttonStyle(.link)
+                    }
+                    if !nextIsPreviewOnly && !model.previewUpcoming.isEmpty {
+                        Text("\(model.previewUpcoming.count) more match\(model.previewUpcoming.count == 1 ? "" : "es") from Preview rules will not move.")
+                            .font(.subheadline).foregroundStyle(.secondary)
                     }
                 }
             }
@@ -89,26 +123,39 @@ struct OverviewPage: View {
     }
 
     private var headline: String {
+        if model.pruningHaltedReason != nil { return "Pruning is stopped." }
         if needsAttention { return "Something needs a look." }
         if overview.policy.globallyPaused { return "TinyPrune is paused." }
         if places.isEmpty { return "Nothing is managed yet." }
+        if !overview.policy.rules.contains(where: { $0.state == .active }) && overview.policy.rules.contains(where: { $0.state == .preview }) {
+            return "Only previewing."
+        }
         return "Everything is tidy."
     }
 
     private var subline: String {
-        if needsAttention { return "A recent cleanup could not move an item to Trash. See Activity for details." }
+        if let reason = model.pruningHaltedReason { return reason }
+        if needsAttention {
+            let count = model.attentionItems.count
+            return "\(count == 1 ? "A cleanup" : "\(count) cleanups") in the last 24 hours could not move an item to Trash. See Activity for details."
+        }
         if overview.policy.globallyPaused { return "Nothing will move to Trash until you resume." }
         if overview.policy.rules.contains(where: { $0.state == .preview }) {
-            return "TinyPrune is running quietly. Preview rules schedule matches but never touch your files."
+            return overview.policy.rules.contains(where: { $0.state == .active })
+                ? "Active rules move due items to Trash. Preview rules schedule matches but never touch your files."
+                : "Preview rules schedule matches but never touch your files. Activate a rule to start pruning."
         }
         if places.isEmpty { return "Choose a folder to give its contents a lifetime." }
         return "TinyPrune is running quietly."
     }
 
-    private func dominantState(_ rules: [LifetimeRule]) -> RuleState? {
-        if rules.contains(where: { $0.state == .preview }) { return .preview }
-        if rules.contains(where: { $0.state == .active }) { return .active }
-        return rules.isEmpty ? nil : .paused
+    /// Active and Preview can both apply to one place; show both so Preview never hides Active.
+    private func states(of rules: [LifetimeRule]) -> [RuleState] {
+        if rules.isEmpty { return [] }
+        var result: [RuleState] = []
+        if rules.contains(where: { $0.state == .active }) { result.append(.active) }
+        if rules.contains(where: { $0.state == .preview }) { result.append(.preview) }
+        return result.isEmpty ? [.paused] : result
     }
 }
 
@@ -209,6 +256,9 @@ struct UpcomingPage: View {
                 if router.upcomingRuleFilter == nil && !protectedOverrides.isEmpty {
                     VStack(alignment: .leading, spacing: 0) {
                         SectionTitle("Protected").padding(.bottom, 8)
+                        if let failure = model.actionError {
+                            Text(failure).foregroundStyle(PrunePalette.caution).padding(.bottom, 8)
+                        }
                         ForEach(protectedOverrides) { override in
                             HStack(alignment: .firstTextBaseline) {
                                 VStack(alignment: .leading, spacing: 3) {
@@ -219,8 +269,9 @@ struct UpcomingPage: View {
                                 if case .keep(let descendants) = override.policy {
                                     Pill(text: descendants ? "Protected with contents" : "Protected", color: PrunePalette.safe)
                                 }
-                                Button("Stop protecting") { Task { try? await model.inherit(path: override.path) } }
+                                Button("Stop protecting") { Task { await model.perform { try await model.inherit(path: override.path) } } }
                                     .buttonStyle(.link)
+                                    .accessibilityLabel("Stop protecting \(displayName(override.path))")
                             }
                             .padding(.vertical, 12)
                             Divider()
@@ -298,6 +349,9 @@ package struct WhyInspectorContent: View {
     @State private var failure: String?
     @State private var size: AgentViewModel.ItemSize?
     @State private var isMeasuring = false
+    @State private var isWorking = false
+    @State private var confirmsKeep = false
+    @State private var confirmsStopProtecting = false
 
     private var path: String { item.explanation.candidateIdentity.pathHint }
 
@@ -305,7 +359,7 @@ package struct WhyInspectorContent: View {
         VStack(alignment: .leading, spacing: 18) {
                 HStack {
                     Text("Why will this be pruned?")
-                        .font(Typography.display(size: 19))
+                        .font(Typography.panelTitle)
                         .accessibilityAddTraits(.isHeader)
                     Spacer()
                     Button(action: close) { Image(systemName: "xmark") }
@@ -370,18 +424,73 @@ package struct WhyInspectorContent: View {
         if let error = failure { Text(error).foregroundStyle(PrunePalette.caution) }
 
         Divider()
+        actions(for: explanation)
+    }
+
+    /// Only actions that are valid for the item's current state are offered.
+    @ViewBuilder
+    private func actions(for explanation: AgentItemExplanation) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Button("Keep") { run { try await model.keep(path: path, protectDescendants: false) } }
-                Button("+7 days") { run { try await extend(by: 7) } }
-                    .accessibilityLabel("Extend expiry by 7 days")
-                Button("+30 days") { run { try await extend(by: 30) } }
-                    .accessibilityLabel("Extend expiry by 30 days")
-            }
-            if case .scheduled(let scheduled) = explanation.resolution {
+            switch explanation.resolution {
+            case .scheduled(let scheduled):
+                HStack {
+                    keepButton
+                    extendButtons(base: scheduled.scheduledAt, disposition: scheduled.disposition)
+                }
                 Button("Open rule") { router.openRule(scheduled.matchedRuleID) }.buttonStyle(.link)
+            case .customExpiry(let custom):
+                HStack {
+                    keepButton
+                    extendButtons(base: custom.expiresAt, disposition: custom.disposition)
+                }
+                Button("Follow the rule instead") { run { try await model.inherit(path: path) } }
+                    .buttonStyle(.link)
+                    .disabled(isWorking)
+                    .accessibilityHint("Removes the custom expiry from this item")
+            case .protected(let protected):
+                Button("Stop protecting") { confirmsStopProtecting = true }
+                    .disabled(isWorking)
+                    .accessibilityLabel("Stop protecting \(displayName(protected.protectedPath))")
+            case .suppressed, .noRule, .ambiguousRules, .ambiguousOverrides:
+                EmptyView()
             }
         }
+        .confirmationDialog("Keep \(displayName(path))?", isPresented: $confirmsKeep, titleVisibility: .visible) {
+            Button("Keep this item") { run { try await model.keep(path: path, protectDescendants: false) } }
+            Button("Keep it and everything inside") { run { try await model.keep(path: path, protectDescendants: true) } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("TinyPrune will not move it to Trash until you stop protecting it.")
+        }
+        .confirmationDialog("Stop protecting?", isPresented: $confirmsStopProtecting, titleVisibility: .visible) {
+            Button("Stop protecting", role: .destructive) {
+                run { try await model.inherit(path: protectedOverridePath(in: explanation)) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("\(displayName(protectedOverridePath(in: explanation))) will follow its rules again and can be moved to Trash when due.")
+        }
+    }
+
+    private var keepButton: some View {
+        Button("Keep") { confirmsKeep = true }
+            .disabled(isWorking)
+            .accessibilityLabel("Keep \(displayName(path)) from being pruned")
+    }
+
+    @ViewBuilder
+    private func extendButtons(base: Date, disposition: ScheduledDisposition) -> some View {
+        Button("+7 days") { run { try await extend(from: base, disposition: disposition, days: 7) } }
+            .disabled(isWorking)
+            .accessibilityLabel("Extend expiry by 7 days")
+        Button("+30 days") { run { try await extend(from: base, disposition: disposition, days: 30) } }
+            .disabled(isWorking)
+            .accessibilityLabel("Extend expiry by 30 days")
+    }
+
+    private func protectedOverridePath(in explanation: AgentItemExplanation) -> String {
+        if case .protected(let protected) = explanation.resolution { return protected.protectedPath }
+        return path
     }
 
     private func field(_ title: String, _ value: String) -> some View {
@@ -391,19 +500,25 @@ package struct WhyInspectorContent: View {
         }
     }
 
-    private func extend(by days: Double) async throws {
-        let base = max(item.explanation.scheduledAt, Date())
+    /// Extends from the freshly loaded schedule, not from the possibly older row the user clicked.
+    private func extend(from base: Date, disposition: ScheduledDisposition, days: Double) async throws {
+        let start = max(base, model.currentDate)
         try await model.setExpiry(
             path: path,
-            at: base.addingTimeInterval(days * 86_400),
-            state: item.explanation.disposition == .preview ? .preview : .active
+            at: start.addingTimeInterval(days * 86_400),
+            state: disposition == .preview ? .preview : .active
         )
     }
 
     private func run(_ action: @escaping () async throws -> Void) {
+        guard !isWorking else { return }
+        isWorking = true
         Task {
-            do { try await action(); failure = nil; await load() }
-            catch { failure = error.localizedDescription }
+            defer { isWorking = false }
+            var actionFailure: String?
+            do { try await action() } catch { actionFailure = error.localizedDescription }
+            await load()
+            if let actionFailure { failure = actionFailure }
         }
     }
 
@@ -468,7 +583,7 @@ package struct CustomExpirySheet: View {
 
     package var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Set expiry").font(Typography.display(size: 27))
+            Text("Set expiry").font(Typography.sheetTitle)
             PathText(path: path)
             DatePicker("Move to Trash after", selection: $date, in: Date()...)
             Text("This item moves to Trash at that time unless you Keep it first.")

@@ -93,7 +93,8 @@ do {
         await snap.capture(rootView(model, router), name: "01-onboarding-1-intro")
         await model.refresh()
         Check.expect(model.policy?.rules.isEmpty == true && model.policy?.managedRoots.isEmpty == true, "empty agent reports no rules and no roots")
-        // Root latches onboarding once it has loaded an empty policy.
+        // Onboarding is reactive: an empty, loaded policy needs it until it is completed.
+        Check.expect(model.needsOnboarding, "an empty loaded policy needs onboarding")
         await snap.capture(rootView(model, router), name: "01b-onboarding-root-after-load")
 
         func onboarding(step: Int, name: String) async {
@@ -145,7 +146,7 @@ do {
         (.developerCleanup, projectsFolder), (.temporaryWorkspace, scratchFolder),
     ] {
         let rules = try template.rules(in: folder.root.path, state: .preview, temporaryLifetime: 3 * 86_400)
-        try await model.addRules(rules, in: folder)
+        try await model.addRules(rules, folders: [folder])
     }
     Check.expect(model.policy?.rules.count == 10, "10 template rules were added (got \(model.policy?.rules.count ?? -1))")
     Check.expect(model.policy?.managedRoots.count == 4, "4 managed roots were registered")
@@ -505,6 +506,74 @@ do {
         name: "76-editor-new-rule", size: CGSize(width: 620, height: 720)
     )
 
+    // MARK: - Broad rules, atomic editor save, conflicts
+
+    phase("broad rules, atomic save, conflicts")
+    do {
+        let everything = try LifetimeRule(
+            name: "Everything", scope: RuleScope(path: tree.projects.path, recursive: true),
+            matcher: ItemMatcher(itemKind: .fileOrDirectory, exactNames: [], globPatterns: []),
+            expiryBasis: .modified, lifetime: RuleDuration(seconds: 86_400), action: .trashItem, state: .preview
+        )
+        Check.expect(everything.isBroad && !everything.isVeryBroad, "an empty matcher over a recursive scope is broad, not very broad")
+        let homeRule = try LifetimeRule(
+            name: "Home", scope: RuleScope(path: NSHomeDirectory(), recursive: true),
+            matcher: ItemMatcher(itemKind: .file, exactNames: [], globPatterns: ["*.tinyprune-never"]),
+            expiryBasis: .modified, lifetime: RuleDuration(seconds: 86_400), action: .trashItem, state: .preview
+        )
+        Check.expect(homeRule.isVeryBroad && homeRule.isBroad, "a rule over the home folder is very broad (no Active option)")
+        Check.expect(!staleLogs.isVeryBroad, "a specific project folder is not very broad")
+
+        // One atomic editor save: the rule edit and its exception land together; removing the exception is atomic too.
+        let exceptionPath = try tree.oldLogs.first.unwrap("an old log").path
+        let edited = try LifetimeRule(
+            id: staleLogs.id, name: "Stale logs (edited)", scope: staleLogs.scope, matcher: staleLogs.matcher,
+            expiryBasis: staleLogs.expiryBasis, lifetime: staleLogs.lifetime, gracePeriod: staleLogs.gracePeriod,
+            action: staleLogs.action, state: staleLogs.state, matchMode: staleLogs.matchMode
+        )
+        try await model.saveRule(edited, folder: nil, keepPaths: [exceptionPath], unkeepPaths: [])
+        Check.expect(model.policy?.rules.first { $0.id == staleLogs.id }?.name == "Stale logs (edited)", "saveRule stored the edited rule")
+        Check.expect(model.overrides(under: staleLogs.scope.path).contains { $0.path == exceptionPath }, "saveRule stored the exception; the editor can load it back")
+        Check.expect(model.policy?.rules.first { $0.id == staleLogs.id }?.state == staleLogs.state, "editing preserves the rule's state (no silent demotion)")
+
+        // Stale revisions are retried transparently up to three times, then surfaced.
+        agent.transport.injectPolicyConflicts(2)
+        try await model.saveRule(staleLogs, folder: nil, keepPaths: [], unkeepPaths: [exceptionPath])
+        Check.expect(model.policy?.rules.first { $0.id == staleLogs.id }?.name == staleLogs.name, "saveRule retries past two policy conflicts")
+        Check.expect(!model.overrides(under: staleLogs.scope.path).contains { $0.path == exceptionPath }, "removing an exception is part of the same save")
+        agent.transport.injectPolicyConflicts(10)
+        do {
+            try await model.saveRule(edited, folder: nil, keepPaths: [], unkeepPaths: [])
+            Check.fail("saveRule should surface persistent policy conflicts")
+        } catch {
+            Check.expect(model.policy?.rules.first { $0.id == staleLogs.id }?.name == staleLogs.name, "a failed save leaves the stored rule untouched")
+        }
+        agent.transport.injectPolicyConflicts(0)
+
+        // A failed refresh keeps the last good overview instead of blanking the UI.
+        agent.transport.setOverviewFailing(true)
+        await model.refresh()
+        Check.expect(model.overview != nil && model.connectionIssue != nil, "a failed refresh keeps the last good overview and reports a connection issue")
+        agent.transport.setOverviewFailing(false)
+        await model.refresh()
+        Check.expect(model.connectionIssue == nil, "the connection issue clears after a successful refresh")
+
+        // Cancelling a preview reaches the agent.
+        agent.transport.setMode(.hang)
+        let cancelController = RulePreviewController()
+        cancelController.start(staleLogs, model: model)
+        await waitFor("hanging preview to start") { cancelController.phase == .running }
+        let cancelsBefore = agent.transport.requests { if case .cancelPreview = $0 { true } else { false } }
+        cancelController.cancel()
+        await waitFor("cancelPreview request") { agent.transport.requests { if case .cancelPreview = $0 { true } else { false } } > cancelsBefore }
+        Check.expect(cancelController.phase == .cancelled, "cancelling a preview stops it and asks the agent to cancel")
+        agent.transport.setMode(.passthrough)
+
+        // Export counts rules once, not once per root.
+        let exportPolicy = try model.policy.unwrap("export policy")
+        let exportReview = try ConfigExportReview(policy: exportPolicy)
+        Check.expect(exportReview.exportedCount + exportReview.skippedCount == exportPolicy.rules.count, "export review accounts for every rule exactly once")
+    }
     // MARK: - Final state
 
     phase("final state")
@@ -543,7 +612,7 @@ do {
         matcher: ItemMatcher(itemKind: .file, exactNames: [], globPatterns: ["*.tmp"]),
         expiryBasis: .modified, lifetime: RuleDuration(seconds: 10), action: .trashItem, state: .preview
     )
-    try await cleanupModel.addRules([previewRule], in: cleanupFolder)
+    try await cleanupModel.addRules([previewRule], folders: [cleanupFolder])
     await waitFor("due Preview audit") {
         await cleanupModel.refresh()
         return cleanupModel.activity.contains { $0.kind == .previewSkipped && $0.identity?.pathHint == expiredFile.path }

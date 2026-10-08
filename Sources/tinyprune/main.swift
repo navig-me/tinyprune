@@ -6,11 +6,44 @@ let schemaVersion = 1
 
 enum CLIError: Error {
     case usage(String)
-    case unavailable
-    case agent(String)
+    case client(AgentClientError)
+    case service(AgentServiceError)
     case unexpected
     case config(file: String, error: ConfigError)
     case rootsNotManaged([String])
+    /// An earlier step of a multi-step command already took effect.
+    case partiallyApplied(String, cause: any Error)
+}
+
+/// Positional operands and flags of one command. Unknown flags and a wrong operand count are usage errors.
+struct CommandArguments {
+    let operands: [String]
+    let flags: Set<String>
+
+    init(_ raw: [String], command: String, allowedFlags: Set<String> = [], operandCount: ClosedRange<Int>, operandUsage: String) throws {
+        var operands: [String] = []
+        var flags: Set<String> = []
+        var optionsEnded = false
+        for token in raw {
+            if !optionsEnded, token == "--" {
+                optionsEnded = true
+            } else if !optionsEnded, token.hasPrefix("-"), token != "-" {
+                guard allowedFlags.contains(token) else {
+                    throw CLIError.usage("Unknown option '\(token)' for '\(command)'.")
+                }
+                flags.insert(token)
+            } else {
+                operands.append(token)
+            }
+        }
+        guard operandCount.contains(operands.count) else {
+            throw CLIError.usage(operands.count < operandCount.lowerBound
+                ? "'\(command)' needs \(operandUsage)."
+                : "'\(command)' takes \(operandUsage); unexpected argument '\(operands[operandCount.upperBound])'.")
+        }
+        self.operands = operands
+        self.flags = flags
+    }
 }
 
 @main
@@ -19,53 +52,105 @@ struct TinyPruneCLI {
         var arguments = Array(CommandLine.arguments.dropFirst())
         let wantsJSON = arguments.contains("--json")
         arguments.removeAll { $0 == "--json" }
+        if arguments.contains("--help") || arguments.contains("-h") || arguments.first == "help" {
+            print(usage)
+            exit(0)
+        }
         let command = arguments.first ?? "status"
         let rest = Array(arguments.dropFirst())
 
         do {
             try await run(command: command, arguments: rest, json: wantsJSON)
-        } catch CLIError.usage(let message) {
-            writeError("\(message)\n\(usage)\n")
-            exit(64)
-        } catch CLIError.unavailable {
-            if wantsJSON {
-                print("{\"schemaVersion\":\(schemaVersion),\"status\":\"unavailable\"}")
+        } catch {
+            exit(report(error, json: wantsJSON))
+        }
+    }
+
+    // MARK: Errors
+
+    private struct Failure {
+        let code: String
+        let message: String
+        let exitCode: Int32
+        let mayHaveApplied: Bool
+        let isUsage: Bool
+    }
+
+    private static func failure(for error: any Error) -> Failure {
+        switch error {
+        case CLIError.usage(let message):
+            return Failure(code: "usage", message: message, exitCode: AgentErrorDescription.ExitCode.usage, mayHaveApplied: false, isUsage: true)
+        case CLIError.client(let client):
+            return Failure(
+                code: AgentErrorDescription.code(for: client), message: AgentErrorDescription.message(for: client),
+                exitCode: AgentErrorDescription.exitCode(for: client),
+                mayHaveApplied: AgentErrorDescription.requestMayHaveApplied(client), isUsage: false
+            )
+        case CLIError.service(let service):
+            return Failure(
+                code: AgentErrorDescription.code(for: service), message: AgentErrorDescription.message(for: service),
+                exitCode: AgentErrorDescription.exitCode(for: service), mayHaveApplied: false, isUsage: false
+            )
+        case CLIError.partiallyApplied(let prefix, let cause):
+            let inner = failure(for: cause)
+            return Failure(code: inner.code, message: "\(prefix) \(inner.message)", exitCode: inner.exitCode, mayHaveApplied: true, isUsage: false)
+        default:
+            return Failure(
+                code: "unexpectedResponse", message: "TinyPrune agent returned an unexpected response.",
+                exitCode: AgentErrorDescription.ExitCode.agentError, mayHaveApplied: false, isUsage: false
+            )
+        }
+    }
+
+    /// Prints the error (JSON on stdout with `--json`, text on stderr otherwise) and returns the exit code.
+    private static func report(_ error: any Error, json: Bool) -> Int32 {
+        switch error {
+        case CLIError.config(let file, let configError):
+            if json {
+                emitJSON(InvalidConfigOutput(schemaVersion: schemaVersion, status: "invalid", file: file, line: configError.line, message: configError.message))
             } else {
-                writeError("TinyPrune agent is unavailable. Open TinyPrune.app and try again.\n")
+                writeError("\(file):\(configError.line.map { "\($0): " } ?? " ")\(configError.message)\n")
             }
-            exit(69)
-        } catch CLIError.config(let file, let error) {
-            if wantsJSON {
-                let line = error.line.map(String.init) ?? "null"
-                let message = String(decoding: (try? JSONEncoder().encode(error.message)) ?? Data("\"\"".utf8), as: UTF8.self)
-                let path = String(decoding: (try? JSONEncoder().encode(file)) ?? Data("\"\"".utf8), as: UTF8.self)
-                print("{\"schemaVersion\":\(schemaVersion),\"status\":\"invalid\",\"file\":\(path),\"line\":\(line),\"message\":\(message)}")
-            } else {
-                writeError("\(file):\(error.line.map { "\($0): " } ?? " ")\(error.message)\n")
-            }
-            exit(65)
-        } catch CLIError.rootsNotManaged(let roots) {
-            if wantsJSON {
-                let list = String(decoding: (try? JSONEncoder().encode(roots)) ?? Data("[]".utf8), as: UTF8.self)
-                print("{\"schemaVersion\":\(schemaVersion),\"status\":\"rootsNotManaged\",\"roots\":\(list)}")
+            return AgentErrorDescription.ExitCode.dataError
+        case CLIError.rootsNotManaged(let roots):
+            if json {
+                emitJSON(RootsNotManagedOutput(schemaVersion: schemaVersion, status: "rootsNotManaged", roots: roots))
             } else {
                 writeError("These config roots are not inside a managed folder:\n\(roots.map { "  \($0)" }.joined(separator: "\n"))\nAdd each folder in TinyPrune.app, then run the command again.\n")
             }
-            exit(78)
-        } catch CLIError.agent(let message) {
-            writeError("TinyPrune agent request failed: \(message)\n")
-            exit(69)
-        } catch {
-            writeError("TinyPrune agent returned an unexpected response.\n")
-            exit(70)
+            return AgentErrorDescription.ExitCode.configuration
+        default:
+            let info = failure(for: error)
+            if json {
+                emitJSON(ErrorOutput(
+                    schemaVersion: schemaVersion, status: "error", code: info.code, message: info.message,
+                    exitCode: Int(info.exitCode), mayHaveApplied: info.mayHaveApplied
+                ))
+            } else if info.isUsage {
+                writeError("\(info.message)\n\(usage)\n")
+            } else {
+                writeError("tinyprune: \(info.message)\n")
+                if info.mayHaveApplied { writeError("Check the result with `tinyprune status`, `tinyprune rules`, or `tinyprune upcoming` before retrying.\n") }
+            }
+            return info.exitCode
         }
     }
+
+    private static func emitJSON<Value: Encodable>(_ value: Value) {
+        if let data = try? JSONEncoder.sorted.encode(value) {
+            print(String(decoding: data, as: UTF8.self))
+        } else {
+            print("{\"schemaVersion\":\(schemaVersion),\"status\":\"error\"}")
+        }
+    }
+
+    // MARK: Commands
 
     private static let usage = """
     usage: tinyprune [command] [--json]
       status | rules | upcoming | activity
       keep <path> [--descendants]
-      expire <path> <7d|12h|30m|tonight|tomorrow>
+      expire <path> <7d|12h|30m|2w|tonight|tomorrow>
       inherit <path>
       why <path>
       pause [1h|today|tomorrow] | resume
@@ -78,6 +163,7 @@ struct TinyPruneCLI {
     private static func run(command: String, arguments: [String], json: Bool) async throws {
         switch command {
         case "status":
+            _ = try CommandArguments(arguments, command: command, operandCount: 0...0, operandUsage: "no arguments")
             guard case .health(let health) = try await send(.health) else { throw CLIError.unexpected }
             if json {
                 try printJSON(StatusOutput(schemaVersion: schemaVersion, status: "available", protocolVersion: health.protocolVersion, serviceVersion: health.serviceVersion))
@@ -85,6 +171,7 @@ struct TinyPruneCLI {
                 print("TinyPrune agent available (protocol \(health.protocolVersion), service \(health.serviceVersion))")
             }
         case "rules":
+            _ = try CommandArguments(arguments, command: command, operandCount: 0...0, operandUsage: "no arguments")
             guard case .policy(let snapshot) = try await send(.loadPolicy) else { throw CLIError.unexpected }
             if json {
                 try printJSON(RulesOutput(schemaVersion: schemaVersion, globallyPaused: snapshot.globallyPaused, rules: snapshot.rules))
@@ -93,10 +180,11 @@ struct TinyPruneCLI {
             } else {
                 if snapshot.globallyPaused { print("All rules are paused.") }
                 for rule in snapshot.rules {
-                    print("\(rule.id.uuidString)  \(rule.name)  \(rule.state.rawValue)  \(rule.scope.path)  \(matcherDescription(rule))  \(rule.expiryBasis.rawValue) for \(durationDescription(rule.lifetime.seconds))")
+                    print("\(rule.id.uuidString)  \(rule.name)  \(rule.state.rawValue)  \(rule.scope.path)  \(ConfigPlan.matcherDescription(rule))  \(rule.expiryBasis.rawValue) for \(ConfigPlan.durationDescription(rule.lifetime.seconds))")
                 }
             }
         case "upcoming":
+            _ = try CommandArguments(arguments, command: command, operandCount: 0...0, operandUsage: "no arguments")
             guard case .overview(let overview) = try await send(.loadOverview) else { throw CLIError.unexpected }
             if json {
                 try printJSON(UpcomingOutput(schemaVersion: schemaVersion, items: overview.upcoming.map(\.explanation)))
@@ -109,6 +197,7 @@ struct TinyPruneCLI {
                 }
             }
         case "activity":
+            _ = try CommandArguments(arguments, command: command, operandCount: 0...0, operandUsage: "no arguments")
             guard case .activity(let items) = try await send(.loadActivity(limit: 50)) else { throw CLIError.unexpected }
             if json {
                 try printJSON(ActivityOutput(schemaVersion: schemaVersion, events: items))
@@ -120,46 +209,59 @@ struct TinyPruneCLI {
                 }
             }
         case "keep":
-            let path = try pathArgument(arguments)
-            let descendants = arguments.contains("--descendants")
-            try await mutate(.setItemOverride(path: path, policy: .keep(protectDescendants: descendants)), json: json, summary: "Keeping \(path)")
+            let parsed = try CommandArguments(arguments, command: command, allowedFlags: ["--descendants"], operandCount: 1...1, operandUsage: "a path")
+            let path = try normalizedPath(parsed.operands[0])
+            try await mutate(.setItemOverride(path: path, policy: .keep(protectDescendants: parsed.flags.contains("--descendants"))), json: json, summary: "Keeping \(path)")
         case "expire":
-            guard arguments.count == 2 else { throw CLIError.usage("expire needs a path and a time.") }
-            let path = try pathArgument(arguments)
-            guard let date = parseExpiry(arguments[1], now: Date()) else {
-                throw CLIError.usage("Unrecognized time '\(arguments[1])'.")
+            let parsed = try CommandArguments(arguments, command: command, operandCount: 2...2, operandUsage: "a path and a time")
+            guard let preset = ExpiryPreset(parsing: parsed.operands[1]) else {
+                if ExpiryPreset(parsing: parsed.operands[0]) != nil {
+                    throw CLIError.usage("The arguments look swapped: use `tinyprune expire <path> <when>`, for example `tinyprune expire \(parsed.operands[1]) \(parsed.operands[0])`.")
+                }
+                throw CLIError.usage("Unrecognized time '\(parsed.operands[1])'. Use a number with m, h, d, or w (for example 7d), or tonight or tomorrow.")
             }
+            let path = try normalizedPath(parsed.operands[0])
+            let date = preset.date(from: Date(), calendar: .current)
             try await mutate(.setItemOverride(path: path, policy: .customExpiry(date, state: .active)), json: json, summary: "\(path) expires \(date.formatted(date: .abbreviated, time: .shortened))")
         case "inherit":
-            let path = try pathArgument(arguments)
+            let parsed = try CommandArguments(arguments, command: command, operandCount: 1...1, operandUsage: "a path")
+            let path = try normalizedPath(parsed.operands[0])
             try await mutate(.clearItemOverride(path: path), json: json, summary: "\(path) now inherits its rule")
         case "why":
-            let path = try pathArgument(arguments)
+            let parsed = try CommandArguments(arguments, command: command, operandCount: 1...1, operandUsage: "a path")
+            let path = try normalizedPath(parsed.operands[0])
             guard case .itemExplanation(let explanation) = try await send(.explainItem(path: path)) else { throw CLIError.unexpected }
             if json {
                 try printJSON(WhyOutput(schemaVersion: schemaVersion, explanation: explanation))
             } else {
-                print(describe(explanation))
+                print(ExplanationFormatter.describe(explanation, now: Date(), calendar: .current, locale: .current))
             }
         case "pause":
-            if let spec = arguments.first {
+            let parsed = try CommandArguments(arguments, command: command, operandCount: 0...1, operandUsage: "an optional length")
+            if let spec = parsed.operands.first {
+                let now = Date()
+                let calendar = Calendar.current
                 let date: Date?
                 switch spec.lowercased() {
-                case "today": date = Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: Date()))
-                case "tomorrow": date = Calendar.current.date(bySettingHour: 8, minute: 0, second: 0, of: Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: Date())) ?? Date())
-                default: date = parseExpiry(spec, now: Date())
+                case "today": date = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now))
+                case "tomorrow": date = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now))
+                    .flatMap { calendar.date(bySettingHour: 8, minute: 0, second: 0, of: $0) }
+                default: date = ExpiryPreset(parsing: spec)?.date(from: now, calendar: calendar)
                 }
-                guard let date, date > Date() else { throw CLIError.usage("Unrecognized pause length '\(spec)'.") }
+                guard let date, date > now else { throw CLIError.usage("Unrecognized pause length '\(spec)'.") }
                 try await mutate(.pauseUntil(date), json: json, summary: "TinyPrune is paused until \(date.formatted(date: .abbreviated, time: .shortened))")
             } else {
                 try await mutate(.setGlobalPause(true), json: json, summary: "TinyPrune is paused")
             }
         case "resume":
+            _ = try CommandArguments(arguments, command: command, operandCount: 0...0, operandUsage: "no arguments")
             try await mutate(.setGlobalPause(false), json: json, summary: "TinyPrune resumed")
         case "delete-rule":
-            guard arguments.count == 1, let id = UUID(uuidString: arguments[0]) else { throw CLIError.usage("delete-rule needs a rule id.") }
+            let parsed = try CommandArguments(arguments, command: command, operandCount: 1...1, operandUsage: "a rule id")
+            guard let id = UUID(uuidString: parsed.operands[0]) else { throw CLIError.usage("'\(parsed.operands[0])' is not a rule id. Run `tinyprune rules` to list ids.") }
             try await mutate(.deleteRule(id), json: json, summary: "Rule deleted")
         case "rebuild-index":
+            _ = try CommandArguments(arguments, command: command, operandCount: 0...0, operandUsage: "no arguments")
             try await mutate(.rebuildIndex, json: json, summary: "Index rebuild started")
         case "config":
             try await ConfigCommand.run(arguments: arguments, json: json)
@@ -172,10 +274,12 @@ struct TinyPruneCLI {
         let response: AgentResponse
         do {
             response = try await TinyPruneAgentClient().request(AgentRequest(operation: operation))
+        } catch let error as AgentClientError {
+            throw CLIError.client(error)
         } catch {
-            throw CLIError.unavailable
+            throw CLIError.client(.unavailable)
         }
-        if case .failure(let error) = response.payload { throw CLIError.agent(String(describing: error)) }
+        if case .failure(let error) = response.payload { throw CLIError.service(error) }
         return response.payload
     }
 
@@ -188,63 +292,10 @@ struct TinyPruneCLI {
         }
     }
 
-    static func pathArgument(_ arguments: [String]) throws -> String {
-        guard let raw = arguments.first(where: { !$0.hasPrefix("--") }) else { throw CLIError.usage("A path is required.") }
-        let url = raw.hasPrefix("/")
-            ? URL(fileURLWithPath: raw)
-            : URL(fileURLWithPath: raw, relativeTo: URL(fileURLWithPath: FileManager.default.currentDirectoryPath))
-        return url.standardizedFileURL.path
+    static func normalizedPath(_ raw: String) throws -> String {
+        guard !raw.isEmpty else { throw CLIError.usage("A path must not be empty.") }
+        return URL(fileURLWithPath: raw).standardizedFileURL.path
     }
-
-    static func parseExpiry(_ text: String, now: Date, calendar: Calendar = .current) -> Date? {
-        switch text.lowercased() {
-        case "tonight":
-            return calendar.date(bySettingHour: 23, minute: 59, second: 0, of: now).flatMap { $0 > now ? $0 : nil }
-        case "tomorrow":
-            return calendar.date(byAdding: .day, value: 1, to: now)
-        default:
-            guard let unit = text.last, let amount = Double(text.dropLast()), amount > 0 else { return nil }
-            let seconds: Double
-            switch unit {
-            case "m": seconds = 60
-            case "h": seconds = 3_600
-            case "d": seconds = 86_400
-            case "w": seconds = 604_800
-            default: return nil
-            }
-            return now.addingTimeInterval(amount * seconds)
-        }
-    }
-
-    private static func describe(_ explanation: AgentItemExplanation) -> String {
-        var lines = [explanation.path]
-        switch explanation.resolution {
-        case .scheduled(let item):
-            lines.append("Scheduled: \(item.scheduledAt.formatted(date: .abbreviated, time: .shortened)) (\(item.disposition.rawValue))")
-            lines.append("Matched rule: \(item.matchedRuleName)")
-            lines.append("Reason: \(item.expiryBasis.rawValue) since \(item.basisDate.formatted(date: .abbreviated, time: .shortened))")
-        case .customExpiry(let item):
-            lines.append("Scheduled: \(item.expiresAt.formatted(date: .abbreviated, time: .shortened)) (\(item.disposition.rawValue))")
-            lines.append("Reason: explicit expiry set on this item")
-        case .protected(let item):
-            lines.append("Protected by Keep on \(item.protectedPath)\(item.protectsDescendants ? " (including descendants)" : "")")
-        case .suppressed(let reason):
-            lines.append("Not scheduled: \(reason.rawValue)")
-        case .noRule:
-            lines.append("No rule applies; TinyPrune will do nothing.")
-        case .ambiguousRules(let ids):
-            lines.append("Not scheduled: \(ids.count) rules tie; TinyPrune will not guess.")
-        case .ambiguousOverrides(let ids):
-            lines.append("Not scheduled: \(ids.count) conflicting overrides.")
-        }
-        lines.append("Overrides: \(explanation.overrides.isEmpty ? "None" : explanation.overrides.map(\.path).joined(separator: ", "))")
-        if explanation.globallyPaused { lines.append("TinyPrune is paused globally.") }
-        return lines.joined(separator: "\n")
-    }
-
-    static func matcherDescription(_ rule: LifetimeRule) -> String { ConfigPlan.matcherDescription(rule) }
-
-    static func durationDescription(_ seconds: TimeInterval) -> String { ConfigPlan.durationDescription(seconds) }
 
     static func printJSON<Value: Encodable>(_ value: Value) throws {
         let data = try JSONEncoder.sorted.encode(value)
@@ -254,6 +305,29 @@ struct TinyPruneCLI {
     private static func writeError(_ message: String) {
         FileHandle.standardError.write(Data(message.utf8))
     }
+}
+
+private struct ErrorOutput: Encodable {
+    let schemaVersion: Int
+    let status: String
+    let code: String
+    let message: String
+    let exitCode: Int
+    let mayHaveApplied: Bool
+}
+
+private struct InvalidConfigOutput: Encodable {
+    let schemaVersion: Int
+    let status: String
+    let file: String
+    let line: Int?
+    let message: String
+}
+
+private struct RootsNotManagedOutput: Encodable {
+    let schemaVersion: Int
+    let status: String
+    let roots: [String]
 }
 
 private struct StatusOutput: Encodable {
@@ -308,7 +382,7 @@ enum ConfigCommand {
         let rest = Array(arguments.dropFirst())
         switch subcommand {
         case "validate":
-            let (file, document) = try load(rest, allowedFlags: [])
+            let (file, document, _) = try load(rest, subcommand: subcommand, allowedFlags: [])
             let instances = document.roots.count * document.rules.count
             if json {
                 try TinyPruneCLI.printJSON(ValidateOutput(
@@ -319,8 +393,8 @@ enum ConfigCommand {
                 print("\(file) is valid: \(document.roots.count) root(s), \(document.rules.count) rule(s) (\(instances) scoped), \(document.exceptions.count) exception(s).")
             }
         case "preview":
-            let (file, document) = try load(rest, allowedFlags: ["--active"])
-            let plan = try makePlan(document: document, snapshot: try await loadPolicy(), active: rest.contains("--active"))
+            let (file, document, active) = try load(rest, subcommand: subcommand, allowedFlags: ["--active"])
+            let plan = try makePlan(document: document, snapshot: try await loadPolicy(), active: active)
             if json {
                 try TinyPruneCLI.printJSON(PreviewOutput(
                     schemaVersion: schemaVersion, status: "preview", file: file, applicable: plan.unmanagedRoots.isEmpty,
@@ -333,21 +407,37 @@ enum ConfigCommand {
                 printPreview(file: file, document: document, plan: plan)
             }
         case "apply":
-            let (file, document) = try load(rest, allowedFlags: ["--active"])
-            let snapshot = try await loadPolicy()
-            let plan = try makePlan(document: document, snapshot: snapshot, active: rest.contains("--active"))
-            guard plan.isApplicable else { throw CLIError.rootsNotManaged(plan.unmanagedRoots) }
-            if plan.hasRuleChanges {
+            let (file, document, active) = try load(rest, subcommand: subcommand, allowedFlags: ["--active"])
+            // The agent only accepts a policy written against the revision it was read at, so a concurrent
+            // edit (or pause) is never overwritten. On a conflict, reload and re-plan against the new state.
+            var appliedPlan: ConfigPlan?
+            for attempt in 1...3 {
+                let snapshot = try await loadPolicy()
+                let candidate = try makePlan(document: document, snapshot: snapshot, active: active)
+                guard candidate.isApplicable else { throw CLIError.rootsNotManaged(candidate.unmanagedRoots) }
+                appliedPlan = candidate
+                guard candidate.hasRuleChanges else { break }
                 let replacement = AgentPolicySnapshot(
-                    rules: plan.merged, overrides: snapshot.overrides,
-                    managedRoots: snapshot.managedRoots, globallyPaused: snapshot.globallyPaused
+                    rules: candidate.merged, overrides: snapshot.overrides,
+                    managedRoots: snapshot.managedRoots, globallyPaused: snapshot.globallyPaused,
+                    pausedUntil: snapshot.pausedUntil, revision: snapshot.revision
                 )
-                guard case .acknowledged = try await TinyPruneCLI.send(.replacePolicy(replacement)) else { throw CLIError.unexpected }
+                do {
+                    guard case .acknowledged = try await TinyPruneCLI.send(.replacePolicy(replacement)) else { throw CLIError.unexpected }
+                    break
+                } catch CLIError.service(let error) where error == .policyConflict && attempt < 3 {
+                    appliedPlan = nil
+                    continue
+                }
             }
+            guard let plan = appliedPlan else { throw CLIError.service(.policyConflict) }
             let newExceptions = plan.exceptions.filter(\.isNew)
-            for exception in newExceptions {
-                guard case .acknowledged = try await TinyPruneCLI.send(.setItemOverride(path: exception.override.path, policy: exception.override.policy)) else {
-                    throw CLIError.unexpected
+            if !newExceptions.isEmpty {
+                let changes = newExceptions.map { AgentItemOverrideChange(path: $0.override.path, policy: $0.override.policy) }
+                do {
+                    guard case .acknowledged = try await TinyPruneCLI.send(.setItemOverrides(changes: changes)) else { throw CLIError.unexpected }
+                } catch where plan.hasRuleChanges {
+                    throw CLIError.partiallyApplied("The rules were applied, but the exceptions were not set.", cause: error)
                 }
             }
             if json {
@@ -362,6 +452,7 @@ enum ConfigCommand {
                 }
             }
         case "export":
+            _ = try CommandArguments(rest, command: "config export", operandCount: 0...0, operandUsage: "no arguments")
             let snapshot = try await loadPolicy()
             let text = ConfigDocument.render(policy: snapshot.rules, roots: snapshot.managedRoots, overrides: snapshot.overrides)
             if json {
@@ -376,13 +467,10 @@ enum ConfigCommand {
 
     // MARK: Loading
 
-    private static func load(_ arguments: [String], allowedFlags: Set<String>) throws -> (String, ConfigDocument) {
-        if let flag = arguments.first(where: { $0.hasPrefix("--") && !allowedFlags.contains($0) }) {
-            throw CLIError.usage("Unknown option '\(flag)'.")
-        }
-        let operands = arguments.filter { !$0.hasPrefix("--") }
-        guard operands.count == 1 else { throw CLIError.usage("config needs exactly one file.") }
-        let file = try TinyPruneCLI.pathArgument(operands)
+    private static func load(_ arguments: [String], subcommand: String, allowedFlags: Set<String>) throws -> (file: String, document: ConfigDocument, active: Bool) {
+        let parsed = try CommandArguments(arguments, command: "config \(subcommand)", allowedFlags: allowedFlags, operandCount: 1...1, operandUsage: "exactly one file")
+        let file = try TinyPruneCLI.normalizedPath(parsed.operands[0])
+        let active = parsed.flags.contains("--active")
         let text: String
         do {
             text = try String(contentsOfFile: file, encoding: .utf8)
@@ -390,7 +478,7 @@ enum ConfigCommand {
             throw CLIError.config(file: file, error: ConfigError(line: nil, message: "Cannot read file: \(error.localizedDescription)"))
         }
         do {
-            return (file, try ConfigDocument.parse(text, homeDirectory: FileManager.default.homeDirectoryForCurrentUser.path))
+            return (file, try ConfigDocument.parse(text, homeDirectory: FileManager.default.homeDirectoryForCurrentUser.path), active)
         } catch let error as ConfigError {
             throw CLIError.config(file: file, error: error)
         }

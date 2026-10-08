@@ -21,8 +21,10 @@ struct TinyPruneEngineCheck {
         try await verifyHydrationAndCustomExpiry()
         try await verifyPauseLapseRunsOnePreflight()
         let fileManager = FileManager.default
-        let root = fileManager.temporaryDirectory.appendingPathComponent("TinyPrune-Engine-\(UUID().uuidString)", isDirectory: true)
+        // Managed roots may not live under /var (macOS temp), so the fixture lives in the home folder like the other smokes.
+        let root = fileManager.homeDirectoryForCurrentUser.appendingPathComponent("TinyPrune-Engine-\(UUID().uuidString)", isDirectory: true).standardizedFileURL
         try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+        let managedRoot = try ManagedRoot(displayName: "Engine smoke", path: root.path, bookmarkData: Data([1]))
         let fixture = root.appendingPathComponent("candidate.tmp")
         try Data("TinyPrune metadata-only safety fixture".utf8).write(to: fixture)
         let modified = Date(timeIntervalSinceReferenceDate: 100)
@@ -40,7 +42,7 @@ struct TinyPruneEngineCheck {
             throw SmokeFailure.fixtureMissing
         }
         let previewRule = try makeRule(scope: root.path, state: .preview)
-        try await store.replaceSnapshot(PolicySnapshot(rules: [previewRule], overrides: [], globallyPaused: false))
+        try await store.replaceSnapshot(PolicySnapshot(rules: [previewRule], overrides: [], managedRoots: [managedRoot], globallyPaused: false))
         var duplicatePolicyRejected = false
         do {
             try await store.replaceSnapshot(PolicySnapshot(rules: [previewRule, previewRule], overrides: [], globallyPaused: true))
@@ -76,7 +78,7 @@ struct TinyPruneEngineCheck {
         }
 
         let activeRule = try makeRule(id: previewRule.id, scope: root.path, state: .active)
-        try await store.replaceSnapshot(PolicySnapshot(rules: [activeRule], overrides: [], globallyPaused: false))
+        try await store.replaceSnapshot(PolicySnapshot(rules: [activeRule], overrides: [], managedRoots: [managedRoot], globallyPaused: false))
         let activeCoordinator = TrashCoordinator(
             policyStore: store,
             fileAccess: fileAccess,
@@ -104,7 +106,7 @@ struct TinyPruneEngineCheck {
         }
         let folderRule = try makeFolderRule(scope: root.path)
         let keep = ItemPolicyOverride(path: protectedFile.path, policy: .keep(protectDescendants: false))
-        try await store.replaceSnapshot(PolicySnapshot(rules: [folderRule], overrides: [keep], globallyPaused: false))
+        try await store.replaceSnapshot(PolicySnapshot(rules: [folderRule], overrides: [keep], managedRoots: [managedRoot], globallyPaused: false))
         let folderRequest = TrashRequest(
             candidateIdentity: folderCandidate.identity,
             source: .rule(folderRule.id),
@@ -938,7 +940,8 @@ struct TinyPruneEngineCheck {
             }
 
             // Pause the background worker while arranging future explicit expiries. No lifetime rule is required.
-            guard try await send(.replacePolicy(AgentPolicySnapshot(rules: [], overrides: [], managedRoots: [root], globallyPaused: true))) == .acknowledged else {
+            guard case .policy(let current) = try await send(.loadPolicy),
+                  try await send(.replacePolicy(AgentPolicySnapshot(rules: [], overrides: [], managedRoots: [root], globallyPaused: true, revision: current.revision))) == .acknowledged else {
                 throw SmokeFailure.rulePreviewFailed("custom policy")
             }
             let expiry = now.addingTimeInterval(30)

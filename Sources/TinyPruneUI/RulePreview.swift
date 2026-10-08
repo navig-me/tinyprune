@@ -2,6 +2,16 @@ import SwiftUI
 import TinyPruneDomain
 import TinyPruneIPC
 
+/// Manrope-backed text styles for the editor surfaces (system fallback when the font is not registered).
+extension Font {
+    static var manropeBody: Font { Typography.body(size: 13, relativeTo: .body) }
+    static var manropeSubheadline: Font { Typography.body(size: 12, relativeTo: .subheadline) }
+    static var manropeCaption: Font { Typography.body(size: 11, relativeTo: .caption) }
+    static var manropeCaptionBold: Font { Typography.body(size: 11, weight: .bold, relativeTo: .caption) }
+    static var manropeCaptionSemibold: Font { Typography.body(size: 11, weight: .semibold, relativeTo: .caption) }
+    static var manropeHeadline: Font { Typography.body(size: 13, weight: .semibold, relativeTo: .headline) }
+}
+
 /// Wording for an `AgentRulePreview`, shared by the editor, the Rules rows, and the snapshot harness.
 package enum RulePreviewText {
     package static func headline(_ preview: AgentRulePreview) -> String {
@@ -41,12 +51,24 @@ package final class RulePreviewController: ObservableObject {
     private var generation = 0
     private var task: Task<Void, Never>?
 
+    private weak var model: AgentViewModel?
+
     package init() {}
 
     package var isRunning: Bool { phase == .running }
 
+    /// The finished preview, only when it was run for this rule's current definition (state is irrelevant to matching).
+    package func finishedResult(for rule: LifetimeRule) -> AgentRulePreview? {
+        guard case .finished(let result) = phase, let previewed = previewedRule,
+              previewed.id == rule.id, previewed.scope == rule.scope, previewed.matcher == rule.matcher,
+              previewed.expiryBasis == rule.expiryBasis, previewed.lifetime == rule.lifetime,
+              previewed.gracePeriod == rule.gracePeriod else { return nil }
+        return result
+    }
+
     package func start(_ rule: LifetimeRule, model: AgentViewModel) {
         generation += 1
+        self.model = model
         let current = generation
         task?.cancel()
         previewedRule = rule
@@ -63,12 +85,39 @@ package final class RulePreviewController: ObservableObject {
         }
     }
 
+    /// Stops waiting locally and asks the agent to stop its running scan.
     package func cancel() {
         guard phase == .running else { return }
         generation += 1
         task?.cancel()
         task = nil
         phase = .cancelled
+        if let model {
+            Task { await model.cancelPreview() }
+        }
+    }
+}
+
+/// Holds one preview controller per rule for the whole Rules page, so results survive row recycling by the lazy list.
+@MainActor
+package final class RulePreviewStore: ObservableObject {
+    private var controllers: [UUID: RulePreviewController] = [:]
+
+    package init() {}
+
+    package func controller(for ruleID: UUID) -> RulePreviewController {
+        if let existing = controllers[ruleID] { return existing }
+        let created = RulePreviewController()
+        controllers[ruleID] = created
+        return created
+    }
+
+    /// Drops controllers of rules that no longer exist; running scans are cancelled.
+    package func prune(keeping ids: Set<UUID>) {
+        for (id, controller) in controllers where !ids.contains(id) {
+            controller.cancel()
+            controllers[id] = nil
+        }
     }
 }
 
@@ -77,8 +126,12 @@ struct RulePreviewResultView: View {
     @ObservedObject var controller: RulePreviewController
     /// True when the draft no longer equals the previewed rule.
     var isStale = false
-
     var body: some View {
+        content.font(.manropeBody)
+    }
+
+    @ViewBuilder
+    private var content: some View {
         switch controller.phase {
         case .idle:
             EmptyView()
@@ -90,33 +143,33 @@ struct RulePreviewResultView: View {
                 Button("Cancel") { controller.cancel() }
                     .accessibilityLabel("Cancel preview")
                     .keyboardShortcut(".", modifiers: .command)
-                    .help("Stop waiting for this preview (⌘.)")
+                    .help("Stop this preview (⌘.)")
             }
         case .cancelled:
-            Text("Preview cancelled. Nothing was changed.").font(.subheadline).foregroundStyle(.secondary)
+            Text("Preview cancelled. Nothing was changed.").font(.manropeSubheadline).foregroundStyle(.secondary)
         case .failed(let message):
             Label(message, systemImage: "exclamationmark.triangle")
-                .font(.subheadline)
+                .font(.manropeSubheadline)
                 .foregroundStyle(PrunePalette.caution)
                 .fixedSize(horizontal: false, vertical: true)
         case .finished(let preview):
             VStack(alignment: .leading, spacing: 10) {
-                Text(RulePreviewText.headline(preview)).font(.headline)
+                Text(RulePreviewText.headline(preview)).font(.manropeHeadline)
                 if let note = RulePreviewText.truncationNote(preview) {
                     Label(note, systemImage: "exclamationmark.triangle")
-                        .font(.subheadline)
+                        .font(.manropeSubheadline)
                         .foregroundStyle(PrunePalette.caution)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 if isStale {
                     Text("The rule has changed since this preview. Preview again to refresh.")
-                        .font(.subheadline).foregroundStyle(PrunePalette.caution)
+                        .font(.manropeSubheadline).foregroundStyle(PrunePalette.caution)
                 }
                 if preview.samples.isEmpty {
                     Text("Nothing matches right now.").foregroundStyle(.secondary)
                 } else {
                     Text("Soonest \(preview.samples.count) to be pruned")
-                        .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                        .font(.manropeCaptionSemibold).foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 0) {
                         ForEach(Array(preview.samples.enumerated()), id: \.offset) { _, sample in
                             HStack(alignment: .firstTextBaseline, spacing: 12) {
@@ -124,10 +177,10 @@ struct RulePreviewResultView: View {
                                 Spacer(minLength: 8)
                                 if let bytes = sample.bytes {
                                     Text(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
-                                        .font(.caption).foregroundStyle(.secondary)
+                                        .font(.manropeCaption).foregroundStyle(.secondary)
                                 }
                                 Text(sample.scheduledAt.formatted(date: .abbreviated, time: .omitted))
-                                    .font(.caption).foregroundStyle(.secondary)
+                                    .font(.manropeCaption).foregroundStyle(.secondary)
                                     .frame(minWidth: 62, alignment: .trailing)
                             }
                             .padding(.vertical, 4)
@@ -135,7 +188,7 @@ struct RulePreviewResultView: View {
                         }
                     }
                 }
-                Text(RulePreviewText.scanNote(preview)).font(.caption).foregroundStyle(.secondary)
+                Text(RulePreviewText.scanNote(preview)).font(.manropeCaption).foregroundStyle(.secondary)
             }
         }
     }

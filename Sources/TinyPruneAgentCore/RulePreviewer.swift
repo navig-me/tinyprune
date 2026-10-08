@@ -232,14 +232,21 @@ struct RulePreviewer: Sendable {
         guard case .scheduled(let explanation) = IndexedCandidateEvaluation.resolve(evaluated, rules: rules, snapshot: snapshot),
               explanation.matchedRuleID == rule.id else { return }
 
+        let path = candidate.identity.pathHint
+        if let covered = tally.coveredDirectory, path.hasPrefix(covered + "/") {
+            // Execution trashes the matched ancestor whole; this item is not a separate top-most match.
+            return
+        }
         tally.matches += 1
+        // Mirror the coordinator's terminal/deferred refusals so Preview never promises what execution would not do.
+        if try await executionWouldRefuse(candidate, rule: rule, snapshot: snapshot, limits: limits, started: started, tally: &tally) {
+            return
+        }
         if explanation.scheduledAt <= now { tally.eligibleNow += 1 }
 
         var itemBytes: Int64?
-        let path = candidate.identity.pathHint
-        if let covered = tally.coveredDirectory, path.hasPrefix(covered + "/") {
-            // Already counted inside a matched ancestor folder; never double count.
-        } else if candidate.kind == .directory {
+        if candidate.kind == .directory {
+            tally.coveredDirectory = path
             let remaining = limits.sizeWalkEntries - tally.sizeWalkUsed
             if remaining > 0, let measurement = ItemSizeMeasurer.measure(
                 path: path, maxEntries: remaining,
@@ -250,7 +257,6 @@ struct RulePreviewer: Sendable {
                 tally.bytes += measurement.bytes
                 if measurement.truncated { tally.truncated = true }
                 itemBytes = measurement.bytes
-                tally.coveredDirectory = path
             } else {
                 tally.truncated = true
             }
@@ -264,6 +270,45 @@ struct RulePreviewer: Sendable {
             tally.samples.append(sample)
             tally.samples.sort(by: Self.precedes)
             if tally.samples.count > RulePreviewLimits.sampleLimit { tally.samples.removeLast() }
+        }
+    }
+
+    /// True when executing this match would end in a skip or deferral rather than a Trash move:
+    /// an action the executor does not implement, or a folder holding protected content (or too large to verify).
+    private func executionWouldRefuse(
+        _ candidate: RuleCandidate,
+        rule: LifetimeRule,
+        snapshot: PolicySnapshot,
+        limits: RulePreviewLimits,
+        started: TimeInterval,
+        tally: inout Tally
+    ) async throws -> Bool {
+        guard rule.action == .trashItem else { return true }
+        guard candidate.kind == .directory else { return false }
+        let remaining = max(0, limits.maxDurationSeconds - (configuration.uptime() - started))
+        let budget = DescendantWalkBudget(
+            maxEntries: max(1, limits.sizeWalkEntries),
+            deadline: clock.now().addingTimeInterval(remaining),
+            clock: clock
+        )
+        let protectHidden = snapshot.settings.protectHiddenFiles && !candidate.name.hasPrefix(".")
+        let status: DescendantProtection
+        do {
+            status = try await fileAccess.hasProtectedDescendant(
+                path: candidate.identity.pathHint,
+                overrides: snapshot.overrides,
+                protectHiddenFiles: protectHidden,
+                budget: budget
+            )
+        } catch {
+            throw RulePreviewError.invalidRequest("Cannot read \(candidate.identity.pathHint). Check folder access and volume availability, then preview again. \(error.localizedDescription)")
+        }
+        switch status {
+        case .none: return false
+        case .protected: return true
+        case .indeterminate:
+            tally.truncated = true
+            return true
         }
     }
 

@@ -25,7 +25,7 @@
       {"@type":"Question","name":"Does TinyPrune permanently delete files?","acceptedAnswer":{"@type":"Answer","text":"No. TinyPrune only moves items to the macOS Trash. It does not delete anything permanently."}},
       {"@type":"Question","name":"How is TinyPrune different from a Mac cleaner app?","acceptedAnswer":{"@type":"Answer","text":"TinyPrune is not a system optimizer. It only touches folders you choose, follows rules you write, explains every decision, and lets you test a rule in Preview first."}},
       {"@type":"Question","name":"Can TinyPrune clean node_modules and other developer folders?","acceptedAnswer":{"@type":"Answer","text":"Yes. Rules can match folders such as node_modules or .venv and expire them after a project has been inactive. Developer templates always start in Preview."}},
-      {"@type":"Question","name":"Does TinyPrune need an account or network access?","acceptedAnswer":{"@type":"Answer","text":"No account is needed. Core cleanup reads filesystem metadata only, does not inspect file contents, and does not require network access. Optional update checks in configured, signed direct-download builds use HTTPS; Homebrew installs update through Homebrew. Early unsigned builds require manual updates."}},
+      {"@type":"Question","name":"Does TinyPrune need an account or network access?","acceptedAnswer":{"@type":"Answer","text":"The app has no telemetry and needs no account. Core cleanup reads filesystem metadata only, does not inspect file contents, and does not require network access. Optional update checks in configured, signed direct-download builds use HTTPS; Homebrew installs update through Homebrew. Early unsigned builds require manual updates. The tinyprune.com website, separately, uses Google Analytics and PostHog."}},
       {"@type":"Question","name":"How do I keep a file from being removed?","acceptedAnswer":{"@type":"Answer","text":"Mark it Keep from the Finder menu or run tinyprune keep. Keep takes precedence over every rule, and a folder with a kept item inside is never trashed."}},
       {"@type":"Question","name":"Does TinyPrune work on Intel and Apple silicon, and which macOS versions?","acceptedAnswer":{"@type":"Answer","text":"It requires macOS 14 or later. Releases are universal binaries for Intel and Apple silicon."}},
       {"@type":"Question","name":"How do I install TinyPrune?","acceptedAnswer":{"@type":"Answer","text":"Run brew install --cask navig-me/tap/tinyprune, or download the DMG from GitHub Releases. Version 0.1.0 is an unsigned pre-release, so macOS asks you to approve it on first launch. You can also build from source: git clone https://github.com/navig-me/tinyprune && cd tinyprune && swift Scripts/package-app.swift && open .build/package/TinyPrune.app"}}
@@ -90,12 +90,14 @@
             <div><h3>Items go to Trash</h3><p>TinyPrune never permanently deletes files. Eligible items move to macOS Trash.</p></div>
             <div><h3>Keep wins</h3><p>Keep overrides every expiry rule. A folder cannot be trashed if it contains a protected item.</p></div>
           </div>
-          <p>Before each move, the agent checks the item's identity, current rules, protection, deadline, pause state, permissions, and volume availability again. The index schedules work; it does not authorize a move.</p>
+          <p>Before each move, the agent checks the item's identity, current rules, protection, deadline, pause state, permissions, and volume availability again, confirms the item still lives inside a managed folder (not behind a symlinked ancestor), and re-reads the policy immediately before the Trash call. The index schedules work; it does not authorize a move. If a check cannot be completed (for example cleanup is paused, a Preview rule is involved, or the deadline moved), the item is deferred and retried rather than dropped; items that are gone, replaced, kept, or outside managed folders are skipped for good.</p>
+          <h3>Very broad folders</h3>
+          <p>Folders such as your home folder, <code>/Users</code>, <code>/Volumes</code>, <code>/private</code>, or a whole volume can be managed, but their rules are Preview-only: TinyPrune will not enable cleanup on them, and the agent rejects an Active rule with that scope. Dangerous system roots are refused outright, compared case-insensitively after resolving symlinks.</p>
           <h3>Pause and settings</h3>
           <p>Pause cleanup globally, for a managed folder, or for a rule. A timed global pause resumes when its time is up. In Settings, you can set the default grace period, protect hidden files, and choose how long to retain activity history. These settings apply to the app, Finder, and CLI.</p>
           <h3>Activity and restoring items</h3>
           <p>Activity summarizes only the loaded audit events: items moved to Trash, items skipped for safety, and the last recorded cleanup time. Each move offers <strong>Show in Trash</strong> to reveal its recorded destination in Finder. Exact original and Trash paths are copyable. If the destination no longer exists, the row says <strong>No longer in Trash</strong>.</p>
-          <p>To restore, use Finder’s <strong>Put Back</strong> in Trash, if available. TinyPrune does not restore items or empty Trash. Once an item leaves Trash, the audit event does not guarantee it can be recovered.</p>
+          <p>To restore, use Finder’s <strong>Put Back</strong> in Trash, if available. Items stay in the Trash until you or macOS empty it; TinyPrune does not restore items or empty Trash. Once an item leaves Trash, the audit event does not guarantee it can be recovered.</p>
           <h3>Exporting and importing rule configuration</h3>
           <p>In Settings, use <strong>Export rule config…</strong> and <strong>Import rules…</strong>. Export is not a complete backup: the restricted YAML format supports only expressible rules shared by every managed root, plus Keep overrides. Export reports how many rules were exported or skipped and lists skipped names and reasons; a partial or zero-rule export requires confirmation. The saved file also lists omissions in comments.</p>
           <p>Import opens a review before applying additions, changes, and removals through the agent. Matching configuration-created rules can change, and absent configuration-created rules within the file’s roots can be removed; app-created rules are kept. Surviving app-created rules can therefore gain configuration copies when imported. Folder access must already be granted. New rules start in Preview; existing configuration rules retain their state. A lossless per-root backup format is not currently supported.</p>
@@ -104,22 +106,24 @@
           <h2>Choose what expires and when</h2>
           <p>A rule specifies a folder, the files or folders to match, and the time basis for expiry. For example, you can target dependencies in inactive projects without expiring the source folder itself.</p>
           <div class="rule-card"><div class="card-heading"><h3>Old Node modules</h3><span class="badge">Preview</span></div><dl><div><dt>Where</dt><dd>~/Developer/**</dd></div><div><dt>What</dt><dd>Folder named node_modules</dd></div><div><dt>When</dt><dd>Project inactive for 30 days</dd></div><div><dt>Action</dt><dd>Move the folder to Trash</dd></div></dl></div>
-          <p>Match by exact name or glob, item type, and scope depth. Expiry can use age, modification time, or project inactivity. Set an explicit expiry on an individual item, use Keep to protect it, or choose Inherit to return it to the folder's rules.</p>
+          <p>Match by exact name or glob, item type, and scope depth. A glob without a <code>/</code> matches the item's name at any depth, like a <code>.gitignore</code> line (<code>*.dmg</code> matches <code>a/b/c.dmg</code>); a glob containing <code>/</code> matches the path relative to the folder, and <code>**</code> crosses directories. Only <code>*</code>, <code>?</code>, and <code>**</code> are supported; there are no character classes, braces, or <code>!</code> negation. Exact names always match the item's name. Expiry can use age, modification time, or project inactivity. Set an explicit expiry on an individual item, use Keep to protect it, or choose Inherit to return it to the folder's rules.</p>
+          <p>Keep follows the item by identity and, if the item was renamed or its identity cannot be matched, by its recorded path as well, so it fails toward protection. A Keep on a folder with <em>protect descendants</em> covers everything below it, and a folder is never trashed while any protected item is inside it.</p>
           <p>Every decision includes an explanation: the matching rule, time basis, resolved deadline, project context when relevant, any override, and why an item is protected or skipped.</p>
         </section>
         <section id="preview">
           <h2>Check the matches before cleanup</h2>
           <p>A rule saved in Preview runs matching and scheduling without moving anything to Trash. Upcoming shows indexed candidates and their explanations.</p>
           <ol><li>Choose a managed folder and create a rule.</li><li>Use <strong>Preview matches</strong> in the rule editor for a read-only dry run. It is bounded and cancellable, and does not save changes or trash items.</li><li>Review the matches, deadlines, and explanations. Add Keep or expiry overrides where needed.</li><li>Enable the rule only when the result matches what you want.</li></ol>
+          <p>Preview counts only what cleanup would actually act on: items that would be skipped (a protected descendant, an unsupported folder action, or an item nested inside an already matched folder) are excluded, and only the top-most match is listed.</p>
           <p>The Rules screen also shows scheduled matches and how many are already eligible. These counts come from the index, so a newly saved rule needs time to be indexed.</p>
         </section>
         <section id="templates">
           <h2>Start with a template</h2>
           <p>Templates create ordinary rules you can edit, pause, duplicate, or delete. Pick a folder and adjust the match and lifetime to suit the files you actually keep there.</p>
           <div class="table-wrap" tabindex="0" role="region" aria-label="Available templates"><table><thead><tr><th scope="col">Template</th><th scope="col">Use it for</th></tr></thead><tbody>
-            <tr><td>Downloads</td><td>DMG files after 7 days, ZIP files after 14, other items after 30 days in the folder</td></tr>
+            <tr><td>Downloads</td><td>Top-level items only (not subfolders' contents): DMG files after 7 days, ZIP files after 14, other items after 30 days in the folder</td></tr>
             <tr><td>Screenshots</td><td>Screenshot and Screen Shot filenames, 7 days after creation</td></tr>
-            <tr><td>Temporary Workspace</td><td>Disposable items in a chosen folder, 3 days after first observation by default</td></tr>
+            <tr><td>Temporary Workspace</td><td>Disposable top-level items in a chosen folder, 3 days after first observation by default</td></tr>
             <tr><td>Developer Cleanup</td><td>Dependencies and build output in inactive projects; Python caches after 7 days without modification</td></tr>
             <tr><td>Build Artifacts</td><td>dist, build, target, coverage and .cache folders after 30 days of project inactivity</td></tr>
             <tr><td>Xcode Derived Data</td><td><code>~/Library/Developer/Xcode/DerivedData</code>: immediate child folders, 60 days without modification</td></tr>
@@ -140,7 +144,7 @@
           <h2 id="finder-title">Use the Finder menu</h2>
           <p>Enable the TinyPrune Finder extension in System Settings. The menu works inside folders you have chosen to manage.</p>
           <p>From Finder, you can Keep an item, set its expiry to tonight, tomorrow, 7 days, 30 days, or a custom date, return it to inherited rules, and ask why it will expire. Folders also offer Protect Folder, Set Folder Lifetime, and Create Rule.</p>
-          <p>Finder sends actions to the same background agent as the app and CLI. Folder lifetime, rule creation, and custom expiry open the app to finish the action and require a single selected item. Keep, expiry presets, and inherited rules can act on multiple selected items.</p>
+          <p>Finder sends actions to the same background agent as the app and CLI. Folder lifetime, rule creation, and custom expiry open the app to finish the action and require a single selected item. Keep, expiry presets, and inherited rules can act on multiple selected items, applied in one batch.</p>
         </section>
         <section id="cli">
           <h2>Work from the command line</h2>
@@ -155,14 +159,24 @@ tinyprune inherit foo.zip
 tinyprune why node_modules
 tinyprune pause
 tinyprune resume</code></pre>
-          <p>Expiry values also accept <code>12h</code>, <code>30m</code>, <code>tonight</code>, and <code>tomorrow</code>. Add <code>--json</code> for structured output; each document carries <code>schemaVersion: 1</code>.</p>
+          <p>Expiry values also accept <code>12h</code>, <code>30m</code>, <code>tonight</code> (23:59 today, or 23:59 tomorrow if it is already past 23:59), and <code>tomorrow</code>. Add <code>--json</code> for structured output; each document carries <code>schemaVersion: 1</code>, and errors are JSON too. Unknown flags and extra arguments are usage errors, and swapped <code>expire &lt;path&gt; &lt;when&gt;</code> arguments are detected.</p>
+          <h3>Exit codes</h3>
+          <div class="table-wrap" tabindex="0" role="region" aria-label="CLI exit codes"><table><thead><tr><th scope="col">Code</th><th scope="col">Meaning</th></tr></thead><tbody>
+            <tr><td>0</td><td>Success</td></tr>
+            <tr><td>64</td><td>Usage error (bad flag, missing or extra argument)</td></tr>
+            <tr><td>65</td><td>Invalid data, such as a bad date, path, or config file</td></tr>
+            <tr><td>69</td><td>Background agent unavailable</td></tr>
+            <tr><td>70</td><td>The agent reported an error</td></tr>
+            <tr><td>78</td><td>Config roots are not inside a managed folder; add them in the app first</td></tr>
+            <tr><td>75</td><td>Timed out, interrupted, or busy. The request may have been applied; check with <code>tinyprune status</code> before retrying</td></tr>
+          </tbody></table></div>
           <h3>Manage rules as code</h3>
           <pre aria-label="Config commands"><code>tinyprune config validate tinyprune.yml
 tinyprune config preview tinyprune.yml
 tinyprune config apply tinyprune.yml
 tinyprune config export</code></pre>
           <p>Config uses a restricted YAML format. <code>validate</code> checks it locally, <code>preview</code> compares it with current rules, <code>apply</code> saves the changes, and <code>export</code> writes the current configuration.</p>
-          <p>Apply only works inside folders already managed in the app, because the app must obtain folder access. Rules created from a config start in Preview unless you pass <code>--active</code>.</p>
+          <p>Apply only works inside folders already managed in the app, because the app must obtain folder access. Rules created from a config start in Preview unless you pass <code>--active</code>. Apply keeps the current pause state and Keep overrides; if the policy changed while you were applying, the CLI reloads and retries, then reports a conflict.</p>
         </section>
         <section id="updates">
           <h2>How updates work</h2>
@@ -182,7 +196,7 @@ tinyprune config export</code></pre>
           <h3>Can TinyPrune clean node_modules and other developer folders?</h3>
           <p>Yes. Rules can match folders such as <code>node_modules</code> or <code>.venv</code> and expire them after a project has been inactive. Developer templates always start in Preview.</p>
           <h3>Does TinyPrune need an account or network access?</h3>
-          <p>No account is needed. Core cleanup reads filesystem metadata only, does not inspect file contents, and does not require network access. Optional update checks in configured, signed direct-download builds use HTTPS; Homebrew installs update through Homebrew. Early unsigned builds require manual updates.</p>
+          <p>The app has no telemetry and needs no account. Core cleanup reads filesystem metadata only, does not inspect file contents, and does not require network access. Optional update checks in configured, signed direct-download builds use HTTPS; Homebrew installs update through Homebrew. Early unsigned builds require manual updates. The <a href="https://tinyprune.com">tinyprune.com</a> marketing website, separately, uses Google Analytics and PostHog.</p>
           <h3>How do I keep a file from being removed?</h3>
           <p>Mark it Keep from the Finder menu or run <code>tinyprune keep</code>. Keep takes precedence over every rule, and a folder with a kept item inside is never trashed.</p>
           <h3>Does TinyPrune work on Intel and Apple silicon, and which macOS versions?</h3>
@@ -193,7 +207,7 @@ tinyprune config export</code></pre>
       </article>
     </main>
   </div>
-  <div class="footer-panel"><div><h2>Your files stay on your Mac.</h2><p>No account, cloud sync, or file-content inspection in normal operation.</p></div><a class="button" href="https://github.com/navig-me/tinyprune">View on GitHub</a></div>
+  <div class="footer-panel"><div><h2>Your files stay on your Mac.</h2><p>No account, cloud sync, app telemetry, or file-content inspection in normal operation.</p></div><a class="button" href="https://github.com/navig-me/tinyprune">View on GitHub</a></div>
   <footer class="site-footer"><div class="footer-inner"><p><span>TinyPrune</span> <span class="footer-description">macOS file lifetimes</span></p><nav aria-label="Footer"><a href="https://github.com/navig-me/tinyprune">GitHub</a><a href="#start">Docs</a><a href="https://buymeacoffee.com/mihirk">Buy me a coffee</a><a href="https://tinyprune.com#philosophy">Privacy</a></nav></div></footer>
   <script>
     const guide = document.querySelector('.sidebar details');

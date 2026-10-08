@@ -80,7 +80,10 @@ public enum RuleTemplate: String, CaseIterable, Codable, Sendable, Identifiable 
     }
 
     public func rules(in folderPath: String, state: RuleState, temporaryLifetime: TimeInterval = 3 * 86_400) throws -> [LifetimeRule] {
-        let scope = try RuleScope(path: folderPath, recursive: self != .xcodeDerivedData && self != .xcodeDeviceSupport)
+        // Downloads and Temporary Workspace act on the chosen folder's top-level entries only: a recursive
+        // catch-all there would trash individual files inside folders the user dropped in.
+        let topLevelOnly: Set<RuleTemplate> = [.xcodeDerivedData, .xcodeDeviceSupport, .downloads, .temporaryWorkspace]
+        let scope = try RuleScope(path: folderPath, recursive: !topLevelOnly.contains(self))
         let initialState: RuleState = isBroad && state == .active ? .preview : state
         let day: TimeInterval = 86_400
 

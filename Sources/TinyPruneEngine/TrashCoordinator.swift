@@ -10,6 +10,9 @@ public struct PolicySnapshot: Sendable {
     public let globallyPaused: Bool
     public let pausedUntil: Date?
     public let settings: AgentSettings
+    /// Monotonic policy revision maintained by the store; every policy mutation bumps it. Clients echo it back
+    /// when replacing policy so a stale snapshot cannot silently overwrite newer changes.
+    public var revision: Int
 
     public init(
         rules: [LifetimeRule],
@@ -17,7 +20,8 @@ public struct PolicySnapshot: Sendable {
         managedRoots: [ManagedRoot] = [],
         globallyPaused: Bool,
         pausedUntil: Date? = nil,
-        settings: AgentSettings = .default
+        settings: AgentSettings = .default,
+        revision: Int = 0
     ) {
         self.rules = rules
         self.overrides = overrides
@@ -25,6 +29,7 @@ public struct PolicySnapshot: Sendable {
         self.globallyPaused = globallyPaused
         self.pausedUntil = pausedUntil
         self.settings = settings
+        self.revision = revision
     }
 }
 
@@ -32,9 +37,52 @@ public protocol PolicySnapshotProviding: Sendable {
     func loadSnapshot() async throws -> PolicySnapshot
 }
 
+/// Overlays persisted activity (first observed, observed activity, project activity) on a filesystem candidate so
+/// that execution-time evaluation uses exactly the timestamps the indexer used when it scheduled the deadline.
+public protocol CandidateHydrating: Sendable {
+    func hydrate(_ candidate: RuleCandidate, rules: [LifetimeRule], now: Date) async throws -> RuleCandidate
+}
+
+/// Bounds a descendant walk by entry count and by wall time measured on the injected clock.
+public struct DescendantWalkBudget: Sendable {
+    public let maxEntries: Int
+    public let deadline: Date
+    public let clock: any SafetyClock
+
+    public init(maxEntries: Int, deadline: Date, clock: any SafetyClock) {
+        self.maxEntries = maxEntries
+        self.deadline = deadline
+        self.clock = clock
+    }
+}
+
+public struct DescendantWalkLimits: Equatable, Sendable {
+    public var maxEntries: Int
+    public var maxDuration: TimeInterval
+
+    public init(maxEntries: Int = 250_000, maxDuration: TimeInterval = 10) {
+        self.maxEntries = maxEntries
+        self.maxDuration = maxDuration
+    }
+}
+
+public enum DescendantProtection: Equatable, Sendable {
+    case none
+    case protected
+    /// The walk hit its entry or time budget before it could prove the folder is free of protected content.
+    case indeterminate
+}
+
 public protocol TrashFileAccess: Sendable {
     func inspect(path: String) async throws -> RuleCandidate?
-    func hasProtectedDescendant(path: String, overrides: [ItemPolicyOverride]) async throws -> Bool
+    /// True when any directory between `rootPath` (exclusive) and `path` (exclusive) is a symbolic link.
+    func hasSymbolicLinkAncestor(of path: String, below rootPath: String) async throws -> Bool
+    func hasProtectedDescendant(
+        path: String,
+        overrides: [ItemPolicyOverride],
+        protectHiddenFiles: Bool,
+        budget: DescendantWalkBudget
+    ) async throws -> DescendantProtection
     func moveToTrash(path: String, expectedIdentity: FilesystemIdentity) async throws -> String
 }
 
@@ -108,7 +156,10 @@ public protocol TrashAuditRecording: Sendable {
 public enum TrashExecutionOutcome: Hashable, Codable, Sendable {
     case previewed
     case notDue(Date)
+    /// Terminal: the candidate must not be trashed under this deadline (missing, replaced, protected, unsupported...).
     case skipped(String)
+    /// Not terminal: the deadline must be kept and retried later (pause, paused rule, moved deadline, too large to verify).
+    case deferred(String)
     case movedToTrash(originalPath: String, trashedPath: String)
 }
 
@@ -139,25 +190,44 @@ private func authorization(for source: ScheduledSource, resolution: RuleResoluti
     }
 }
 
+private struct ClearedCandidate {
+    let candidate: RuleCandidate
+    let authorization: TrashAuthorization
+}
+
+private enum Preflight {
+    case cleared(ClearedCandidate)
+    case finished(TrashExecutionOutcome)
+}
+
 public actor TrashCoordinator {
     private let policyStore: any PolicySnapshotProviding
     private let fileAccess: any TrashFileAccess
     private let audit: any TrashAuditRecording
     private let clock: any SafetyClock
     private let updateGate: UpdateInstallationGate
+    private let hydrator: (any CandidateHydrating)?
+    private let walkLimits: DescendantWalkLimits
 
+    /// - Parameter candidateHydrator: overlays persisted activity on freshly inspected candidates. Defaults to the
+    ///   policy store itself when it can hydrate (the SQLite store does), so execution-time evaluation sees the same
+    ///   timestamps as the indexer that scheduled the deadline.
     public init(
         policyStore: any PolicySnapshotProviding,
         fileAccess: any TrashFileAccess,
         audit: any TrashAuditRecording,
         clock: any SafetyClock = SystemSafetyClock(),
-        updateGate: UpdateInstallationGate = UpdateInstallationGate()
+        updateGate: UpdateInstallationGate = UpdateInstallationGate(),
+        candidateHydrator: (any CandidateHydrating)? = nil,
+        descendantWalkLimits: DescendantWalkLimits = DescendantWalkLimits()
     ) {
         self.policyStore = policyStore
         self.fileAccess = fileAccess
         self.audit = audit
         self.clock = clock
         self.updateGate = updateGate
+        self.hydrator = candidateHydrator ?? (policyStore as? any CandidateHydrating)
+        self.walkLimits = descendantWalkLimits
     }
 
     public nonisolated func observeUpdateGateChanges(_ onChange: @escaping @Sendable () -> Void) throws -> UpdateInstallationObservation {
@@ -165,8 +235,7 @@ public actor TrashCoordinator {
     }
 
     public func execute(_ request: TrashRequest) async throws -> TrashExecutionOutcome {
-        let path = request.candidateIdentity.pathHint
-        let now = clock.now()
+        let path = RuleScope.normalized(request.candidateIdentity.pathHint)
         let updatePermit: UpdateTrashPermit?
         do {
             updatePermit = try updateGate.acquireTrashPermit()
@@ -174,160 +243,50 @@ public actor TrashCoordinator {
             throw TrashExecutionError.policyReadFailed("update installation gate: \(error)")
         }
         guard let updatePermit else {
-            _ = try await recordSkip("app update installation is pending", request: request, at: now)
+            _ = try await recordSkip("app update installation is pending", request: request, at: clock.now())
             // A transient installation block is not terminal: the scheduler must retain this deadline.
             throw TrashExecutionError.updateInstallationPending
         }
         // ARC may otherwise release the permit before an awaited filesystem operation completes.
         defer { withExtendedLifetime(updatePermit) {} }
-        let snapshot: PolicySnapshot
-        do {
-            snapshot = try await policyStore.loadSnapshot()
-        } catch {
-            throw TrashExecutionError.policyReadFailed(String(describing: error))
+
+        // Order: path/root/ancestor checks -> inspect + hydrate -> bounded descendant walk -> reload policy ->
+        // final inspect + hydrate -> audit the attempt -> move (identity re-verified under file coordination).
+        let snapshot = try await loadSnapshot()
+        let initial: ClearedCandidate
+        switch try await preflight(request, path: path, snapshot: snapshot) {
+        case .finished(let outcome): return outcome
+        case .cleared(let cleared): initial = cleared
+        }
+        if initial.candidate.kind == .directory,
+           let blocked = try await descendantOutcome(for: initial, request: request, path: path, snapshot: snapshot) {
+            return blocked
         }
 
-        let currentCandidate: RuleCandidate
-        do {
-            guard let observed = try await fileAccess.inspect(path: path) else {
-                return try await recordSkip("candidate is unavailable", request: request, at: now)
-            }
-            currentCandidate = observed
-        } catch {
-            throw TrashExecutionError.filesystemReadFailed(String(describing: error))
+        let finalSnapshot = try await loadSnapshot()
+        let confirmed: ClearedCandidate
+        switch try await preflight(request, path: path, snapshot: finalSnapshot) {
+        case .finished(let outcome): return outcome
+        case .cleared(let cleared): confirmed = cleared
         }
-        guard currentCandidate.identity == request.candidateIdentity else {
-            return try await recordSkip("filesystem identity changed", request: request, at: now)
+        guard confirmed.authorization.deadline == initial.authorization.deadline,
+              confirmed.authorization.rule == initial.authorization.rule else {
+            return .deferred("policy or deadline changed while preparing to move")
         }
-
-        let resolution = RuleResolver.resolve(
-            candidate: currentCandidate,
-            rules: snapshot.rules,
-            overrides: snapshot.overrides,
-            globallyPaused: snapshot.globallyPaused,
-            settings: snapshot.settings
-        )
-        guard let initialAuthorization = authorization(for: request.source, resolution: resolution, snapshot: snapshot) else {
-            return try await recordSkip("candidate is no longer eligible", request: request, at: now)
-        }
-        if initialAuthorization.disposition == .preview {
-            try await append(TrashAuditEvent(occurredAt: now, kind: .previewSkipped, identity: request.candidateIdentity, ruleID: initialAuthorization.rule?.id))
-            return .previewed
+        if confirmed.candidate.kind == .directory,
+           finalSnapshot.overrides != snapshot.overrides || finalSnapshot.settings.protectHiddenFiles != snapshot.settings.protectHiddenFiles,
+           let blocked = try await descendantOutcome(for: confirmed, request: request, path: path, snapshot: finalSnapshot) {
+            return blocked
         }
 
-        let applicableRule = initialAuthorization.rule
-        let currentDeadline = initialAuthorization.deadline
-        guard currentDeadline == request.scheduledAt else {
-            return try await recordSkip("scheduled deadline changed", request: request, at: now, ruleID: applicableRule?.id)
-        }
-        guard now >= currentDeadline else {
-            try await append(TrashAuditEvent(occurredAt: now, kind: .notDue, identity: request.candidateIdentity, ruleID: applicableRule?.id))
-            return .notDue(currentDeadline)
-        }
-        guard applicableRule?.action == .trashItem || applicableRule == nil else {
-            return try await recordSkip("folder action requires a dedicated executor", request: request, at: now, ruleID: applicableRule?.id)
-        }
-
-        let finalSnapshot: PolicySnapshot
-        do {
-            finalSnapshot = try await policyStore.loadSnapshot()
-        } catch {
-            throw TrashExecutionError.policyReadFailed(String(describing: error))
-        }
-        let finalCandidate: RuleCandidate
-        do {
-            guard let observed = try await fileAccess.inspect(path: path) else {
-                return try await recordSkip("candidate is unavailable", request: request, at: clock.now(), ruleID: applicableRule?.id)
-            }
-            finalCandidate = observed
-        } catch {
-            throw TrashExecutionError.filesystemReadFailed(String(describing: error))
-        }
-        guard finalCandidate.identity == request.candidateIdentity else {
-            return try await recordSkip("filesystem identity changed", request: request, at: clock.now(), ruleID: applicableRule?.id)
-        }
-        let finalResolution = RuleResolver.resolve(
-            candidate: finalCandidate,
-            rules: finalSnapshot.rules,
-            overrides: finalSnapshot.overrides,
-            globallyPaused: finalSnapshot.globallyPaused,
-            settings: finalSnapshot.settings
-        )
-        guard let finalAuthorization = authorization(for: request.source, resolution: finalResolution, snapshot: finalSnapshot) else {
-            return try await recordSkip("current policy no longer authorizes this move", request: request, at: clock.now(), ruleID: applicableRule?.id)
-        }
-        if finalAuthorization.disposition == .preview {
-            try await append(TrashAuditEvent(occurredAt: clock.now(), kind: .previewSkipped, identity: request.candidateIdentity, ruleID: finalAuthorization.rule?.id))
-            return .previewed
-        }
-        guard finalAuthorization.deadline == request.scheduledAt,
-              finalAuthorization.rule == applicableRule,
-              finalAuthorization.rule?.action == .trashItem || finalAuthorization.rule == nil else {
-            return try await recordSkip("current policy or deadline changed", request: request, at: clock.now(), ruleID: applicableRule?.id)
-        }
-        let finalNow = clock.now()
-        guard finalNow >= finalAuthorization.deadline else {
-            try await append(TrashAuditEvent(occurredAt: finalNow, kind: .notDue, identity: request.candidateIdentity, ruleID: applicableRule?.id))
-            return .notDue(finalAuthorization.deadline)
-        }
-        if finalCandidate.kind == .directory {
-            do {
-                if try await fileAccess.hasProtectedDescendant(path: path, overrides: finalSnapshot.overrides) {
-                    return try await recordSkip("folder contains a protected descendant", request: request, at: clock.now(), ruleID: applicableRule?.id)
-                }
-            } catch {
-                throw TrashExecutionError.filesystemReadFailed(String(describing: error))
-            }
-        }
-
-        try await append(TrashAuditEvent(occurredAt: finalNow, kind: .trashAttempted, identity: request.candidateIdentity, ruleID: applicableRule?.id))
-        let committedSnapshot: PolicySnapshot
-        do {
-            committedSnapshot = try await policyStore.loadSnapshot()
-        } catch {
-            throw TrashExecutionError.policyReadFailed(String(describing: error))
-        }
-        let committedCandidate: RuleCandidate
-        do {
-            guard let observed = try await fileAccess.inspect(path: path) else {
-                return try await recordSkip("candidate is unavailable", request: request, at: clock.now(), ruleID: applicableRule?.id)
-            }
-            committedCandidate = observed
-        } catch {
-            throw TrashExecutionError.filesystemReadFailed(String(describing: error))
-        }
-        guard committedCandidate.identity == request.candidateIdentity else {
-            return try await recordSkip("filesystem identity changed", request: request, at: clock.now(), ruleID: applicableRule?.id)
-        }
-        let committedResolution = RuleResolver.resolve(
-            candidate: committedCandidate,
-            rules: committedSnapshot.rules,
-            overrides: committedSnapshot.overrides,
-            globallyPaused: committedSnapshot.globallyPaused,
-            settings: committedSnapshot.settings
-        )
-        guard let committedAuthorization = authorization(for: request.source, resolution: committedResolution, snapshot: committedSnapshot),
-              committedAuthorization.disposition == .active,
-              committedAuthorization.deadline == request.scheduledAt,
-              committedAuthorization.rule == applicableRule,
-              clock.now() >= committedAuthorization.deadline else {
-            return try await recordSkip("policy changed at the Trash boundary", request: request, at: clock.now(), ruleID: applicableRule?.id)
-        }
-        if committedCandidate.kind == .directory {
-            do {
-                if try await fileAccess.hasProtectedDescendant(path: path, overrides: committedSnapshot.overrides) {
-                    return try await recordSkip("folder contains a protected descendant", request: request, at: clock.now(), ruleID: applicableRule?.id)
-                }
-            } catch {
-                throw TrashExecutionError.filesystemReadFailed(String(describing: error))
-            }
-        }
+        let ruleID = confirmed.authorization.rule?.id
+        try await append(TrashAuditEvent(occurredAt: clock.now(), kind: .trashAttempted, identity: request.candidateIdentity, ruleID: ruleID))
         let trashedPath: String
         do {
             trashedPath = try await fileAccess.moveToTrash(path: path, expectedIdentity: request.candidateIdentity)
         } catch {
             do {
-                try await append(TrashAuditEvent(occurredAt: clock.now(), kind: .trashFailed, identity: request.candidateIdentity, ruleID: applicableRule?.id, detail: String(describing: error)))
+                try await append(TrashAuditEvent(occurredAt: clock.now(), kind: .trashFailed, identity: request.candidateIdentity, ruleID: ruleID, detail: String(describing: error)))
             } catch {
                 throw TrashExecutionError.auditWriteFailed("Trash failed and failure audit could not be written: \(error)")
             }
@@ -335,11 +294,132 @@ public actor TrashCoordinator {
         }
 
         do {
-            try await append(TrashAuditEvent(occurredAt: clock.now(), kind: .movedToTrash, identity: request.candidateIdentity, ruleID: applicableRule?.id, detail: trashedPath))
+            try await append(TrashAuditEvent(occurredAt: clock.now(), kind: .movedToTrash, identity: request.candidateIdentity, ruleID: ruleID, detail: trashedPath))
         } catch {
             throw TrashExecutionError.movedButAuditFailed(path: trashedPath, detail: String(describing: error))
         }
         return .movedToTrash(originalPath: path, trashedPath: trashedPath)
+    }
+
+    /// One complete eligibility decision against a given policy snapshot and the current filesystem state.
+    private func preflight(_ request: TrashRequest, path: String, snapshot: PolicySnapshot) async throws -> Preflight {
+        if snapshot.globallyPaused { return .finished(.deferred("pruning is paused")) }
+        switch request.source {
+        case .rule(let ruleID):
+            guard let rule = snapshot.rules.first(where: { $0.id == ruleID }) else {
+                return .finished(try await recordSkip("rule no longer exists", request: request, at: clock.now()))
+            }
+            if rule.state == .paused { return .finished(.deferred("rule is paused")) }
+        case .customOverride(let overrideID):
+            guard let override = snapshot.overrides.first(where: { $0.id == overrideID }) else {
+                return .finished(try await recordSkip("custom expiry no longer exists", request: request, at: clock.now()))
+            }
+            if case .customExpiry(_, let state) = override.policy, state == .paused {
+                return .finished(.deferred("custom expiry is paused"))
+            }
+        }
+
+        guard let root = snapshot.managedRoots.first(where: { path.hasPrefix(RuleScope.normalized($0.path) + "/") }) else {
+            return .finished(try await recordSkip("item is outside every managed root", request: request, at: clock.now()))
+        }
+        do {
+            if try await fileAccess.hasSymbolicLinkAncestor(of: path, below: RuleScope.normalized(root.path)) {
+                return .finished(try await recordSkip("item is reached through a symbolic link", request: request, at: clock.now()))
+            }
+        } catch {
+            throw TrashExecutionError.filesystemReadFailed(String(describing: error))
+        }
+
+        let candidate: RuleCandidate
+        do {
+            guard let observed = try await fileAccess.inspect(path: path) else {
+                return .finished(try await recordSkip("candidate is unavailable", request: request, at: clock.now()))
+            }
+            candidate = observed
+        } catch {
+            throw TrashExecutionError.filesystemReadFailed(String(describing: error))
+        }
+        guard candidate.identity == request.candidateIdentity else {
+            return .finished(try await recordSkip("filesystem identity changed", request: request, at: clock.now()))
+        }
+        let evaluated: RuleCandidate
+        do {
+            evaluated = try await hydrator?.hydrate(candidate, rules: snapshot.rules, now: clock.now()) ?? candidate
+        } catch {
+            throw TrashExecutionError.policyReadFailed("candidate activity: \(error)")
+        }
+
+        let resolution = RuleResolver.resolve(
+            candidate: evaluated,
+            rules: snapshot.rules,
+            overrides: snapshot.overrides,
+            globallyPaused: snapshot.globallyPaused,
+            settings: snapshot.settings
+        )
+        guard let authorization = authorization(for: request.source, resolution: resolution, snapshot: snapshot) else {
+            let reason: String
+            if case .protected = resolution { reason = "item is protected by Keep" } else { reason = "candidate is no longer eligible" }
+            return .finished(try await recordSkip(reason, request: request, at: clock.now()))
+        }
+        if authorization.disposition == .preview {
+            try await append(TrashAuditEvent(occurredAt: clock.now(), kind: .previewSkipped, identity: request.candidateIdentity, ruleID: authorization.rule?.id))
+            return .finished(.previewed)
+        }
+        guard authorization.deadline == request.scheduledAt else {
+            return .finished(.deferred("scheduled deadline changed; waiting for re-index"))
+        }
+        let now = clock.now()
+        guard now >= authorization.deadline else {
+            try await append(TrashAuditEvent(occurredAt: now, kind: .notDue, identity: request.candidateIdentity, ruleID: authorization.rule?.id))
+            return .finished(.notDue(authorization.deadline))
+        }
+        guard authorization.rule?.action == .trashItem || authorization.rule == nil else {
+            return .finished(try await recordSkip("folder action requires a dedicated executor", request: request, at: now, ruleID: authorization.rule?.id))
+        }
+        return .cleared(ClearedCandidate(candidate: evaluated, authorization: authorization))
+    }
+
+    /// Returns a terminal/deferred outcome when the folder must not be trashed whole, `nil` when it is clear.
+    private func descendantOutcome(
+        for cleared: ClearedCandidate,
+        request: TrashRequest,
+        path: String,
+        snapshot: PolicySnapshot
+    ) async throws -> TrashExecutionOutcome? {
+        let started = clock.now()
+        let budget = DescendantWalkBudget(
+            maxEntries: walkLimits.maxEntries,
+            deadline: started.addingTimeInterval(walkLimits.maxDuration),
+            clock: clock
+        )
+        // A dot-named candidate can only reach this point through a rule that targets dot items explicitly.
+        let protectHidden = snapshot.settings.protectHiddenFiles && !cleared.candidate.name.hasPrefix(".")
+        let status: DescendantProtection
+        do {
+            status = try await fileAccess.hasProtectedDescendant(
+                path: path,
+                overrides: snapshot.overrides,
+                protectHiddenFiles: protectHidden,
+                budget: budget
+            )
+        } catch {
+            throw TrashExecutionError.filesystemReadFailed(String(describing: error))
+        }
+        switch status {
+        case .none: return nil
+        case .protected:
+            return try await recordSkip("folder contains a protected descendant", request: request, at: clock.now(), ruleID: cleared.authorization.rule?.id)
+        case .indeterminate:
+            return .deferred("folder is too large to verify before moving to Trash")
+        }
+    }
+
+    private func loadSnapshot() async throws -> PolicySnapshot {
+        do {
+            return try await policyStore.loadSnapshot()
+        } catch {
+            throw TrashExecutionError.policyReadFailed(String(describing: error))
+        }
     }
 
     private func recordSkip(_ reason: String, request: TrashRequest, at date: Date, ruleID: UUID? = nil) async throws -> TrashExecutionOutcome {

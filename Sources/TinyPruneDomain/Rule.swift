@@ -122,7 +122,7 @@ public struct ItemMatcher: Hashable, Codable, Sendable {
     func specificity(name: String, relativePath: String, kind: ItemKind) -> Int? {
         guard itemKind.accepts(kind) else { return nil }
         if exactNames.contains(name) { return 2 }
-        if compiledGlobPatterns.contains(where: { $0.matches(relativePath) }) { return 1 }
+        if compiledGlobPatterns.contains(where: { $0.matches(name: name, relativePath: relativePath) }) { return 1 }
         if exactNames.isEmpty && compiledGlobPatterns.isEmpty { return 0 }
         return nil
     }
@@ -168,28 +168,47 @@ public struct LifetimeRule: Hashable, Codable, Sendable, Identifiable {
     }
 }
 
+/// Glob matching with gitignore-style semantics.
+///
+/// Supported: `*` (any run of characters except `/`), `?` (one character except `/`), `**/` (zero or more
+/// directories), a trailing `**` (anything, including `/`). A pattern WITHOUT a `/` matches the item's
+/// basename at any depth (like `.gitignore`); a pattern WITH a `/` is anchored to the scope root and matched
+/// against the scope-relative path (a single leading `/` is allowed and ignored).
+///
+/// NOT supported (treated as literal characters): character classes `[abc]`, brace alternation `{a,b}`,
+/// `!` negation, backslash escapes, and trailing-`/` directory-only markers (use the rule's item kind instead).
 public struct GlobPattern: Hashable, @unchecked Sendable {
     public let pattern: String
     private let expression: NSRegularExpression?
+    /// True when the pattern has no `/` and therefore matches by basename at any depth.
+    public let matchesBasename: Bool
 
     public init(_ pattern: String) {
         self.pattern = pattern
-        self.expression = try? NSRegularExpression(pattern: Self.regex(for: pattern))
+        let anchored = pattern.hasPrefix("/") ? String(pattern.dropFirst()) : pattern
+        self.matchesBasename = !pattern.contains("/")
+        self.expression = try? NSRegularExpression(pattern: Self.regex(for: anchored), options: [.dotMatchesLineSeparators])
     }
 
     public static func == (lhs: Self, rhs: Self) -> Bool { lhs.pattern == rhs.pattern }
 
     public func hash(into hasher: inout Hasher) { hasher.combine(pattern) }
 
+    /// Literal match of `value` against the whole pattern (no basename-at-any-depth behavior).
     public func matches(_ value: String) -> Bool {
         guard let expression else { return false }
         let range = NSRange(value.startIndex..<value.endIndex, in: value)
         return expression.firstMatch(in: value, range: range) != nil
     }
 
+    /// Item-level match: basename patterns test `name`; patterns containing `/` test `relativePath`.
+    public func matches(name: String, relativePath: String) -> Bool {
+        matches(matchesBasename ? name : relativePath)
+    }
+
     private static func regex(for pattern: String) -> String {
         let characters = Array(pattern)
-        var result = "^"
+        var result = "\\A"
         var index = 0
         while index < characters.count {
             switch characters[index] {
@@ -210,7 +229,7 @@ public struct GlobPattern: Hashable, @unchecked Sendable {
             }
             index += 1
         }
-        return result + "$"
+        return result + "\\z"
     }
 }
 

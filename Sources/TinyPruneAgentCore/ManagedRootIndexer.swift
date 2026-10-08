@@ -116,17 +116,37 @@ private final class ScanBatchAccumulator: @unchecked Sendable {
     }
 }
 
+private struct RootStatusEntry: Sendable {
+    var root: ManagedRoot
+    var state: AgentRootState
+    var detail: String?
+}
+
 public actor ManagedRootIndexer {
+    /// Recoveries closer together than this count as one flood and back off exponentially.
+    private static let recoveryFloodWindow: TimeInterval = 120
+    private static let failureAuditInterval: TimeInterval = 60
+
+    static let defaultSleep: @Sendable (TimeInterval) async throws -> Void = { seconds in
+        try await Task.sleep(nanoseconds: UInt64(max(0, seconds) * 1_000_000_000))
+    }
+
     private let store: SQLiteSafetyStore
     private let fileAccess: LocalTrashFileAccess
     private let fileManager: FileManager
     private let clock: any SafetyClock
+    private let sleep: @Sendable (TimeInterval) async throws -> Void
     private let diagnosticsRecorder = ManagedRootDiagnosticsRecorder()
     private let onDeadlinesChanged: @Sendable () -> Void
     private let bookmarkResolver: (@Sendable (ManagedRoot) throws -> URL)?
     private var sessions: [UUID: RootWatchSession] = [:]
     private let operationLock = AsyncMutex()
     private var recoveryRequests: Set<UUID> = []
+    private var statuses: [UUID: RootStatusEntry] = [:]
+    private var retryTasks: [UUID: Task<Void, Never>] = [:]
+    private var retryAttempts: [UUID: Int] = [:]
+    private var lastRecovery: [UUID: (at: Date, streak: Int)] = [:]
+    private var lastFailureAudit: [UUID: Date] = [:]
 
     public init(
         store: SQLiteSafetyStore,
@@ -139,6 +159,7 @@ public actor ManagedRootIndexer {
         self.fileAccess = fileAccess
         self.fileManager = fileManager
         self.clock = clock
+        self.sleep = Self.defaultSleep
         self.onDeadlinesChanged = onDeadlinesChanged
         self.bookmarkResolver = nil
     }
@@ -147,12 +168,14 @@ public actor ManagedRootIndexer {
         store: SQLiteSafetyStore,
         resolver: @escaping @Sendable (ManagedRoot) throws -> URL,
         clock: any SafetyClock = SystemSafetyClock(),
-        onDeadlinesChanged: @escaping @Sendable () -> Void = {}
+        onDeadlinesChanged: @escaping @Sendable () -> Void = {},
+        sleep: @escaping @Sendable (TimeInterval) async throws -> Void = ManagedRootIndexer.defaultSleep
     ) {
         self.store = store
         self.fileAccess = LocalTrashFileAccess()
         self.fileManager = .default
         self.clock = clock
+        self.sleep = sleep
         self.onDeadlinesChanged = onDeadlinesChanged
         self.bookmarkResolver = resolver
     }
@@ -161,24 +184,68 @@ public actor ManagedRootIndexer {
         diagnosticsRecorder.snapshot()
     }
 
+    /// Per-root health for the app: watching, indexing, recovering, offline, stale bookmark, denied, or failed.
+    public func rootStatuses() -> [AgentRootStatus] {
+        statuses.values
+            .map { AgentRootStatus(rootID: $0.root.id, path: $0.root.path, state: $0.state, detail: $0.detail) }
+            .sorted { $0.path < $1.path }
+    }
+
     public func inspectManagedPath(_ path: String) async throws -> RuleCandidate? {
         let normalizedPath = RuleScope.normalized(path)
-        guard let session = sessions.values.first(where: { session in
+        guard sessions.values.contains(where: { session in
             let rootPath = RuleScope.normalized(session.access.url.path)
             return normalizedPath == rootPath || normalizedPath.hasPrefix(rootPath + "/")
         }) else { return nil }
-        return try await fileAccess.inspect(path: normalizedPath)
+        return try await inspectIfIndexable(normalizedPath)
     }
 
-    /// Reconcile one explicit override immediately; no full-tree traversal is necessary for a custom expiry.
-    func reconcileManagedItem(_ path: String) async throws {
+    /// Symlinks, vanished entries and entries without a stable identity are never indexed; they are not errors.
+    private func inspectIfIndexable(_ path: String) async throws -> RuleCandidate? {
+        do {
+            return try await fileAccess.inspect(path: path)
+        } catch let error as LocalFileAccessError {
+            switch error {
+            case .symbolicLink, .missingStableIdentity: return nil
+            default: throw error
+            }
+        } catch let error as CocoaError where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile {
+            return nil
+        }
+    }
+
+    private static func pathExistsWithoutFollowingSymlinks(_ path: String) -> Bool {
+        var info = stat()
+        return lstat(path, &info) == 0
+    }
+
+    /// Reconcile only the subtrees under explicit override changes: a single item for files,
+    /// one bounded-batch scan of the subtree for folders (descendant protection may have changed).
+    func reconcileOverrides(paths: [String]) async throws {
+        let normalized = Set(paths.map(RuleScope.normalized)).sorted()
+        var topMost: [String] = []
+        for path in normalized where !topMost.contains(where: { path == $0 || path.hasPrefix($0 + "/") }) {
+            topMost.append(path)
+        }
+        guard !topMost.isEmpty else { return }
         await operationLock.acquire()
         defer { operationLock.release() }
-        guard let candidate = try await inspectManagedPath(path) else { return }
         let snapshot = try await store.loadSnapshot()
-        let prepared = try await scheduledDeadline(for: candidate, snapshot: snapshot)
-        try await store.removeDeadline(for: candidate.identity)
-        try await persistBatch(deadlines: prepared.deadline.map { [$0] } ?? [], activities: prepared.newActivity.map { [$0] } ?? [])
+        for path in topMost {
+            try Task.checkCancellation()
+            guard let session = sessions.values.first(where: { isWithinManagedRoot(path, rootPath: RuleScope.normalized($0.access.url.path)) }) else { continue }
+            guard let candidate = try await inspectIfIndexable(path) else {
+                try await store.removeDeadlines(atOrBelow: path)
+                continue
+            }
+            if candidate.kind == .directory {
+                try await scan(URL(fileURLWithPath: path, isDirectory: true), root: session.root, snapshot: snapshot, includeRoot: true)
+            } else {
+                let prepared = try await scheduledDeadline(for: candidate, snapshot: snapshot)
+                try await store.removeDeadline(for: candidate.identity)
+                try await persistBatch(deadlines: prepared.deadline.map { [$0] } ?? [], activities: prepared.newActivity.map { [$0] } ?? [])
+            }
+        }
         onDeadlinesChanged()
     }
 
@@ -187,30 +254,55 @@ public actor ManagedRootIndexer {
     }
 
     public func stop() async {
+        cancelAllActivity()
         await operationLock.acquire()
         defer { operationLock.release() }
         stopSessions()
+        statuses.removeAll()
     }
 
-    private func stopSessions() {
+    /// Cancels in-flight scans and pending retries *before* waiting on `operationLock`, so a long scan
+    /// cannot hold up stop/reconfigure. Cancelled scans exit at their next checkpoint.
+    private func cancelAllActivity() {
         for session in sessions.values {
             session.consumer.cancel()
             session.initialScan?.cancel()
-            session.continuation.finish()
-            session.eventStream.stop()
         }
-        sessions.removeAll(keepingCapacity: false)
-
+        cancelRetries()
     }
+
+    private func cancelRetries() {
+        for task in retryTasks.values { task.cancel() }
+        retryTasks.removeAll()
+        retryAttempts.removeAll()
+    }
+
+    private func tearDown(_ session: RootWatchSession) {
+        session.consumer.cancel()
+        session.initialScan?.cancel()
+        session.continuation.finish()
+        session.eventStream.stop()
+    }
+
+    private func stopSessions() {
+        for session in sessions.values { tearDown(session) }
+        sessions.removeAll(keepingCapacity: false)
+        cancelRetries()
+    }
+
     public func reconfigure() async throws {
+        cancelAllActivity()
         await operationLock.acquire()
         defer { operationLock.release() }
         let snapshot = try await store.loadSnapshot()
         let retainedPaths = Set(snapshot.managedRoots.map(\.path))
         let retainedIDs = Set(snapshot.managedRoots.map(\.id))
-        let previousRoots = sessions.values.map(\.root)
+        let previousRoots = statuses.values.map(\.root)
         stopSessions()
         for root in previousRoots where !retainedIDs.contains(root.id) {
+            statuses[root.id] = nil
+            lastRecovery[root.id] = nil
+            lastFailureAudit[root.id] = nil
             try await store.removeEventCursor(for: root.id)
             guard !retainedPaths.contains(root.path) else { continue }
             try await store.removeDeadlines(atOrBelow: root.path)
@@ -221,27 +313,42 @@ public actor ManagedRootIndexer {
         for root in snapshot.managedRoots {
             try await store.removeDeadlines(atOrBelow: root.path)
             do { try await startWatching(root) }
-            catch { await recordIndexFailure(root: root, error: error) }
+            catch { await handleRootFailure(root, error: error) }
         }
         onDeadlinesChanged()
     }
 
     func reconcileManagedRoots(at paths: [String]) async throws {
-        await operationLock.acquire()
-        defer { operationLock.release() }
         let selectedPaths = Set(paths.map(RuleScope.normalized))
         guard !selectedPaths.isEmpty else { return }
+        for session in sessions.values where selectedPaths.contains(session.root.path) {
+            session.consumer.cancel()
+            session.initialScan?.cancel()
+        }
+        await operationLock.acquire()
+        defer { operationLock.release() }
         let snapshot = try await store.loadSnapshot()
         for root in snapshot.managedRoots where selectedPaths.contains(root.path) {
-            if let session = sessions.removeValue(forKey: root.id) {
-                session.consumer.cancel()
-                session.initialScan?.cancel()
-                session.continuation.finish()
-                session.eventStream.stop()
-            }
+            retryTasks.removeValue(forKey: root.id)?.cancel()
+            if let session = sessions.removeValue(forKey: root.id) { tearDown(session) }
             try await store.removeDeadlines(atOrBelow: root.path)
             do { try await startWatching(root) }
-            catch { await recordIndexFailure(root: root, error: error) }
+            catch { await handleRootFailure(root, error: error) }
+        }
+        onDeadlinesChanged()
+    }
+
+    /// After wake, every root resumes from its saved event cursor (FSEvents replays what was missed);
+    /// a full scan only happens for roots without a cursor or without a live session.
+    func resumeAfterWake() async throws {
+        await operationLock.acquire()
+        defer { operationLock.release() }
+        let snapshot = try await store.loadSnapshot()
+        for root in snapshot.managedRoots {
+            retryTasks.removeValue(forKey: root.id)?.cancel()
+            if let session = sessions.removeValue(forKey: root.id) { tearDown(session) }
+            do { try await startWatching(root, replayFromCursorWithoutScan: true) }
+            catch { await handleRootFailure(root, error: error) }
         }
         onDeadlinesChanged()
     }
@@ -253,13 +360,21 @@ public actor ManagedRootIndexer {
         let eventCount = min(event.paths.count, event.flags.count)
         let rootChangedFlag = UInt32(kFSEventStreamEventFlagRootChanged)
         if (0..<eventCount).contains(where: { UInt32(event.flags[$0]) & rootChangedFlag != 0 }) {
-            diagnosticsRecorder.recordRecovery()
             session.recoveryLatch.request()
+            statuses[rootID]?.state = .recovering
             Task { await self.recover(rootID: rootID) }
             return
         }
         let recoveryMask = UInt32(kFSEventStreamEventFlagMustScanSubDirs | kFSEventStreamEventFlagUserDropped | kFSEventStreamEventFlagKernelDropped)
         if event.requiresRecovery || (0..<eventCount).contains(where: { UInt32(event.flags[$0]) & recoveryMask != 0 }) {
+            let delay = recoveryDelay(for: rootID)
+            if delay > 0 {
+                // Repeated recoveries back off instead of rescanning the tree for every flood.
+                session.recoveryLatch.request()
+                statuses[rootID]?.state = .recovering
+                Task { await self.recover(rootID: rootID, delay: delay) }
+                return
+            }
             diagnosticsRecorder.recordRecovery()
             let snapshot = try await store.loadSnapshot()
             try await scan(session.access.url, root: session.root, snapshot: snapshot, includeRoot: false)
@@ -287,9 +402,11 @@ public actor ManagedRootIndexer {
             coalesced[path] = change
         }
 
+        // Existence is read once per path, never inside the comparator.
+        let existence = Dictionary(uniqueKeysWithValues: coalesced.keys.map { ($0, Self.pathExistsWithoutFollowingSymlinks($0)) })
         let paths = coalesced.keys.sorted {
-            let lhsExists = fileManager.fileExists(atPath: $0)
-            let rhsExists = fileManager.fileExists(atPath: $1)
+            let lhsExists = existence[$0] ?? false
+            let rhsExists = existence[$1] ?? false
             if lhsExists != rhsExists { return lhsExists }
             let lhsDepth = $0.split(separator: "/").count
             let rhsDepth = $1.split(separator: "/").count
@@ -298,66 +415,89 @@ public actor ManagedRootIndexer {
         }
         let snapshot = try await store.loadSnapshot()
         let now = clock.now()
+        let tracksProjectActivity = snapshot.rules.contains { $0.expiryBasis == .projectActivity && $0.state != .paused }
         var scannedScopes: [String] = []
         var affectedProjects: Set<String> = []
+        var failedPaths = 0
+        var firstFailure: Error?
 
         for path in paths {
+            try Task.checkCancellation()
             guard isWithinManagedRoot(path, rootPath: session.root.path),
                   !scannedScopes.contains(where: { path == $0 || path.hasPrefix($0 + "/") }) else { continue }
-            let flags = coalesced[path]?.flags ?? 0
-            let exists = fileManager.fileExists(atPath: path)
-            if !exists {
+            // Ignored subtrees (.git, node_modules, ...) are skipped at event time exactly as the scan skips them.
+            if tracksProjectActivity,
+               hasIgnoredProjectComponent(in: URL(fileURLWithPath: path).deletingLastPathComponent().path) { continue }
+            do {
+                let flags = coalesced[path]?.flags ?? 0
+                let exists = Self.pathExistsWithoutFollowingSymlinks(path)
+                if !exists {
+                    if isMeaningfulProjectActivity(path),
+                       let projectPath = try await store.recordProjectActivity(at: path, date: now) {
+                        affectedProjects.insert(projectPath)
+                    }
+                    try await store.removeDeadlines(atOrBelow: path)
+                    try await store.removeObservedActivity(atOrBelow: path)
+                    try await store.removeProjectActivity(atOrBelow: path)
+                    if isProjectMarker(path),
+                       let parent = existingProjectScanParent(for: path, root: session.root) {
+                        try await scan(parent, root: session.root, snapshot: snapshot, includeRoot: true)
+                        scannedScopes.append(parent.path)
+                    }
+                    continue
+                }
+
+                // A symlink (or an entry that vanished meanwhile) is simply not indexable.
+                guard let candidate = try await inspectIfIndexable(path) else { continue }
+                let isMarker = isProjectMarker(path)
+                let isDirectory = candidate.kind == .directory
+                let isCreatedOrRenamed = flags & UInt32(kFSEventStreamEventFlagItemCreated | kFSEventStreamEventFlagItemRenamed) != 0
+                if isMarker {
+                    let scanPath = URL(fileURLWithPath: path).deletingLastPathComponent()
+                    try await scan(scanPath, root: session.root, snapshot: snapshot, includeRoot: true)
+                    scannedScopes.append(scanPath.path)
+                    if let refreshed = try await inspectIfIndexable(path) {
+                        try await index(refreshed, snapshot: snapshot, activityAt: now)
+                    }
+                    continue
+                }
+
+                if isDirectory && isCreatedOrRenamed {
+                    let directory = URL(fileURLWithPath: path, isDirectory: true)
+                    try await scan(directory, root: session.root, snapshot: snapshot, includeRoot: true)
+                    scannedScopes.append(directory.path)
+                    continue
+                }
+
                 if isMeaningfulProjectActivity(path),
+                   (!isDirectory || isCreatedOrRenamed),
                    let projectPath = try await store.recordProjectActivity(at: path, date: now) {
                     affectedProjects.insert(projectPath)
                 }
-                try await store.removeDeadlines(atOrBelow: path)
-                try await store.removeObservedActivity(atOrBelow: path)
-                try await store.removeProjectActivity(atOrBelow: path)
-                if isProjectMarker(path),
-                   let parent = existingProjectScanParent(for: path, root: session.root) {
-                    try await scan(parent, root: session.root, snapshot: snapshot, includeRoot: true)
-                    scannedScopes.append(parent.path)
-                }
-                continue
+                try await index(candidate, snapshot: snapshot, activityAt: now)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                // One bad path must not abort the rest of the batch.
+                failedPaths += 1
+                if firstFailure == nil { firstFailure = error }
             }
-
-            guard let candidate = try await fileAccess.inspect(path: path) else { continue }
-            let isMarker = isProjectMarker(path)
-            let isDirectory = candidate.kind == .directory
-            let isCreatedOrRenamed = flags & UInt32(kFSEventStreamEventFlagItemCreated | kFSEventStreamEventFlagItemRenamed) != 0
-            if isMarker {
-                let scanPath = URL(fileURLWithPath: path).deletingLastPathComponent()
-                try await scan(scanPath, root: session.root, snapshot: snapshot, includeRoot: true)
-                scannedScopes.append(scanPath.path)
-                if let refreshed = try await fileAccess.inspect(path: path) {
-                    try await index(refreshed, snapshot: snapshot, activityAt: now)
-                }
-                continue
-            }
-
-            if isDirectory && isCreatedOrRenamed {
-                let directory = URL(fileURLWithPath: path, isDirectory: true)
-                try await scan(directory, root: session.root, snapshot: snapshot, includeRoot: true)
-                scannedScopes.append(directory.path)
-                continue
-            }
-
-            if isMeaningfulProjectActivity(path),
-               (!isDirectory || isCreatedOrRenamed),
-               let projectPath = try await store.recordProjectActivity(at: path, date: now) {
-                affectedProjects.insert(projectPath)
-            }
-            try await index(candidate, snapshot: snapshot, activityAt: now)
         }
 
         for projectPath in affectedProjects.sorted()
             where !scannedScopes.contains(where: { projectPath == $0 || projectPath.hasPrefix($0 + "/") }) {
             do { try await refreshDeadlines(atOrBelow: projectPath, snapshot: snapshot) }
-            catch { throw SQLiteSafetyStoreError.statementFailed("refresh project inactivity deadlines: \(error)") }
+            catch is CancellationError { throw CancellationError() }
+            catch {
+                failedPaths += 1
+                if firstFailure == nil { firstFailure = SQLiteSafetyStoreError.statementFailed("refresh project inactivity deadlines: \(error)") }
+            }
         }
-        if !session.recoveryLatch.isRequired,
+        if let firstFailure {
+            await recordIndexFailure(root: session.root, error: firstFailure, summary: "\(failedPaths) changed path(s) could not be indexed")
+        } else if !session.recoveryLatch.isRequired,
            let eventID = coalesced.values.compactMap(\.eventID).max() {
+            // The cursor only advances past batches that were fully processed; otherwise a restart replays them.
             do { try await store.saveEventCursor(for: rootID, eventID: eventID) }
             catch { throw SQLiteSafetyStoreError.statementFailed("save event cursor: \(error)") }
         }
@@ -374,13 +514,14 @@ public actor ManagedRootIndexer {
     private func refreshDeadlines(atOrBelow path: String, snapshot: PolicySnapshot) async throws {
         var cursor: String?
         repeat {
+            try Task.checkCancellation()
             let page: PersistedDeadlinePage
             do { page = try await store.deadlinePage(atOrBelow: path, afterIdentityKey: cursor) }
             catch { throw SQLiteSafetyStoreError.statementFailed("query project deadline page: \(error)") }
             for deadline in page.deadlines {
-                guard let candidate = try await fileAccess.inspect(path: deadline.identity.pathHint),
+                guard let candidate = try await inspectIfIndexable(deadline.identity.pathHint),
                       candidate.identity == deadline.identity else {
-                    do { try await store.removeDeadline(for: deadline.identity) }
+                    do { try await store.removeDeadline(for: deadline.identity, scheduledAt: deadline.scheduledAt) }
                     catch { throw SQLiteSafetyStoreError.statementFailed("remove stale project deadline: \(error)") }
                     continue
                 }
@@ -391,7 +532,7 @@ public actor ManagedRootIndexer {
                     do { try await store.saveDeadline(updated) }
                     catch { throw SQLiteSafetyStoreError.statementFailed("save refreshed project deadline: \(error)") }
                 } else {
-                    do { try await store.removeDeadline(for: deadline.identity) }
+                    do { try await store.removeDeadline(for: deadline.identity, scheduledAt: deadline.scheduledAt) }
                     catch { throw SQLiteSafetyStoreError.statementFailed("remove ineligible project deadline: \(error)") }
                 }
             }
@@ -400,7 +541,8 @@ public actor ManagedRootIndexer {
         } while cursor != nil
     }
 
-    private func startWatching(_ root: ManagedRoot) async throws {
+    private func startWatching(_ root: ManagedRoot, replayFromCursorWithoutScan: Bool = false) async throws {
+        statuses[root.id] = RootStatusEntry(root: root, state: .indexing, detail: nil)
         let resolvedURL: URL
         if let bookmarkResolver {
             resolvedURL = try bookmarkResolver(root)
@@ -412,7 +554,14 @@ public actor ManagedRootIndexer {
                 relativeTo: nil,
                 bookmarkDataIsStale: &stale
             )
-            guard !stale else { throw ManagedRootIndexError.staleOrMovedBookmark(root.path) }
+            if stale {
+                // A stale bookmark that still resolves to the managed path is repaired in place;
+                // one that resolves elsewhere means the folder moved and needs the user to choose it again.
+                guard RuleScope.normalized(resolvedURL.path) == root.path else {
+                    throw ManagedRootIndexError.staleOrMovedBookmark(root.path)
+                }
+                try await refreshBookmark(for: root, at: resolvedURL)
+            }
         }
         guard RuleScope.normalized(resolvedURL.path) == root.path else {
             throw ManagedRootIndexError.staleOrMovedBookmark(root.path)
@@ -448,16 +597,37 @@ public actor ManagedRootIndexer {
             for await event in events {
                 guard !Task.isCancelled else { return }
                 do { try await self?.processChanges(event, for: root.id) }
-                catch { await self?.recordIndexFailure(root: root, error: error) }
+                catch is CancellationError { return }
+                catch { await self?.handleEventFailure(root: root, error: error) }
             }
         }
-        let session = RootWatchSession(root: root, access: access, eventStream: stream, continuation: continuation, consumer: consumer, recoveryLatch: recoveryLatch, initialScan: nil)
-        sessions[root.id] = session
-        let initialScan = Task { [weak self] in
-            guard let self else { return }
-            await self.scanRoot(rootID: root.id)
-        }
+        let scansNow = !(replayFromCursorWithoutScan && savedCursor != nil)
+        let initialScan: Task<Void, Never>? = scansNow
+            ? Task { [weak self] in
+                guard let self else { return }
+                await self.scanRoot(rootID: root.id)
+            }
+            : nil
         sessions[root.id] = RootWatchSession(root: root, access: access, eventStream: stream, continuation: continuation, consumer: consumer, recoveryLatch: recoveryLatch, initialScan: initialScan)
+        if !scansNow {
+            statuses[root.id] = RootStatusEntry(root: root, state: .watching, detail: nil)
+            retryAttempts[root.id] = nil
+        }
+    }
+
+    private func refreshBookmark(for root: ManagedRoot, at url: URL) async throws {
+        let started = url.startAccessingSecurityScopedResource()
+        defer { if started { url.stopAccessingSecurityScopedResource() } }
+        let data = try url.bookmarkData(options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil)
+        try await store.updateManagedRootBookmark(
+            rootID: root.id,
+            bookmarkData: data,
+            auditEvent: TrashAuditEvent(
+                occurredAt: clock.now(),
+                kind: .safetySkipped,
+                detail: "Refreshed the stale access bookmark for \(root.path)."
+            )
+        )
     }
 
     private func scanRoot(rootID: UUID) async {
@@ -467,46 +637,186 @@ public actor ManagedRootIndexer {
         do {
             let snapshot = try await store.loadSnapshot()
             try await scan(session.access.url, root: session.root, snapshot: snapshot, includeRoot: false)
+            statuses[rootID] = RootStatusEntry(root: session.root, state: .watching, detail: nil)
+            retryAttempts[rootID] = nil
             onDeadlinesChanged()
         } catch {
-            await recordIndexFailure(root: session.root, error: error)
+            await handleRootFailure(session.root, error: error)
         }
-
     }
-    private func recover(rootID: UUID) async {
-        guard recoveryRequests.insert(rootID).inserted else { return }
-        await operationLock.acquire()
-        defer {
-            recoveryRequests.remove(rootID)
-            operationLock.release()
+
+    /// Debounce + exponential backoff for recovery rescans. The first recovery in a window is immediate.
+    private func recoveryDelay(for rootID: UUID) -> TimeInterval {
+        let now = clock.now()
+        var streak = 0
+        if let last = lastRecovery[rootID], now.timeIntervalSince(last.at) < Self.recoveryFloodWindow {
+            streak = last.streak + 1
         }
+        lastRecovery[rootID] = (now, streak)
+        return streak == 0 ? 0 : min(60, pow(2, Double(streak)))
+    }
+
+    private func recover(rootID: UUID, delay explicitDelay: TimeInterval? = nil) async {
+        guard recoveryRequests.insert(rootID).inserted else { return }
+        defer { recoveryRequests.remove(rootID) }
+        let delay = explicitDelay ?? recoveryDelay(for: rootID)
+        if delay > 0 { try? await sleep(delay) }
+        await operationLock.acquire()
+        defer { operationLock.release() }
         guard let session = sessions[rootID] else { return }
         diagnosticsRecorder.recordRecovery()
-        session.eventStream.stop()
-        session.continuation.finish()
-        session.consumer.cancel()
-        session.initialScan?.cancel()
+        statuses[rootID]?.state = .recovering
+        tearDown(session)
         sessions.removeValue(forKey: rootID)
         do {
             try await startWatching(session.root)
             onDeadlinesChanged()
         } catch {
-            await recordIndexFailure(root: session.root, error: error)
+            await handleRootFailure(session.root, error: error)
         }
     }
 
-    private func scan(_ url: URL, root: ManagedRoot, snapshot: PolicySnapshot, includeRoot: Bool) async throws {
+    /// A processing failure means events were consumed without being indexed; rescan via the debounced recovery path.
+    private func handleEventFailure(root: ManagedRoot, error: Error) async {
+        await recordIndexFailure(root: root, error: error)
+        guard let session = sessions[root.id], !session.recoveryLatch.isRequired else { return }
+        session.recoveryLatch.request()
+        Task { await self.recover(rootID: root.id) }
+    }
 
+    private func handleRootFailure(_ root: ManagedRoot, error: Error) async {
+        if error is CancellationError { return }
+        let (state, detail) = Self.classify(error)
+        statuses[root.id] = RootStatusEntry(root: root, state: state, detail: detail)
+        await recordIndexFailure(root: root, error: error)
+        scheduleRetry(for: root)
+    }
+
+    /// Failed starts, scans and recoveries are retried with capped exponential backoff until the root works
+    /// or is removed; mount events also trigger an immediate reconcile.
+    private func scheduleRetry(for root: ManagedRoot) {
+        retryTasks[root.id]?.cancel()
+        let attempt = retryAttempts[root.id, default: 0]
+        retryAttempts[root.id] = attempt + 1
+        let delay = min(300, 2 * pow(2, Double(min(attempt, 8))))
+        let sleep = self.sleep
+        retryTasks[root.id] = Task { [weak self] in
+            do { try await sleep(delay) } catch { return }
+            await self?.retryRoot(rootID: root.id, fallback: root)
+        }
+    }
+
+    private func retryRoot(rootID: UUID, fallback: ManagedRoot) async {
+        await operationLock.acquire()
+        defer { operationLock.release() }
+        guard !Task.isCancelled else { return }
+        retryTasks[rootID] = nil
+        let snapshot: PolicySnapshot
+        do { snapshot = try await store.loadSnapshot() }
+        catch {
+            scheduleRetry(for: fallback)
+            return
+        }
+        guard let root = snapshot.managedRoots.first(where: { $0.id == rootID }) else {
+            statuses[rootID] = nil
+            retryAttempts[rootID] = nil
+            return
+        }
+        if let session = sessions.removeValue(forKey: rootID) { tearDown(session) }
+        do {
+            try await store.removeDeadlines(atOrBelow: root.path)
+            try await startWatching(root)
+        } catch {
+            await handleRootFailure(root, error: error)
+        }
+    }
+
+    private static func classify(_ error: Error) -> (AgentRootState, String?) {
+        if let indexError = error as? ManagedRootIndexError {
+            switch indexError {
+            case .staleOrMovedBookmark:
+                return (.bookmarkStale, "The folder moved or its access bookmark is out of date. Choose the folder again.")
+            case .unsafeRoot:
+                return (.error, "The managed folder is not a plain directory.")
+            case .observedActivityMissing:
+                return (.error, "\(error)")
+            }
+        }
+        let nsError = error as NSError
+        if nsError.domain == NSCocoaErrorDomain {
+            switch CocoaError.Code(rawValue: nsError.code) {
+            case .fileReadNoPermission, .fileWriteNoPermission:
+                return (.permissionDenied, "TinyPrune does not have permission to read this folder.")
+            case .fileNoSuchFile, .fileReadNoSuchFile:
+                return (.offline, "The folder is not available (disconnected or removed).")
+            default: break
+            }
+        }
+        if nsError.domain == NSPOSIXErrorDomain {
+            switch nsError.code {
+            case Int(EACCES), Int(EPERM):
+                return (.permissionDenied, "TinyPrune does not have permission to read this folder.")
+            case Int(ENOENT), Int(ENOTDIR), Int(ENXIO), Int(ENODEV):
+                return (.offline, "The folder is not available (disconnected or removed).")
+            default: break
+            }
+        }
+        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError, underlying !== nsError {
+            return classify(underlying)
+        }
+        return (.error, "\(error)")
+    }
+
+    private func scan(_ url: URL, root: ManagedRoot, snapshot: PolicySnapshot, includeRoot: Bool) async throws {
+        // Fail before touching any persisted state if the directory itself cannot be read.
+        try Self.requireReadableDirectory(url.path)
+        try Task.checkCancellation()
         let scanStarted = ProcessInfo.processInfo.systemUptime
         let cpuStarted = processCPUSeconds()
         var indexedEntries: UInt64 = 0
         try await store.removeDeadlines(atOrBelow: url.path)
         let observationTime = clock.now()
         let projectScanID = try await store.beginProjectActivityScan()
+        do {
+            indexedEntries = try await scanBody(
+                url, root: root, snapshot: snapshot, includeRoot: includeRoot,
+                scanID: projectScanID, observationTime: observationTime
+            )
+        } catch {
+            try? await store.endProjectActivityScan(scanID: projectScanID)
+            throw error
+        }
+        let usage = processUsage()
+        diagnosticsRecorder.recordScan(
+            entries: indexedEntries,
+            duration: ProcessInfo.processInfo.systemUptime - scanStarted,
+            cpu: max(0, processCPUSeconds() - cpuStarted),
+            fullTree: !includeRoot && url.standardizedFileURL.path == root.path,
+            residentBytes: usage.residentBytes
+        )
+        onDeadlinesChanged()
+    }
+
+    private static func requireReadableDirectory(_ path: String) throws {
+        guard let handle = opendir(path) else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        closedir(handle)
+    }
+
+    private func scanBody(
+        _ url: URL,
+        root: ManagedRoot,
+        snapshot: PolicySnapshot,
+        includeRoot: Bool,
+        scanID projectScanID: String,
+        observationTime: Date
+    ) async throws -> UInt64 {
+        var indexedEntries: UInt64 = 0
         let tracksProjectActivity = snapshot.rules.contains { $0.expiryBasis == .projectActivity && $0.state != .paused }
         let batches = ScanBatchAccumulator()
 
-        if includeRoot, let candidate = try await fileAccess.inspect(path: url.path) {
+        if includeRoot, let candidate = try await inspectIfIndexable(url.path) {
             indexedEntries &+= 1
             try await collectProjectScanCandidate(
                 candidate,
@@ -519,25 +829,37 @@ public actor ManagedRootIndexer {
             )
         }
 
-        var enumerationError: Error?
+        // Unreadable subdirectories and entries that vanish mid-scan are skipped and reported once;
+        // they never abort indexing of the rest of the tree.
+        var unreadableEntries = 0
+        var firstUnreadable: Error?
         guard let enumerator = fileManager.enumerator(
             at: url,
             includingPropertiesForKeys: [.isSymbolicLinkKey],
             options: [],
             errorHandler: { _, error in
-                enumerationError = error
-                return false
+                unreadableEntries += 1
+                if firstUnreadable == nil { firstUnreadable = error }
+                return true
             }
         ) else {
             throw CocoaError(.fileReadUnknown)
         }
 
         while let childURL = enumerator.nextObject() as? URL {
-            let isSymbolicLink = try childURL.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink ?? false
-            if isSymbolicLink {
+            try Task.checkCancellation()
+            if let values = try? childURL.resourceValues(forKeys: [.isSymbolicLinkKey]), values.isSymbolicLink == true {
                 continue
             }
-            guard let candidate = try await fileAccess.inspect(path: childURL.path) else { continue }
+            let inspected: RuleCandidate?
+            do { inspected = try await inspectIfIndexable(childURL.path) }
+            catch is CancellationError { throw CancellationError() }
+            catch {
+                unreadableEntries += 1
+                if firstUnreadable == nil { firstUnreadable = error }
+                continue
+            }
+            guard let candidate = inspected else { continue }
             indexedEntries &+= 1
             try await collectProjectScanCandidate(
                 candidate,
@@ -555,21 +877,19 @@ public actor ManagedRootIndexer {
             }
         }
 
-        if let enumerationError { throw enumerationError }
         try await persistProjectScanBatch(batches.take(), scanID: projectScanID)
         try await store.finishProjectActivityScan(scanID: projectScanID, atOrBelow: url.path)
         if tracksProjectActivity {
             try await scanDeadlines(url, snapshot: snapshot, includeRoot: includeRoot, initialObservationAt: observationTime)
         }
-        let usage = processUsage()
-        diagnosticsRecorder.recordScan(
-            entries: indexedEntries,
-            duration: ProcessInfo.processInfo.systemUptime - scanStarted,
-            cpu: max(0, processCPUSeconds() - cpuStarted),
-            fullTree: !includeRoot && url.standardizedFileURL.path == root.path,
-            residentBytes: usage.residentBytes
-        )
-        onDeadlinesChanged()
+        if let firstUnreadable {
+            await recordIndexFailure(
+                root: root,
+                error: firstUnreadable,
+                summary: "\(unreadableEntries) unreadable entr\(unreadableEntries == 1 ? "y was" : "ies were") skipped while indexing"
+            )
+        }
+        return indexedEntries
     }
 
     private func collectProjectScanCandidate(
@@ -623,30 +943,29 @@ public actor ManagedRootIndexer {
         initialObservationAt: Date
     ) async throws {
         let batches = ScanBatchAccumulator()
-        if includeRoot, let candidate = try await fileAccess.inspect(path: url.path) {
+        if includeRoot, let candidate = try await inspectIfIndexable(url.path) {
             try await collectDeadline(candidate, snapshot: snapshot, initialObservationAt: initialObservationAt, batches: batches)
         }
-        var enumerationError: Error?
         guard let enumerator = fileManager.enumerator(
             at: url,
             includingPropertiesForKeys: [.isSymbolicLinkKey],
             options: [],
-            errorHandler: { _, error in
-                enumerationError = error
-                return false
-            }
+            errorHandler: { _, _ in true }
         ) else {
             throw CocoaError(.fileReadUnknown)
         }
         while let childURL = enumerator.nextObject() as? URL {
-            let isSymbolicLink = try childURL.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink ?? false
-            if isSymbolicLink {
+            try Task.checkCancellation()
+            if let values = try? childURL.resourceValues(forKeys: [.isSymbolicLinkKey]), values.isSymbolicLink == true {
                 continue
             }
-            guard let candidate = try await fileAccess.inspect(path: childURL.path) else { continue }
+            let inspected: RuleCandidate?
+            do { inspected = try await inspectIfIndexable(childURL.path) }
+            catch is CancellationError { throw CancellationError() }
+            catch { continue }
+            guard let candidate = inspected else { continue }
             try await collectDeadline(candidate, snapshot: snapshot, initialObservationAt: initialObservationAt, batches: batches)
         }
-        if let enumerationError { throw enumerationError }
         let batch = batches.take()
         try await persistBatch(deadlines: batch.deadlines, activities: batch.observedActivity)
     }
@@ -675,7 +994,7 @@ public actor ManagedRootIndexer {
         }
         let path = URL(fileURLWithPath: candidate.identity.pathHint).deletingLastPathComponent().standardizedFileURL.path
         guard isWithinManagedRoot(path, rootPath: managedRoot.path),
-              let rootCandidate = try await fileAccess.inspect(path: path),
+              let rootCandidate = try await inspectIfIndexable(path),
               rootCandidate.kind == .directory else { return nil }
         return PersistedProjectActivity(
             identity: rootCandidate.identity,
@@ -789,13 +1108,19 @@ public actor ManagedRootIndexer {
         return candidatePath == rootPath || candidatePath.hasPrefix(rootPath + "/")
     }
 
-    private func recordIndexFailure(root: ManagedRoot, error: Error) async {
+    /// Audit entries are rate-limited per root so a persistent failure cannot flood the log.
+    private func recordIndexFailure(root: ManagedRoot, error: Error, summary: String? = nil) async {
+        let now = clock.now()
+        if let last = lastFailureAudit[root.id], now.timeIntervalSince(last) < Self.failureAuditInterval { return }
+        lastFailureAudit[root.id] = now
+        let reason = summary.map { "\($0): \(error)" } ?? "\(error)"
         try? await store.append(TrashAuditEvent(
-            occurredAt: Date(),
+            occurredAt: now,
             kind: .safetySkipped,
-            detail: "Indexing root \(root.path) stopped safely: \(error)"
+            detail: "Indexing root \(root.path) stopped safely: \(reason)"
         ))
     }
+
     private func processUsage() -> (residentBytes: UInt64, cpuSeconds: Double) {
         var usage = rusage()
         guard getrusage(RUSAGE_SELF, &usage) == 0 else { return (0, 0) }

@@ -1,14 +1,13 @@
 import Foundation
 import TinyPruneDomain
 import TinyPruneEngine
-import TinyPrunePersistence
 
 /// The single evaluation path shared by the indexer (which persists deadlines) and the read-only rule preview.
 /// It owns how persisted activity is overlaid on a filesystem candidate and how the rule set is resolved, so a
 /// dry run and a real index pass cannot disagree about what a rule matches.
-enum IndexedCandidateEvaluation {
+public enum IndexedCandidateEvaluation {
     /// Read-only hydration; absent observation records are treated exactly like a first indexing pass.
-    static func hydrate(
+    public static func hydrate(
         _ candidate: RuleCandidate,
         rules: [LifetimeRule],
         store: SQLiteSafetyStore,
@@ -36,19 +35,19 @@ enum IndexedCandidateEvaluation {
         }
         return evaluated
     }
-    static func usesObservedActivity(_ candidate: RuleCandidate, rules: [LifetimeRule]) -> Bool {
+    public static func usesObservedActivity(_ candidate: RuleCandidate, rules: [LifetimeRule]) -> Bool {
         rules.contains { rule in
             (rule.expiryBasis == .firstObserved || rule.expiryBasis == .observedActivity) && ruleAppliesToCandidate(rule, candidate)
         }
     }
 
-    static func usesProjectActivity(_ candidate: RuleCandidate, rules: [LifetimeRule]) -> Bool {
+    public static func usesProjectActivity(_ candidate: RuleCandidate, rules: [LifetimeRule]) -> Bool {
         rules.contains { rule in
             rule.expiryBasis == .projectActivity && ruleAppliesToCandidate(rule, candidate)
         }
     }
 
-    static func applying(observedActivity activity: PersistedObservedActivity, to candidate: RuleCandidate) -> RuleCandidate {
+    public static func applying(observedActivity activity: PersistedObservedActivity, to candidate: RuleCandidate) -> RuleCandidate {
         let timestamps = candidate.timestamps
         return RuleCandidate(
             identity: candidate.identity,
@@ -66,7 +65,7 @@ enum IndexedCandidateEvaluation {
         )
     }
 
-    static func applying(projectActivity: Date?, to candidate: RuleCandidate) -> RuleCandidate {
+    public static func applying(projectActivity: Date?, to candidate: RuleCandidate) -> RuleCandidate {
         let timestamps = candidate.timestamps
         return RuleCandidate(
             identity: candidate.identity,
@@ -86,7 +85,7 @@ enum IndexedCandidateEvaluation {
 
     /// Pause is enforced at execution time (scheduler idles, coordinator preflight suppresses). Deadlines are
     /// still indexed while paused so nothing seen during a pause needs a re-index when it lifts.
-    static func resolve(_ candidate: RuleCandidate, rules: [LifetimeRule], snapshot: PolicySnapshot) -> RuleResolution {
+    public static func resolve(_ candidate: RuleCandidate, rules: [LifetimeRule], snapshot: PolicySnapshot) -> RuleResolution {
         RuleResolver.resolve(
             candidate: candidate,
             rules: rules,
@@ -111,5 +110,13 @@ enum IndexedCandidateEvaluation {
             relativePath = candidate.name
         }
         return rule.matcher.matches(name: candidate.name, relativePath: relativePath, kind: candidate.kind)
+    }
+}
+
+extension SQLiteSafetyStore: CandidateHydrating {
+    /// Lets the trash coordinator re-evaluate a freshly inspected candidate with the same persisted activity the
+    /// indexer used when it scheduled the deadline.
+    public func hydrate(_ candidate: RuleCandidate, rules: [LifetimeRule], now: Date) async throws -> RuleCandidate {
+        try await IndexedCandidateEvaluation.hydrate(candidate, rules: rules, store: self, now: now)
     }
 }

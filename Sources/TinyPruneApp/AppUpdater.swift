@@ -5,6 +5,7 @@ import ServiceManagement
 import Sparkle
 import SwiftUI
 import TinyPruneIPC
+import TinyPruneUI
 
 /// Only the application owns Sparkle. The agent's cross-process gate guards every Trash execution.
 @MainActor
@@ -17,10 +18,13 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
     private var holdsInstallationGate = false
     private var installationScheduled = false
     private var retainsDownloadedUpdate = false
+    private var releaseNeedsRetry = false
+    private var cancellables = Set<AnyCancellable>()
     private let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
 
     override init() {
         super.init()
+        defer { reconcileHaltStatus() }
         let bundle = Bundle.main
         guard Self.isDeveloperIDSigned(), bundle.object(forInfoDictionaryKey: "TinyPruneSigning") as? String == "developer-id" else {
             availabilityReason = bundle.object(forInfoDictionaryKey: "TinyPruneDistribution") as? String == "homebrew"
@@ -156,10 +160,65 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
             holdsInstallationGate = false
             installationScheduled = false
             retainsDownloadedUpdate = false
+            releaseNeedsRetry = false
             safetyStatus = nil
+            reconcileHaltStatus()
         } catch {
-            availabilityReason = "Pruning remains stopped because update safety coordination could not finish: \(error.localizedDescription)"
+            // Never leave pruning stopped without telling anyone, and never give up: retry whenever the app is activated.
+            releaseNeedsRetry = true
+            safetyStatus = "Pruning remains stopped because update safety coordination could not finish: \(error.localizedDescription) TinyPrune will retry when you return to the app. If this persists, quit and reopen TinyPrune."
         }
+    }
+
+    /// Retries a release that failed earlier. Safe to call at any time.
+    private func retryPendingRelease() {
+        guard releaseNeedsRetry, !installationScheduled, !retainsDownloadedUpdate else { return }
+        releaseGate()
+    }
+
+    /// The durable marker is the truth: if it still exists while this process is not mid-update, pruning is stopped and
+    /// the UI must say so; if it is gone, any stale notice is cleared.
+    private func reconcileHaltStatus() {
+        guard !holdsInstallationGate else { return }
+        do {
+            if try gate.hasPendingInstallation() {
+                if safetyStatus == nil {
+                    safetyStatus = "Pruning is stopped because an app update was started and not finished. Check for Updates to resume it, or manually install the intended newer signed release and launch that version."
+                }
+            } else if safetyStatus != nil {
+                safetyStatus = nil
+            }
+        } catch {
+            safetyStatus = "Update safety status could not be read: \(error.localizedDescription)"
+        }
+    }
+
+    /// Publishes the halt state to the app model (Overview headline, header pill, menu bar) and keeps it current.
+    func bind(to model: AgentViewModel) {
+        $safetyStatus
+            .removeDuplicates()
+            .sink { [weak self, weak model] status in
+                MainActor.assumeIsolated {
+                    guard let model else { return }
+                    model.pruningHaltedReason = status
+                    model.pruningHaltResolution = status.map { _ in
+                        PruningHaltResolution(title: "Review Update…") { [weak self] in self?.reviewPendingUpdate() }
+                    }
+                }
+            }
+            .store(in: &cancellables)
+        NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+            .sink { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.retryPendingRelease()
+                    self?.reconcileHaltStatus()
+                }
+            }
+            .store(in: &cancellables)
+    }
+
+    private func reviewPendingUpdate() {
+        if availabilityReason == nil, controller != nil { controller?.checkForUpdates(nil) } else { showSafetyStatus() }
     }
 
     private static func isDeveloperIDSigned() -> Bool {

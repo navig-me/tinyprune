@@ -602,12 +602,14 @@ Choose a Folder
 Step 3:
 
 ```text id="0ef32e"
-Always recoverable.
+Moved to Trash, not deleted.
 ```
 
 Explain:
 
-> TinyPrune moves items to Trash. It does not permanently delete them.
+> TinyPrune moves items to Trash. It does not permanently delete them. Items stay in the Trash until you or macOS empty it; use Put Back in Finder to restore.
+
+> Implementation note: earlier drafts promised "always recoverable" and a ⌘Z undo, a Finder "Keep" tag, and daily summary notifications. None is implemented; the product makes no such claim. Recovery is Finder's Put Back, if available.
 
 Enable:
 
