@@ -331,10 +331,11 @@ private final class CompletionOnce: @unchecked Sendable {
         lock.withLock { requestSent = true }
     }
 
-    /// Connection loss maps to `.interrupted` once the request may have been delivered, `.unavailable` before.
-    func finishDisconnected() {
+    /// An interruption (the connection was established, then lost) maps to `.interrupted` once the request may have been
+    /// delivered. An invalidation without a prior interruption means the service could not be reached at all.
+    func finishDisconnected(interrupted: Bool) {
         let sent = lock.withLock { requestSent }
-        finish(.failure(sent ? .interrupted : .unavailable))
+        finish(.failure(interrupted && sent ? .interrupted : .unavailable))
     }
 
     func finish(_ result: Result<AgentResponse, AgentClientError>) {
@@ -374,12 +375,13 @@ public final class TinyPruneAgentClient: @unchecked Sendable {
         let once = CompletionOnce(completion)
         connection.remoteObjectInterface = NSXPCInterface(with: TinyPruneAgentProtocol.self)
         PeerRequirement.apply(to: connection)
-        connection.invalidationHandler = { once.finishDisconnected() }
-        connection.interruptionHandler = { once.finishDisconnected() }
+        connection.invalidationHandler = { once.finishDisconnected(interrupted: false) }
+        connection.interruptionHandler = { once.finishDisconnected(interrupted: true) }
         connection.resume()
 
-        let proxy = connection.remoteObjectProxyWithErrorHandler { _ in
-            once.finishDisconnected()
+        let proxy = connection.remoteObjectProxyWithErrorHandler { error in
+            // 4097 = NSXPCConnectionInterrupted; anything else (4099 invalid, 4101 code-signing) never reached the agent.
+            once.finishDisconnected(interrupted: (error as NSError).code == 4097)
             connection.invalidate()
         } as? TinyPruneAgentProtocol
         guard let proxy else {
