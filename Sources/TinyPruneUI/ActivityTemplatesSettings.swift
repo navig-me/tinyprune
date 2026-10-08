@@ -339,7 +339,7 @@ struct SettingsPage: View {
 
     @AppStorage("showMenuBarIcon") private var showMenuBarIcon = true
     @AppStorage("notificationsEnabled") private var notificationsEnabled = true
-    @AppStorage("checkForNewVersions") private var checkForNewVersions = false
+    @AppStorage("checkForNewVersions") private var checkForNewVersions = true
     @AppStorage("previewBroadByDefault") private var previewByDefault = true
     @State private var launchesAtLogin = false
     @State private var errorMessage: String?
@@ -404,7 +404,9 @@ struct SettingsPage: View {
                 Toggle("Show menu bar icon", isOn: $showMenuBarIcon)
                 Toggle("Notify only when attention is needed", isOn: $notificationsEnabled)
                 Toggle("Check for new versions", isOn: $checkForNewVersions)
-                    .help("Once a day, TinyPrune asks github.com for the list of public releases. Nothing about your files or rules is sent, and nothing is installed automatically. Off by default.")
+                Text("Once a day TinyPrune asks github.com for the list of public releases. Nothing about your files or rules is sent, and nothing is installed without your click. Turn off to stop all automatic update checks.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 LabeledContent("Background agent", value: agentStatus)
             }
             Section("Safety") {

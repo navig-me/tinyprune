@@ -9,7 +9,7 @@
 - Keep always wins: a kept item is never trashed, and neither is a folder containing one.
 - Preview runs matching and scheduling without trashing anything. Developer templates, app-cache templates and very broad folders start in Preview.
 - Local-first: the app has no telemetry and needs no account; filesystem metadata only (no file contents); no network access needed for core cleanup. The tinyprune.com website, separately, uses Google Analytics and PostHog.
-- Optional signed direct-download update checks use HTTPS. Homebrew copies update only through Homebrew; unsigned previews update manually, with an optional off-by-default setting that checks github.com once a day for a newer release and only offers a link or the brew upgrade command.
+- Optional signed direct-download update checks use HTTPS. Homebrew copies update only through Homebrew; unsigned previews update manually, with a daily github.com release check (on by default, can be turned off in Settings) that only offers a link or the brew upgrade command.
 - Very broad folders (home folder, /Users, /Volumes, /private, whole volumes) are Preview-only; Active rules on them are rejected. Dangerous system roots are refused.
 - Glob semantics: a glob without "/" matches the item name at any depth (gitignore-style); a glob with "/" matches the path relative to the folder; only *, ? and ** are supported (no classes, braces or negation). Keep matches by identity and falls back to the recorded path.
 - Downloads and Temporary Workspace templates act on top-level items only (non-recursive).

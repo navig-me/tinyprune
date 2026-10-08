@@ -7,7 +7,7 @@ import TinyPruneUI
 /// development builds). It only ever opens a link or copies a command; it never downloads or installs.
 ///
 /// Network use is deliberate and narrow: one HTTPS GET of the public release list on github.com, either when the
-/// user chooses "Check for Updates…" or, only if they opted in, at most once a day. No identifiers are sent.
+/// user chooses "Check for Updates…" or, unless they turned it off in Settings, at most once a day. No identifiers are sent.
 @MainActor
 final class ReleaseNotifier {
     private static let automaticKey = "checkForNewVersions"
@@ -38,13 +38,13 @@ final class ReleaseNotifier {
 
     func bind(to model: AgentViewModel) { self.model = model }
 
-    /// Starts the opt-in daily check. The setting is read each time, so turning it off takes effect immediately.
+    /// Starts the daily check (on unless the user disabled it). The setting is read each time, so turning it off takes effect immediately.
     func startAutomaticChecks() {
         guard automaticTask == nil else { return }
         automaticTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
-                if self.defaults.bool(forKey: Self.automaticKey), self.isDue() {
+                if self.defaults.object(forKey: Self.automaticKey) as? Bool ?? true, self.isDue() {
                     await self.check(manual: false)
                 }
                 try? await Task.sleep(for: .seconds(60 * 60))
