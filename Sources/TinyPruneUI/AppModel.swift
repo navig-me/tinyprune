@@ -57,6 +57,35 @@ package struct PruningHaltResolution {
     }
 }
 
+/// A newer release found by the optional, user-controlled version check (for builds without in-app installation).
+/// Nothing here installs anything: the actions only open a link or copy a command.
+package struct UpdateNotice {
+    package struct Action {
+        package let title: String
+        package let perform: @MainActor () -> Void
+        package init(title: String, perform: @escaping @MainActor () -> Void) {
+            self.title = title
+            self.perform = perform
+        }
+    }
+
+    package let version: String
+    package let message: String
+    package let primary: Action
+    package let secondary: Action?
+    package let skipVersion: @MainActor () -> Void
+    package let remindLater: @MainActor () -> Void
+
+    package init(version: String, message: String, primary: Action, secondary: Action?, skipVersion: @escaping @MainActor () -> Void, remindLater: @escaping @MainActor () -> Void) {
+        self.version = version
+        self.message = message
+        self.primary = primary
+        self.secondary = secondary
+        self.skipVersion = skipVersion
+        self.remindLater = remindLater
+    }
+}
+
 /// A folder the user picked, converted to a security-scoped managed root.
 package struct ChosenFolder {
     package let root: ManagedRoot
@@ -137,6 +166,8 @@ package final class AgentViewModel: ObservableObject {
     @Published package var pruningHaltedReason: String?
     /// Optional one-tap way out of `pruningHaltedReason`, supplied by the application (for example "Review Update…").
     @Published package var pruningHaltResolution: PruningHaltResolution?
+    /// A newer release is available. Set by the application; independent of pruning safety.
+    @Published package var updateNotice: UpdateNotice?
     /// Failure of the last menu-bar or quick action, shown where the action was offered.
     @Published package private(set) var actionError: String?
     @Published private var attentionSeenAt: Date?

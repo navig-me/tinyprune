@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Updates
+- New-version notice for builds that cannot update in-app (unsigned previews, Homebrew, development): "Check for Updates…" asks github.com for the public release list, and an optional, off-by-default setting does so once a day. A banner and menu-bar item offer Download (direct), Copy Upgrade Command (Homebrew), Release Notes, Skip This Version and Later. Nothing is downloaded or installed automatically, only links on this repository are ever offered, and no identifiers are sent.
+
 ## 0.1.1 - 2026-10-08
 
 ### Safety

@@ -164,6 +164,9 @@ package struct TinyPruneRootView: View {
                 action: model.pruningHaltResolution.map { resolution in { resolution.perform() } }
             )
         }
+        if let notice = model.updateNotice {
+            UpdateBanner(notice: notice) { model.updateNotice = nil }
+        }
         if model.overview != nil, let issue = model.connectionIssue {
             Banner(
                 title: "Showing the last known state",
@@ -239,6 +242,34 @@ private struct Banner: View {
     }
 }
 
+/// Offers a newer release. Calm and dismissible: it never interrupts and never installs anything itself.
+private struct UpdateBanner: View {
+    let notice: UpdateNotice
+    let dismiss: () -> Void
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Image(systemName: "arrow.down.circle").foregroundStyle(PrunePalette.plum).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("TinyPrune \(notice.version) is available").font(.headline)
+                Text(notice.message).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            Button("Skip This Version") { notice.skipVersion(); dismiss() }
+            Button("Later") { notice.remindLater(); dismiss() }
+            if let secondary = notice.secondary {
+                Button(secondary.title) { secondary.perform() }
+            }
+            Button(notice.primary.title) { notice.primary.perform() }
+                .keyboardShortcut(.defaultAction)
+        }
+        .accessibilityElement(children: .contain)
+        .padding(.horizontal, 32)
+        .padding(.vertical, 12)
+        .background(PrunePalette.plum.opacity(0.10))
+    }
+}
+
 private struct AgentUnavailableView: View {
     @EnvironmentObject private var model: AgentViewModel
     let message: String
@@ -287,6 +318,10 @@ package struct MenuBarContent: View {
                 if let resolution = model.pruningHaltResolution {
                     Button(resolution.title) { resolution.perform() }
                 }
+            }
+            if let notice = model.updateNotice {
+                Text("TinyPrune \(notice.version) is available")
+                Button(notice.primary.title) { notice.primary.perform() }
             }
             Divider()
             let active = model.activeUpcoming

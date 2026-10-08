@@ -21,12 +21,16 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
     private var releaseNeedsRetry = false
     private var cancellables = Set<AnyCancellable>()
     private let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
+    /// Builds that cannot install updates in-app (unsigned, Homebrew, no feed key) offer a manual-download notice instead.
+    private var usesReleaseNotifier = false
+    private let releases = ReleaseNotifier()
 
     override init() {
         super.init()
         defer { reconcileHaltStatus() }
         let bundle = Bundle.main
         guard Self.isDeveloperIDSigned(), bundle.object(forInfoDictionaryKey: "TinyPruneSigning") as? String == "developer-id" else {
+            usesReleaseNotifier = true
             availabilityReason = bundle.object(forInfoDictionaryKey: "TinyPruneDistribution") as? String == "homebrew"
                 ? "This copy is managed by Homebrew. Update with brew upgrade --cask tinyprune. In-app checks and installations are disabled."
                 : "Development and unsigned preview copies require manual downloads. In-app update checks and installations are disabled."
@@ -63,12 +67,14 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
             return
         }
         guard bundle.object(forInfoDictionaryKey: "TinyPruneDistribution") as? String != "homebrew" else {
+            usesReleaseNotifier = true
             availabilityReason = "This copy is managed by Homebrew. Update with brew upgrade --cask tinyprune. In-app checks and installations are disabled."
             return
         }
         guard bundle.object(forInfoDictionaryKey: "TinyPruneUpdatesEnabled") as? Bool == true,
               let key = bundle.object(forInfoDictionaryKey: "SUPublicEDKey") as? String,
               Data(base64Encoded: key)?.count == 32 else {
+            usesReleaseNotifier = true
             availabilityReason = "This release has no configured update verification public key. Download a newer signed release manually."
             return
         }
@@ -87,8 +93,12 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
         alert.runModal()
     }
 
+    var usesGitHubReleaseCheck: Bool { usesReleaseNotifier }
+
     func checkForUpdates() {
-        if let availabilityReason {
+        if usesReleaseNotifier {
+            releases.checkManually()
+        } else if let availabilityReason {
             let alert = NSAlert()
             alert.messageText = "Updates unavailable"
             alert.informativeText = availabilityReason
@@ -195,6 +205,8 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
 
     /// Publishes the halt state to the app model (Overview headline, header pill, menu bar) and keeps it current.
     func bind(to model: AgentViewModel) {
+        releases.bind(to: model)
+        if usesReleaseNotifier { releases.startAutomaticChecks() }
         $safetyStatus
             .removeDuplicates()
             .sink { [weak self, weak model] status in
@@ -237,7 +249,7 @@ struct UpdateCommand: View {
     var body: some View {
         Button("Check for Updates…") { updater.checkForUpdates() }
             .disabled(updater.availabilityReason == nil && !updater.canCheckForUpdates)
-            .help(updater.availabilityReason ?? "Check the signed direct-download update feed")
+            .help(updater.usesGitHubReleaseCheck ? "Look for a newer release on GitHub. Nothing is installed automatically." : (updater.availabilityReason ?? "Check the signed direct-download update feed"))
         if updater.safetyStatus != nil {
             Button("Update Safety Status…") { updater.showSafetyStatus() }
         }
