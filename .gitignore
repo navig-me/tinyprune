@@ -3,3 +3,4 @@
 .cloudflare/
 .wrangler/
 website/stats.json
+website/badge.json

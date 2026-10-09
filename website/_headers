@@ -9,3 +9,5 @@
   Cache-Control: no-transform, public, max-age=300
 /stats.json
   Cache-Control: public, max-age=3600
+/badge.json
+  Cache-Control: public, max-age=3600

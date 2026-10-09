@@ -22,5 +22,9 @@ for (let page = 1; ; page += 1) {
 }
 
 const stats = { downloads: total, releases, updatedAt: new Date().toISOString() };
+
+// Shields.io "endpoint" badge for the GitHub README, so the badge and the website always show the same number.
+const badge = { schemaVersion: 1, label: 'downloads', message: total.toLocaleString('en-US'), color: '4a1f3d', namedLogo: 'apple' };
+await writeFile(new URL('../badge.json', import.meta.url), `${JSON.stringify(badge)}\n`);
 await writeFile(new URL('../stats.json', import.meta.url), `${JSON.stringify(stats)}\n`);
 console.log(`Wrote website/stats.json: ${total} DMG downloads across ${releases} releases`);

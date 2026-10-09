@@ -169,12 +169,25 @@ function showTemplate(index,animate=true){
 }
 rail.addEventListener('click',event=>{const button=event.target.closest('[data-template]');if(button)showTemplate(Number(button.dataset.template));});
 showTemplate(0,false);
-// Download total written at deploy time from GitHub Releases; the line stays hidden if the file is missing.
+// Download total written at deploy time from GitHub Releases (DMG assets, so Homebrew installs count too).
+// The chip stays out of the page if the file is missing, so a failed stats step never shows a wrong number.
 fetch('stats.json').then(r=>r.ok?r.json():Promise.reject()).then(stats=>{
-  const anchor=document.querySelector('.install-note');
-  if(!anchor||!Number.isFinite(stats.downloads)||stats.downloads<1)return;
-  const line=document.createElement('p');
-  line.className='download-stat';
-  line.textContent=`${stats.downloads.toLocaleString('en-US')} downloads from GitHub Releases and Homebrew so far.`;
-  anchor.after(line);
+  const anchor=document.querySelector('.hero-actions');
+  const total=Number(stats.downloads);
+  if(!anchor||!Number.isFinite(total)||total<1)return;
+  const chip=document.createElement('p');
+  chip.className='download-chip';
+  chip.setAttribute('aria-label',`${total.toLocaleString('en-US')} downloads from GitHub Releases and Homebrew`);
+  chip.innerHTML=`<svg class="icon" aria-hidden="true"><use href="#ph-download-simple"></use></svg><strong aria-hidden="true">0</strong><span aria-hidden="true">downloads and counting</span>`;
+  anchor.after(chip);
+  const number=chip.querySelector('strong');
+  requestAnimationFrame(()=>chip.classList.add('is-in'));
+  if(motion.matches){number.textContent=total.toLocaleString('en-US');return;}
+  const start=performance.now(),duration=900;
+  const tick=now=>{
+    const t=Math.min(1,(now-start)/duration);
+    number.textContent=Math.round(total*(1-Math.pow(1-t,3))).toLocaleString('en-US');
+    if(t<1)requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
 }).catch(()=>{});
