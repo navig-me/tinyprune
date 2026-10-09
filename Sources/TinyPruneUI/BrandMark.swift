@@ -23,7 +23,7 @@ package enum BrandMark {
     /// Monochrome silhouette for the menu bar, which tints template images for light, dark and highlighted states.
     /// Rendered eagerly at 2x so no drawing closure has to capture the shared image.
     nonisolated(unsafe) package static let menuBarImage: NSImage = {
-        let points: CGFloat = 20
+        let points: CGFloat = 22
         let pixels = Int(points) * 2
         guard let rep = NSBitmapImageRep(
             bitmapDataPlanes: nil, pixelsWide: pixels, pixelsHigh: pixels, bitsPerSample: 8, samplesPerPixel: 4,
@@ -37,7 +37,10 @@ package enum BrandMark {
         // Bitmap contexts use pixel coordinates, not the logical point size assigned to the representation.
         // Scale the drawing to fill the Retina backing rather than drawing into only its lower-left quarter.
         context.cgContext.scaleBy(x: 2, y: 2)
-        image.draw(in: NSRect(x: 0.5, y: 0.5, width: points - 1, height: points - 1))
+        // The artwork fills about 62 x 78 of its 100-unit box, so drawing it into the canvas at face value leaves a
+        // small mark in a 22 pt status item. Scale the box so the plum is about 20 pt tall, centred on its bounds.
+        let side = points * 100 / 86
+        image.draw(in: NSRect(x: (points - side) / 2, y: (points - side) / 2, width: side, height: side))
         NSGraphicsContext.restoreGraphicsState()
         let template = NSImage(size: rep.size)
         template.addRepresentation(rep)

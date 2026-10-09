@@ -288,7 +288,7 @@ private struct AgentUnavailableView: View {
             case .requiresApproval:
                 Button("Open Login Items") { model.openLoginItems() }
             case .notFound:
-                Text("This development executable has no embedded LaunchAgent. Package and open TinyPrune.app to install the helper.")
+                Text("macOS did not find the background helper in this copy of TinyPrune. Quit it, then open /Applications/TinyPrune.app. Extra copies of the app (for example in a build folder or Downloads) can confuse macOS.")
                     .foregroundStyle(.secondary)
             case .enabled:
                 EmptyView()

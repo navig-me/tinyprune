@@ -78,6 +78,16 @@
           <p>Or download the DMG from <a href="https://github.com/navig-me/tinyprune/releases">GitHub Releases</a> and move TinyPrune to Applications. The Homebrew cask clears the quarantine flag for you; for a direct download, approve it as follows.</p>
           <p>Early builds are unsigned. On first launch, use <strong>System Settings &gt; Privacy &amp; Security &gt; Open Anyway</strong>. Only open a build you trust. Alternatively, if you installed it in Applications:</p>
           <pre aria-label="Remove quarantine from a trusted early build"><code>xattr -dr com.apple.quarantine /Applications/TinyPrune.app</code></pre>
+          <h3>Open TinyPrune</h3>
+          <p>Homebrew puts <code>TinyPrune.app</code> in your Applications folder. Open it from Launchpad or Spotlight, or run:</p>
+          <pre aria-label="Open TinyPrune"><code>open /Applications/TinyPrune.app</code></pre>
+          <p>TinyPrune lives in the menu bar and in its own window. If you have other copies of the app on your Mac, such as a build folder or Downloads, open the one in Applications so macOS finds the background helper.</p>
+          <h3>First run</h3>
+          <ol>
+            <li>Click <strong>Install background agent</strong>, then approve TinyPrune in <strong>System Settings &gt; General &gt; Login Items &amp; Extensions</strong>. The agent does the scheduling; the app is only the window.</li>
+            <li>Choose a folder you control and add a template. New rules start in Preview, so nothing moves yet.</li>
+            <li>Review <strong>Upcoming</strong>, then switch the rule to Active when you are happy.</li>
+          </ol>
           <h3>Build from source</h3>
           <p>With Apple's Swift development tools installed, run:</p>
           <pre aria-label="Build and open TinyPrune"><code>git clone https://github.com/navig-me/tinyprune &amp;&amp; cd tinyprune &amp;&amp; swift Scripts/package-app.swift &amp;&amp; open .build/package/TinyPrune.app</code></pre>
