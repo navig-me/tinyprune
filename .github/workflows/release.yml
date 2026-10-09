@@ -40,6 +40,7 @@ jobs:
     timeout-minutes: 90
     permissions:
       contents: write
+      actions: read
     outputs:
       published: ${{ steps.publish.outputs.published }}
     env:
@@ -85,13 +86,30 @@ jobs:
             echo "DMG_PATH=$RUNNER_TEMP/TinyPrune-${RELEASE_TAG#v}.dmg"
             echo "STAGING_PATH=$RUNNER_TEMP/TinyPrune-dmg"
           } >> "$GITHUB_ENV"
+      # The commit was already tested by CI (full suite on macOS 14, 15 and Intel). If that run finished green, trust it and
+      # only rerun the distribution tests. Otherwise (CI still running, skipped for a docs-only commit, or failed) run the fast
+      # gates here. The 100k benchmark and idle soak live in CI on macos-15, not in the release path.
       - name: Quality gates
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           python3 Scripts/test-distribution.py
-          swift test
-          swift run TinyPruneDomainCheck
-          swift run TinyPruneEngineCheck
+          sha="$(git rev-parse "$RELEASE_TAG^{commit}")"
+          native_green=false
+          run_id="$(gh run list --workflow ci.yml --commit "$sha" --status completed --json databaseId,conclusion --jq '[.[]|select(.conclusion=="success")][0].databaseId // empty' || true)"
+          if [[ -n "$run_id" ]]; then
+            passed="$(gh run view "$run_id" --json jobs --jq '[.jobs[]|select(.name|startswith("Native acceptance"))|select(.conclusion=="success")]|length' || echo 0)"
+            [[ "$passed" == 3 ]] && native_green=true
+          fi
+          if [[ "$native_green" == true ]]; then
+            echo "CI run $run_id passed all three native jobs for $sha; skipping the duplicate test run."
+          else
+            echo "No fully green native CI run for $sha; running the gates here."
+            swift test --skip PhaseTwoBenchmarkTests
+            swift run TinyPruneDomainCheck
+            swift run TinyPruneEngineCheck
+          fi
       - name: Import Developer ID certificate
         if: env.SIGNING_MODE == 'signed'
         env:
