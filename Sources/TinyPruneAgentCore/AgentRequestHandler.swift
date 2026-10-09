@@ -14,7 +14,7 @@ public actor AgentRequestHandler {
     private var mutationInFlight = false
     private var mutationWaiters: [CheckedContinuation<Void, Never>] = []
 
-    public init(store: SQLiteSafetyStore, runtime: ManagedRootAgentRuntime? = nil, serviceVersion: String = "0.1.5", clock: any SafetyClock = SystemSafetyClock()) {
+    public init(store: SQLiteSafetyStore, runtime: ManagedRootAgentRuntime? = nil, serviceVersion: String = "0.1.6", clock: any SafetyClock = SystemSafetyClock()) {
         self.store = store
         self.runtime = runtime
         self.serviceVersion = serviceVersion

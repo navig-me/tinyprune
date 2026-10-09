@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.6 - 2026-10-09
+
+- Fixed a first-run dead end: on current macOS the never-registered background agent is reported as "not found", which hid the Install button. The Overview and Settings now offer **Install background agent** in that state.
+- Rules list: Preview matches and Edit sit on the left, the Preview/Active control on the right, and Pause, Duplicate and Delete moved into a "more" menu, so a rule is one tidy row and Delete is no longer beside everyday actions.
+- Menu-bar popover redesigned: status badge, a count of items that will move to Trash with the next one, a full-width Open TinyPrune button, a Pause menu, and Refresh and Quit as quiet links.
+
 ## 0.1.5 - 2026-10-09
 
 - The menu-bar mark is larger: the plum now fills a 22 pt status item instead of sitting small inside padding.

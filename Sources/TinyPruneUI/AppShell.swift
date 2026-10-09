@@ -283,13 +283,12 @@ private struct AgentUnavailableView: View {
                 .foregroundStyle(PrunePalette.caution)
             Text(message).foregroundStyle(.secondary)
             switch model.registrationStatus {
-            case .notRegistered:
+            // macOS reports .notFound for an agent that has simply never been registered (observed on macOS 26 with the
+            // shipped bundle: status .notFound, then register() succeeds), so it gets the same install action.
+            case .notRegistered, .notFound:
                 Button("Install background agent") { Task { await model.registerAgent() } }
             case .requiresApproval:
                 Button("Open Login Items") { model.openLoginItems() }
-            case .notFound:
-                Text("macOS did not find the background helper in this copy of TinyPrune. Quit it, then open /Applications/TinyPrune.app. Extra copies of the app (for example in a build folder or Downloads) can confuse macOS.")
-                    .foregroundStyle(.secondary)
             case .enabled:
                 EmptyView()
             @unknown default:
@@ -309,74 +308,142 @@ package struct MenuBarContent: View {
     package init() {}
 
     package var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-        HStack(spacing: 10) {
-            BrandMarkView(size: 30)
-            Text("TinyPrune").font(Typography.panelTitle)
-            Spacer()
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 10) {
+                BrandMarkView(size: 28)
+                Text("TinyPrune").font(Typography.panelTitle).foregroundStyle(PrunePalette.plum)
+                Spacer()
+                if let overview = model.overview {
+                    let badge = badge(overview)
+                    Pill(text: badge.text, color: badge.color)
+                }
+            }
+            if let overview = model.overview {
+                summary(overview)
+                actions(overview)
+            } else {
+                Text(model.errorMessage ?? "Connecting…").foregroundStyle(.secondary)
+                Button("Open TinyPrune", action: openMainWindow)
+                    .buttonStyle(PruneButtonStyle(prominent: true))
+            }
+            HStack {
+                Button("Refresh") { Task { await model.refresh() } }
+                    .buttonStyle(PruneLinkStyle())
+                Spacer()
+                Button("Quit TinyPrune") { NSApp.terminate(nil) }
+                    .buttonStyle(PruneLinkStyle())
+                    .keyboardShortcut("q")
+                    .help("Quits this app. The background agent keeps applying your rules.")
+            }
+            .font(Typography.body(size: 12, weight: .medium))
+            .padding(.top, 2)
         }
-        if let overview = model.overview {
-            Text(statusLine(overview))
+        .padding(18)
+        .frame(width: 340, alignment: .leading)
+        .background(PrunePalette.canvas)
+        .tinyPruneWindowStyle()
+        .task { await model.refresh() }
+    }
+
+    @ViewBuilder
+    private func summary(_ overview: AgentOverviewSnapshot) -> some View {
+        let active = model.activeUpcoming
+        let preview = model.previewUpcoming
+        VStack(alignment: .leading, spacing: 10) {
+            Text(statusLine(overview)).font(.callout).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("\(active.count)").font(Typography.display(size: 34)).monospacedDigit()
+                    Text(active.count == 1 ? "item will move to Trash" : "items will move to Trash")
+                        .foregroundStyle(.secondary)
+                }
+                if let next = active.first {
+                    HStack(spacing: 8) {
+                        Text("Next").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                        Text(URL(fileURLWithPath: next.explanation.candidateIdentity.pathHint).lastPathComponent)
+                            .font(Typography.path).lineLimit(1).truncationMode(.middle)
+                        Spacer(minLength: 4)
+                        Text(next.explanation.scheduledAt.formatted(date: .omitted, time: .shortened))
+                            .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                    }
+                }
+                if !preview.isEmpty {
+                    Text("\(preview.count) in Preview. Nothing is moved.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(PrunePalette.row, in: RoundedRectangle(cornerRadius: PruneDesign.Radius.row))
             if let issue = model.connectionIssue {
-                Text("Showing last known state. \(issue)")
+                notice("Showing last known state. \(issue)")
             }
             if let reason = model.pruningHaltedReason {
-                Text(reason)
+                notice(reason)
                 if let resolution = model.pruningHaltResolution {
                     Button(resolution.title) { resolution.perform() }
                 }
             }
-            if let notice = model.updateNotice {
-                Text("TinyPrune \(notice.version) is available")
-                Button(notice.primary.title) { notice.primary.perform() }
-            }
-            Divider()
-            let active = model.activeUpcoming
-            let preview = model.previewUpcoming
-            Text("Will move to Trash: \(active.count) item\(active.count == 1 ? "" : "s")")
-            if let next = active.first {
-                Text("Next: \(URL(fileURLWithPath: next.explanation.candidateIdentity.pathHint).lastPathComponent) · \(next.explanation.scheduledAt.formatted(date: .omitted, time: .shortened))")
-            }
-            if !preview.isEmpty {
-                Text("Preview matches: \(preview.count) (nothing is moved)")
+            if let update = model.updateNotice {
+                notice("TinyPrune \(update.version) is available")
+                Button(update.primary.title) { update.primary.perform() }
             }
             if model.needsAttention {
                 Button("A cleanup needs a look…") { openActivity() }
+                    .buttonStyle(PruneLinkStyle())
             }
-            Divider()
+            if let failure = model.actionError {
+                notice("Could not change pause: \(failure)")
+            }
+        }
+    }
+
+    private func notice(_ text: String) -> some View {
+        Text(text).font(.caption).foregroundStyle(PrunePalette.caution)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    @ViewBuilder
+    private func actions(_ overview: AgentOverviewSnapshot) -> some View {
+        VStack(spacing: 8) {
+            Button(action: openMainWindow) {
+                Text("Open TinyPrune").frame(maxWidth: .infinity)
+            }
+            .buttonStyle(PruneButtonStyle(prominent: true))
             if overview.policy.globallyPaused {
-                Button("Resume") { Task { await model.perform { try await model.setGlobalPause(false) } } }
+                Button { Task { await model.perform { try await model.setGlobalPause(false) } } } label: {
+                    Text("Resume").frame(maxWidth: .infinity)
+                }
             } else {
-                Menu("Pause") {
+                Menu {
                     Button("1 hour") { Task { await model.perform { try await model.pause(until: model.currentDate.addingTimeInterval(3_600)) } } }
                     Button("Today") { Task { await model.perform { try await model.pause(until: endOfToday(now: model.currentDate)) } } }
                     Button("Until tomorrow") { Task { await model.perform { try await model.pause(until: tomorrowMorning(now: model.currentDate)) } } }
                     Button("Until I resume") { Task { await model.perform { try await model.setGlobalPause(true) } } }
+                } label: {
+                    Label("Pause pruning", systemImage: "pause").frame(maxWidth: .infinity)
                 }
+                .menuStyle(.button)
+                .buttonStyle(PruneButtonStyle())
+                .menuIndicator(.hidden)
             }
-            if let failure = model.actionError {
-                Text("Could not change pause: \(failure)")
-            }
-        } else {
-            Text(model.errorMessage ?? "Connecting…")
         }
-        Divider()
-        Button("Refresh") { Task { await model.refresh() } }
-        Button("Open TinyPrune") {
-            NSApp.activate(ignoringOtherApps: true)
-            router.selection = .overview
-            if !NSApp.windows.contains(where: { $0.canBecomeMain && $0.isVisible }) { openWindow(id: "main") }
-        }
-        Divider()
-        Button("Quit TinyPrune") { NSApp.terminate(nil) }
-            .keyboardShortcut("q")
-            .help("Quits this app. The background agent keeps applying your rules.")
-        }
-        .padding(18)
-        .frame(width: 320, alignment: .leading)
-        .background(PrunePalette.canvas)
-        .tinyPruneWindowStyle()
-        .task { await model.refresh() }
+    }
+
+    private func openMainWindow() {
+        NSApp.activate(ignoringOtherApps: true)
+        router.selection = .overview
+        if !NSApp.windows.contains(where: { $0.canBecomeMain && $0.isVisible }) { openWindow(id: "main") }
+    }
+
+    private func badge(_ overview: AgentOverviewSnapshot) -> (text: String, color: Color) {
+        if model.pruningHaltedReason != nil { return ("Stopped", PrunePalette.caution) }
+        if overview.policy.globallyPaused { return ("Paused", PrunePalette.caution) }
+        let rules = overview.policy.rules
+        if rules.isEmpty { return ("No rules", .secondary) }
+        if rules.contains(where: { $0.state == .active }) { return ("Running", PrunePalette.safe) }
+        if rules.contains(where: { $0.state == .preview }) { return ("Preview", PrunePalette.caution) }
+        return ("Paused", PrunePalette.caution)
     }
 
     private func openActivity() {

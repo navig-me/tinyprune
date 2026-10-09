@@ -553,8 +553,7 @@ struct SettingsPage: View {
         switch model.registrationStatus {
         case .enabled: "Running"
         case .requiresApproval: "Needs approval in Login Items"
-        case .notRegistered: "Not installed"
-        case .notFound: "Unavailable in this build"
+        case .notRegistered, .notFound: "Not installed"
         @unknown default: "Unknown"
         }
     }

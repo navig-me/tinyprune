@@ -162,34 +162,9 @@ private struct RuleRow: View {
                     .font(.manropeCaption)
                     .foregroundStyle(PrunePalette.caution)
             }
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), alignment: .leading)], alignment: .leading, spacing: 12) {
-                Button("Edit", action: onEdit)
-                    .accessibilityLabel("Edit \(rule.name)")
-                Button("Preview matches") { preview.start(rule, model: model) }
-                    .disabled(preview.isRunning)
-                    .accessibilityLabel("Preview matches for \(rule.name)")
-                    .help("Run a read-only scan of this rule's folder now")
-                if rule.state == .paused {
-                    Button("Resume in Preview") { perform { try await model.setState(.preview, for: rule) } }
-                        .accessibilityLabel("Resume \(rule.name) in Preview")
-                } else {
-                    Button("Pause") { perform { try await model.setState(.paused, for: rule) } }
-                        .accessibilityLabel("Pause \(rule.name)")
-                }
-                if rule.state != .paused {
-                    RuleModeControl(
-                        state: rule.state, canActivate: !rule.isVeryBroad,
-                        preview: { perform { try await model.setState(.preview, for: rule) } },
-                        activate: onActivate
-                    )
-                }
-                Button("Duplicate") { perform { try await model.duplicate(rule) } }
-                    .accessibilityLabel("Duplicate \(rule.name)")
-                Button("Delete", role: .destructive, action: onDelete)
-                    .foregroundStyle(.red)
-                    .accessibilityLabel("Delete \(rule.name)")
-            }
-            .buttonStyle(PruneButtonStyle())
+            // Primary actions on the left, the rule's mode on the right, and everything occasional or destructive
+            // behind one overflow menu so the row stays one line and Delete is never next to a frequent action.
+            actionBar
 
             if preview.phase != .idle {
                 VStack(alignment: .leading, spacing: 8) {
@@ -210,6 +185,45 @@ private struct RuleRow: View {
         .accessibilityElement(children: .contain)
         .pruneHover()
         .accessibilityLabel("\(rule.name), \(rule.state.label)")
+    }
+
+    private var actionBar: some View {
+        HStack(spacing: 8) {
+            Button("Preview matches") { preview.start(rule, model: model) }
+                .disabled(preview.isRunning)
+                .accessibilityLabel("Preview matches for \(rule.name)")
+                .help("Run a read-only scan of this rule's folder now")
+            Button("Edit", action: onEdit)
+                .accessibilityLabel("Edit \(rule.name)")
+            Spacer(minLength: 12)
+            if rule.state == .paused {
+                Button("Resume in Preview") { perform { try await model.setState(.preview, for: rule) } }
+                    .accessibilityLabel("Resume \(rule.name) in Preview")
+            } else {
+                RuleModeControl(
+                    state: rule.state, canActivate: !rule.isVeryBroad,
+                    preview: { perform { try await model.setState(.preview, for: rule) } },
+                    activate: onActivate
+                )
+            }
+            Menu {
+                if rule.state != .paused {
+                    Button("Pause") { perform { try await model.setState(.paused, for: rule) } }
+                }
+                Button("Duplicate") { perform { try await model.duplicate(rule) } }
+                Divider()
+                Button("Delete…", role: .destructive, action: onDelete)
+            } label: {
+                Image(systemName: "ellipsis")
+                    .frame(width: 28, height: 28)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .accessibilityLabel("More actions for \(rule.name)")
+            .help("Pause, duplicate or delete this rule")
+        }
+        .buttonStyle(PruneButtonStyle())
     }
 }
 
