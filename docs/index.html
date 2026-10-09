@@ -28,6 +28,8 @@
       {"@type":"Question","name":"Does TinyPrune need an account or network access?","acceptedAnswer":{"@type":"Answer","text":"The app has no telemetry and needs no account. Core cleanup reads filesystem metadata only, does not inspect file contents, and does not require network access. Key-enabled direct-download builds, including ad-hoc builds, check their EdDSA-authenticated update feed over HTTPS. Homebrew and no-key copies ask github.com once a day for a newer release and offer a download link or the brew upgrade command. Check for new versions is on by default and can be turned off in Settings; installation always requires user confirmation. The tinyprune.com website, separately, uses Google Analytics and PostHog."}},
       {"@type":"Question","name":"How do I keep a file from being removed?","acceptedAnswer":{"@type":"Answer","text":"Mark it Keep from the Finder menu or run tinyprune keep. Keep takes precedence over every rule, and a folder with a kept item inside is never trashed."}},
       {"@type":"Question","name":"Does TinyPrune work on Intel and Apple silicon, and which macOS versions?","acceptedAnswer":{"@type":"Answer","text":"It requires macOS 14 or later. Releases are universal binaries for Intel and Apple silicon."}},
+      {"@type":"Question","name":"How do I clean up after AI coding agents and LLM tools?","acceptedAnswer":{"@type":"Answer","text":"Agents create scratch projects, git worktrees, virtual environments, build output and logs faster than you remove them. Give one disposable folder to the agents, apply the Temporary Workspace template there, add Developer Cleanup or Build Artifacts to your projects folder, and review everything in Preview first."}},
+      {"@type":"Question","name":"Does TinyPrune know which files an AI agent created?","acceptedAnswer":{"@type":"Answer","text":"No. TinyPrune reads only filesystem metadata and does not identify the tool that wrote a file. Rules work on where an item lives, its name, its age and project inactivity, so point agents at a folder you chose and put the rule on that folder."}},
       {"@type":"Question","name":"How do I install TinyPrune?","acceptedAnswer":{"@type":"Answer","text":"Run brew install --cask navig-me/tap/tinyprune, or download the DMG from GitHub Releases. Version 0.1.0 is an unsigned pre-release, so macOS asks you to approve it on first launch. You can also build from source: git clone https://github.com/navig-me/tinyprune && cd tinyprune && swift Scripts/package-app.swift && open .build/package/TinyPrune.app"}}
     ]}
   ]}
@@ -55,7 +57,7 @@
       <details open>
         <summary>In this guide</summary>
         <nav aria-label="Documentation">
-          <a href="#start">Getting started</a><a href="#install">Install</a><a href="#safety">Safety</a><a href="#rules">Rules</a><a href="#preview">Preview</a><a href="#templates">Templates</a><a href="#finder">Finder</a><a href="#cli">Command line</a><a href="#updates">Updates</a><a href="#faq">FAQ</a>
+          <a href="#start">Getting started</a><a href="#install">Install</a><a href="#safety">Safety</a><a href="#rules">Rules</a><a href="#preview">Preview</a><a href="#templates">Templates</a><a href="#agents">AI agent clutter</a><a href="#finder">Finder</a><a href="#cli">Command line</a><a href="#updates">Updates</a><a href="#faq">FAQ</a>
         </nav>
       </details>
       <p class="sidebar-note">macOS 14 or later<br>Free and open source</p>
@@ -196,6 +198,19 @@ tinyprune config export</code></pre>
           <p>EdDSA update authentication does not notarize the app or change first-install Gatekeeper approval. Sparkle replacements are expected not to carry browser-download quarantine, but end-to-end installation remains unverified. Developer ID signing and notarization are not available in current early builds. The <a href="https://github.com/navig-me/tinyprune/blob/main/ADRs/0009-eddsa-only-updates-for-adhoc-builds.md">update trust decision</a> documents private-key loss/rotation and the remaining acceptance work.</p>
           <p>For implementation details, read the <a href="https://github.com/navig-me/tinyprune/blob/main/AGENTS.md">contributor guide</a> and <a href="https://github.com/navig-me/tinyprune/blob/main/PLAN.md">release plan</a>. Report problems or suggest improvements on <a href="https://github.com/navig-me/tinyprune/issues">GitHub</a>.</p>
         </section>
+        <section id="agents">
+          <h2>Prune AI agent clutter</h2>
+          <p>Coding agents and LLM tools are generous with disk space. In a week of debugging they can leave behind scratch projects, cloned repositories, git worktrees, virtual environments, <code>node_modules</code>, build output and long logs. Left alone, that adds up to gigabytes you never chose to keep. Lifetime rules let you clean up once in a while without a cleanup day and without touching what matters.</p>
+          <ol>
+            <li><strong>Give agents one place to work.</strong> Create a folder such as <code>~/agent-scratch</code> and tell your tools to use it for throwaway work. Add it as a managed folder and apply the <em>Temporary Workspace</em> template: disposable top-level items are scheduled 3 days after first observation by default. Raise the lifetime if your sessions run longer.</li>
+            <li><strong>Expire what can be rebuilt.</strong> On your projects folder, apply <em>Developer Cleanup</em> and <em>Build Artifacts</em>. Dependencies and build output (<code>node_modules</code>, <code>.venv</code>, <code>dist</code>, <code>build</code>, <code>target</code>) expire only after the project has been inactive, and your source folders are not matched.</li>
+            <li><strong>Trim debug logs.</strong> Create a rule with a name pattern such as <code>*.log</code> in the folder where your tools write them, and choose an age that suits you. A glob without a <code>/</code> matches at any depth below the folder.</li>
+            <li><strong>Preview, then enable.</strong> Use <strong>Preview matches</strong> on each rule, add <strong>Keep</strong> to anything worth saving, and switch the rule to Active only when the list is what you expect.</li>
+            <li><strong>Check in occasionally.</strong> Upcoming shows what is next and Overview shows what has moved to Trash. Items stay in the Trash until you or macOS empty it, so disk space returns only when you empty the Trash.</li>
+          </ol>
+          <div class="notice"><strong>Before you enable a rule on worktrees.</strong><p>A git worktree can hold uncommitted changes, and age alone does not prove it is abandoned. Preview first and Keep the ones you need. After a worktree folder is moved to Trash, run <code>git worktree prune</code> in the main repository to clear its stale record.</p></div>
+          <p>TinyPrune does not detect which tool created a file, and it never inspects file contents. It acts on the location, name, age and project inactivity you chose, always moves items to Trash instead of deleting them permanently, and rechecks Keep, rules and deadlines immediately before every move.</p>
+        </section>
         <section id="faq">
           <h2>Frequently asked questions</h2>
           <h3>What is TinyPrune?</h3>
@@ -214,6 +229,10 @@ tinyprune config export</code></pre>
           <p>It requires macOS 14 or later. Releases are universal binaries for Intel and Apple silicon.</p>
           <h3>How do I install TinyPrune?</h3>
           <p>Run <code>brew install --cask navig-me/tap/tinyprune</code>, or download the DMG from <a href="https://github.com/navig-me/tinyprune/releases">GitHub Releases</a>. You can also build from source; see <a href="#install">Install</a> for details.</p>
+          <h3>How do I clean up after AI coding agents and LLM tools?</h3>
+          <p>Agents create scratch projects, git worktrees, virtual environments, build output and logs faster than you remove them. Give one disposable folder to the agents, apply the Temporary Workspace template there, add Developer Cleanup or Build Artifacts to your projects folder, and review everything in Preview first. See <a href="#agents">Prune AI agent clutter</a>.</p>
+          <h3>Does TinyPrune know which files an AI agent created?</h3>
+          <p>No. TinyPrune reads only filesystem metadata and does not identify the tool that wrote a file. Rules work on where an item lives, its name, its age and project inactivity, so point agents at a folder you chose and put the rule on that folder.</p>
         </section>
       </article>
     </main>

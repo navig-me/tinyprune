@@ -18,3 +18,4 @@ picture img{width:100%;aspect-ratio:1100/760;object-fit:cover}
 .time-controls input[type=range]::-moz-range-track{height:4px;background:var(--line);border-radius:4px}
 .time-controls input[type=range]::-moz-range-thumb{width:13px;height:13px;background:var(--plum);border:3px solid var(--surface);border-radius:50%}
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*::before,*::after{animation:none!important;transition:none!important}.js .reveal{opacity:1;transform:none}.hero-art,.hero-art picture{transform:none!important}.primary:hover,.safety-cell:hover{transform:none}}
+.agent-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}.agent-grid .safety-cell>.icon{width:36px;height:36px;color:var(--plum);margin-bottom:18px}.agent-grid h3{margin-bottom:10px}.agent-note{margin-top:22px;max-width:62ch;color:var(--muted)}@media(max-width:900px){.agent-grid{grid-template-columns:1fr}}
