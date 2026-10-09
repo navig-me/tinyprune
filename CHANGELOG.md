@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.7 - 2026-10-09
+
+- The app now recovers from "Agent unavailable" by itself after a Homebrew upgrade. `brew upgrade` unloads the background agent while macOS still lists it as enabled; TinyPrune re-registers it once at launch and retries. A **Restart background agent** button covers the case where that does not work.
+
 ## 0.1.6 - 2026-10-09
 
 - Fixed a first-run dead end: on current macOS the never-registered background agent is reported as "not found", which hid the Install button. The Overview and Settings now offer **Install background agent** in that state.

@@ -71,6 +71,12 @@ do {
         defaults.set(true, forKey: "onboardingCompleted")
         await model.refresh()
         Check.expect(model.overview == nil && model.errorMessage != nil, "unavailable agent surfaces an error state")
+        // Enabled in macOS but unreachable (Homebrew upgrade unloads the job): re-register exactly once, then stop.
+        let staleServices = StubServices(status: .enabled)
+        let staleModel = AgentViewModel(transport: UnavailableTransport(), services: staleServices, postsNotifications: false)
+        await staleModel.refresh()
+        await staleModel.refresh()
+        Check.expect(staleServices.restartCalls == 1, "an enabled but unreachable agent is re-registered once per session")
         await shoot("20-agent-unavailable-not-installed", .overview, model: model, router: router)
         services.agentStatus = .requiresApproval
         model.refreshRegistrationStatus()

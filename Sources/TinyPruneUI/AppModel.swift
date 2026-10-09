@@ -132,6 +132,7 @@ extension TinyPruneAgentClient: AgentTransport {}
 package protocol AgentSystemServices: AnyObject {
     var agentStatus: SMAppService.Status { get }
     func registerAgent() throws
+    func restartAgent() throws
     func openLoginItems()
     var launchesAtLogin: Bool { get }
     func setLaunchAtLogin(_ enabled: Bool) throws
@@ -145,6 +146,10 @@ package final class SMAppSystemServices: AgentSystemServices {
 
     package var agentStatus: SMAppService.Status { launchAgent.status }
     package func registerAgent() throws { try launchAgent.register() }
+    package func restartAgent() throws {
+        try? launchAgent.unregister()
+        try launchAgent.register()
+    }
     package func openLoginItems() { SMAppService.openSystemSettingsLoginItems() }
     package var launchesAtLogin: Bool { SMAppService.mainApp.status == .enabled }
     package func setLaunchAtLogin(_ enabled: Bool) throws {
@@ -242,6 +247,8 @@ package final class AgentViewModel: ObservableObject {
 
     package func refreshRegistrationStatus() { registrationStatus = services.agentStatus }
 
+    private var repairedAgentThisSession = false
+
     package func registerAgent() async {
         do {
             try services.registerAgent()
@@ -249,6 +256,17 @@ package final class AgentViewModel: ObservableObject {
             await refresh()
         } catch {
             connectionIssue = "Could not register the TinyPrune background agent: \(error)"
+        }
+    }
+
+    /// Re-registers an agent macOS lists as enabled but launchd is not running (for example after `brew upgrade`).
+    package func restartAgent() async {
+        do {
+            try services.restartAgent()
+            refreshRegistrationStatus()
+            await refresh()
+        } catch {
+            connectionIssue = "Could not restart the TinyPrune background agent: \(error)"
         }
     }
 
@@ -321,7 +339,7 @@ package final class AgentViewModel: ObservableObject {
         for waiter in waiters { waiter.resume() }
     }
 
-    private func loadState() async {
+    private func loadState(allowRepair: Bool = true) async {
         do {
             guard case .overview(let loaded) = try await send(.loadOverview) else {
                 connectionIssue = "The TinyPrune agent returned an unexpected response."
@@ -340,6 +358,15 @@ package final class AgentViewModel: ObservableObject {
         } catch is CancellationError {
             return
         } catch {
+            // SMAppService can say "enabled" while launchd has no job: Homebrew's cask unloads the agent on every
+            // upgrade and macOS keeps the stale registration. Re-register once per session and try again.
+            if allowRepair, overview == nil, !repairedAgentThisSession, registrationStatus == .enabled {
+                repairedAgentThisSession = true
+                if (try? services.restartAgent()) != nil {
+                    await loadState(allowRepair: false)
+                    return
+                }
+            }
             connectionIssue = Self.describe(error)
             return
         }

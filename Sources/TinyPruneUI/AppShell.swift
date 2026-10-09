@@ -290,7 +290,7 @@ private struct AgentUnavailableView: View {
             case .requiresApproval:
                 Button("Open Login Items") { model.openLoginItems() }
             case .enabled:
-                EmptyView()
+                Button("Restart background agent") { Task { await model.restartAgent() } }
             @unknown default:
                 EmptyView()
             }

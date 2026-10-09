@@ -196,6 +196,8 @@ final class StubServices: AgentSystemServices {
     init(status: SMAppService.Status) { agentStatus = status }
 
     func registerAgent() throws { registerCalls += 1 }
+    private(set) var restartCalls = 0
+    func restartAgent() throws { restartCalls += 1 }
     func openLoginItems() {}
     func setLaunchAtLogin(_ enabled: Bool) throws { launchesAtLogin = enabled }
 }
