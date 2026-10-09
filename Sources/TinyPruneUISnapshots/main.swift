@@ -115,8 +115,8 @@ do {
             await shoot("1\(index)-empty-\(section.rawValue.lowercased())", section, model: model, router: router)
         }
         await snap.capture(
-            MenuBarContent().environmentObject(model).environmentObject(router).padding(14).frame(width: 300, alignment: .leading).background(.white).tinyPruneWindowStyle(),
-            name: "19-menubar-empty", size: CGSize(width: 320, height: 260)
+            MenuBarContent().environmentObject(model).environmentObject(router),
+            name: "19-menubar-empty", size: CGSize(width: 320, height: 380)
         )
     }
 
@@ -165,22 +165,28 @@ do {
     for (index, section) in [AppSection.overview, .rules, .upcoming, .activity, .templates, .settings].enumerated() {
         await shoot("3\(index)-seeded-\(section.rawValue.lowercased())", section, model: model, router: router)
     }
+    snap.colorScheme = .dark
+    for section in [AppSection.overview, .rules, .upcoming, .activity, .templates, .settings] {
+        await shoot("36-dark-\(section.rawValue.lowercased())", section, model: model, router: router)
+    }
+    await snap.capture(
+        OnboardingFlow(initialStep: 0, finish: {}).environmentObject(model).background(PrunePalette.canvas).tinyPruneWindowStyle(),
+        name: "36-dark-onboarding", size: CGSize(width: 900, height: 640)
+    )
+    snap.colorScheme = .light
 
     phase("sidebar selection")
     do {
         router.selection = .rules
         let hosted = await snap.host(rootView(model, router), size: CGSize(width: 1100, height: 760))
         await pump(0.8)
-        let table = snap.allViews(hosted.host).compactMap { $0 as? NSTableView }.first
-        Check.expect(table != nil, "sidebar is hosted in an NSTableView")
-        if let table {
-            Check.expect(table.numberOfRows == AppSection.allCases.count, "sidebar lists every section (rows: \(table.numberOfRows))")
-            Check.expect(table.selectedRow == AppSection.allCases.firstIndex(of: .rules), "router selection highlights its sidebar row (selected row \(table.selectedRow))")
-            table.selectRowIndexes(IndexSet(integer: 3), byExtendingSelection: false)
-            await pump(0.5)
-            Check.expect(router.selection == .activity, "choosing the fourth sidebar row navigates to Activity (router: \(String(describing: router.selection)))")
-            router.selection = .overview
+        for (index, section) in AppSection.allCases.enumerated() {
+            let key = String(index + 1)
+            Check.expect(snap.sendKeyEquivalent(key, modifiers: .command, to: hosted), "sidebar shortcut ⌘\(key) is available")
+            await pump(0.15)
+            Check.expect(router.selection == section, "sidebar shortcut navigates to \(section.rawValue)")
         }
+        router.selection = .overview
         hosted.window.contentView = nil
         hosted.window.close()
     }
@@ -248,6 +254,12 @@ do {
         }
         await pump(0.5)
         await snap.snapshot(hosted, name: "42-upcoming-why-inspector")
+        snap.colorScheme = .dark
+        let darkInspector = await snap.host(rootView(model, router), size: CGSize(width: 1180, height: 780))
+        await snap.snapshot(darkInspector, name: "42-dark-upcoming-why-inspector")
+        darkInspector.window.contentView = nil
+        darkInspector.window.close()
+        snap.colorScheme = .light
         snap.audit(hosted.host, screen: "42-upcoming-why-inspector")
         hosted.window.contentView = nil
         hosted.window.close()
@@ -307,14 +319,14 @@ do {
     Check.expect(model.policy.flatMap { $0.pausedUntil }.map { abs($0.timeIntervalSince(resumeAt)) < 2 } == true, "pausedUntil matches the request")
     await shoot("50-overview-paused", .overview, model: model, router: router)
     await snap.capture(
-        MenuBarContent().environmentObject(model).environmentObject(router).padding(14).frame(width: 300, alignment: .leading).background(.white).tinyPruneWindowStyle(),
-        name: "51-menubar-paused", size: CGSize(width: 320, height: 260)
+        MenuBarContent().environmentObject(model).environmentObject(router),
+        name: "51-menubar-paused", size: CGSize(width: 320, height: 460)
     )
     try await model.setGlobalPause(false)
     Check.expect(model.policy?.globallyPaused == false, "resume clears the pause")
     await snap.capture(
-        MenuBarContent().environmentObject(model).environmentObject(router).padding(14).frame(width: 300, alignment: .leading).background(.white).tinyPruneWindowStyle(),
-        name: "52-menubar-running", size: CGSize(width: 320, height: 260)
+        MenuBarContent().environmentObject(model).environmentObject(router),
+        name: "52-menubar-running", size: CGSize(width: 320, height: 460)
     )
 
     // MARK: - Settings
@@ -443,6 +455,13 @@ do {
             }
             await snap.snapshot(hosted, name: "71-editor-preview-result")
             snap.audit(hosted.host, screen: "71-editor-preview-result")
+            snap.colorScheme = .dark
+            let darkPreviewHost = await editorHost(controller)
+            Check.expect(snap.sendKeyEquivalent("p", modifiers: .command, to: darkPreviewHost), "dark editor supports keyboard Preview")
+            await waitFor("dark editor preview result") { if case .finished = controller.phase { true } else { false } }
+            await snap.snapshot(darkPreviewHost, name: "71-dark-editor-preview-result")
+            close(darkPreviewHost)
+            snap.colorScheme = .light
         } else {
             Check.fail("⌘P did not trigger Preview matches")
         }

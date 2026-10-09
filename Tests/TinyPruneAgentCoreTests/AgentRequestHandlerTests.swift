@@ -14,7 +14,7 @@ import TinyPrunePersistence
         let health = try await response(from: harness.handler, request: AgentRequest(operation: .health))
         #expect(health.protocolVersion == TinyPruneAgentXPC.protocolVersion)
         guard case .health(let healthDTO) = health.payload else { Issue.record("Expected health response"); return }
-        #expect(healthDTO.serviceVersion == "0.1.3")
+        #expect(healthDTO.serviceVersion == "0.1.4")
 
         let policy = try await response(from: harness.handler, request: AgentRequest(operation: .loadPolicy))
         guard case .policy(let snapshot) = policy.payload else { Issue.record("Expected policy response"); return }

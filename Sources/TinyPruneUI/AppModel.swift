@@ -626,6 +626,7 @@ struct Pill: View {
 
 struct PathText: View {
     let path: String
+    @State private var copied = false
     var body: some View {
         Text(path)
             .font(Typography.path)
@@ -635,9 +636,19 @@ struct PathText: View {
             .contextMenu {
                 Button("Copy path") {
                     NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(path, forType: .string)
+                    copied = NSPasteboard.general.setString(path, forType: .string)
                 }
             }
+            .overlay(alignment: .trailing) {
+                if copied {
+                    Label("Copied", systemImage: "checkmark").font(.caption)
+                        .foregroundStyle(PrunePalette.safe)
+                        .padding(4).background(PrunePalette.row, in: Capsule())
+                        .onHover { if !$0 { copied = false } }
+                }
+            }
+            .sensoryFeedback(.success, trigger: copied)
+            .pruneAnimation(value: copied)
     }
 }
 

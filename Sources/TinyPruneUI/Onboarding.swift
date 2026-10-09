@@ -12,6 +12,7 @@ private struct TidyChoice: Identifiable {
 package struct OnboardingFlow: View {
     @EnvironmentObject private var model: AgentViewModel
     @AppStorage("previewBroadByDefault") private var previewByDefault = true
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let finish: () -> Void
 
     @State private var step: Int
@@ -43,25 +44,36 @@ package struct OnboardingFlow: View {
         VStack(alignment: .leading, spacing: 28) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 28) {
-                    switch step {
-                    case 0: intro
-                    case 1: chooser
-                    default: reassurance
+                    Group {
+                        switch step {
+                        case 0: intro
+                        case 1: chooser
+                        default: reassurance
+                        }
                     }
+                    .id(step)
+                    .transition(reduceMotion ? .identity : .asymmetric(insertion: .opacity.combined(with: .offset(x: 12)), removal: .opacity))
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             HStack {
                 Text("Step \(step + 1) of 3").foregroundStyle(.secondary)
+                HStack(spacing: 5) {
+                    ForEach(0..<3) { index in
+                        Capsule().fill(index <= step ? PrunePalette.plum : PrunePalette.plum.opacity(0.15))
+                            .frame(width: index == step ? 22 : 6, height: 6)
+                    }
+                }
+                .accessibilityHidden(true)
                 Spacer()
                 if step > 0 { Button("Back") { step -= 1 } }
                 if step < 2 {
                     Button("Continue") { step += 1 }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(PruneButtonStyle(prominent: true))
                         .keyboardShortcut(.defaultAction)
                 } else {
                     Button(folders.isEmpty ? "Start with no rules" : "Start TinyPrune") { Task { await apply() } }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(PruneButtonStyle(prominent: true))
                         .keyboardShortcut(.defaultAction)
                         .disabled(isSaving)
                 }
@@ -71,6 +83,7 @@ package struct OnboardingFlow: View {
         .padding(48)
         .frame(maxWidth: 680, maxHeight: .infinity, alignment: .leading)
         .frame(maxWidth: .infinity)
+        .animation(PruneDesign.motion(reduceMotion), value: step)
         .alert("Setup problem", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
             Button("OK", role: .cancel) { errorMessage = nil }
         } message: { Text(errorMessage ?? "") }
@@ -79,6 +92,7 @@ package struct OnboardingFlow: View {
     private var intro: some View {
         VStack(alignment: .leading, spacing: 14) {
             BrandMarkView(size: 56)
+                .pruneEntrance()
             Text("Files don’t all need to live forever.")
                 .font(Typography.hero)
                 .accessibilityAddTraits(.isHeader)
@@ -108,6 +122,8 @@ package struct OnboardingFlow: View {
                     Button(folders[choice.id] == nil ? "Choose folder…" : "Change…") { pick(choice) }
                         .accessibilityLabel("\(folders[choice.id] == nil ? "Choose" : "Change") folder for \(choice.title)")
                 }
+                .padding(.vertical, 8)
+                .pruneHover()
                 Divider()
             }
         }

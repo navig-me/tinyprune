@@ -34,6 +34,7 @@
   </script>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#start">Skip to documentation</a>
@@ -42,13 +43,11 @@
       <a class="brand" href="https://tinyprune.com"><img src="assets/tinyprune-plum.svg" width="28" height="28" alt=""><span>TinyPrune</span></a>
       <nav class="site-nav" aria-label="Main navigation">
         <a href="https://tinyprune.com#how-it-works">How it works</a>
-        <a href="https://tinyprune.com#rules">Rules</a>
-        <a href="https://tinyprune.com#recipes">Examples</a>
-        <a href="https://tinyprune.com#philosophy">Privacy</a>
+        <a href="https://tinyprune.com#philosophy">Safety</a>
+        <a href="https://docs.tinyprune.com/" aria-current="page">Docs</a>
         <a href="https://github.com/navig-me/tinyprune">GitHub</a>
-        <a class="coffee" href="https://buymeacoffee.com/mihirk">Buy me a coffee</a>
       </nav>
-      <div class="header-actions"><a class="button secondary" href="https://github.com/navig-me/tinyprune">GitHub</a><a class="button" href="https://github.com/navig-me/tinyprune/releases">Download</a></div>
+      <div class="header-actions"><a class="button" href="https://github.com/navig-me/tinyprune/releases"><svg class="icon" aria-hidden="true"><use href="assets/icons.svg#download-simple"></use></svg>Download for Mac</a></div>
     </div>
   </header>
   <div class="shell">
@@ -68,6 +67,7 @@
           <h1>Set up your<br><em>file lifetimes.</em></h1>
           <p class="intro">Choose the folders TinyPrune can manage, give disposable files an expiry date, and check the results in Preview before anything moves to Trash.</p>
           <p class="intro-meta">Local-first. No account needed. macOS 14+.</p>
+          <p class="sample-link"><a href="https://tinyprune.com#how-it-works">Try the interactive sample on tinyprune.com <svg class="icon" aria-hidden="true"><use href="assets/icons.svg#arrow-right"></use></svg></a></p>
         </div>
         <section id="install">
           <h2>Install</h2>
@@ -208,14 +208,7 @@ tinyprune config export</code></pre>
       </article>
     </main>
   </div>
-  <div class="footer-panel"><div><h2>Your files stay on your Mac.</h2><p>No account, cloud sync, app telemetry, or file-content inspection in normal operation.</p></div><a class="button" href="https://github.com/navig-me/tinyprune">View on GitHub</a></div>
-  <footer class="site-footer"><div class="footer-inner"><p><span>TinyPrune</span> <span class="footer-description">macOS file lifetimes</span></p><nav aria-label="Footer"><a href="https://github.com/navig-me/tinyprune">GitHub</a><a href="#start">Docs</a><a href="https://buymeacoffee.com/mihirk">Buy me a coffee</a><a href="https://tinyprune.com#philosophy">Privacy</a></nav></div></footer>
-  <script>
-    const guide = document.querySelector('.sidebar details');
-    const mobile = window.matchMedia('(max-width: 760px)');
-    const adaptGuide = () => { guide.open = !mobile.matches; };
-    adaptGuide();
-    mobile.addEventListener('change', adaptGuide);
-  </script>
+  <div class="footer-panel"><div><h2>Your files stay<br><em>on your Mac.</em></h2><p>No account, cloud sync, app telemetry, or file-content inspection in normal operation.</p></div><a class="button" href="https://github.com/navig-me/tinyprune">View on GitHub</a></div>
+  <footer class="site-footer"><div class="footer-inner"><a class="brand" href="https://tinyprune.com">TinyPrune</a><span>Keep what matters.</span><nav aria-label="Footer"><a href="https://tinyprune.com#rules">Rules</a><a href="https://tinyprune.com#recipes">Templates</a><a href="https://github.com/navig-me/tinyprune">GitHub</a><a href="#start">Docs</a><a href="https://buymeacoffee.com/mihirk">Buy me a coffee</a><a href="https://tinyprune.com#philosophy">Privacy</a></nav></div></footer>
 </body>
 </html>

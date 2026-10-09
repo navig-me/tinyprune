@@ -7,6 +7,7 @@ struct RulesPage: View {
     @EnvironmentObject private var model: AgentViewModel
     @EnvironmentObject private var router: AppRouter
     let overview: AgentOverviewSnapshot
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @StateObject private var previews = RulePreviewStore()
     @State private var editorTarget: RuleEditorTarget?
@@ -21,7 +22,7 @@ struct RulesPage: View {
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button("New rule") { editorTarget = .new(prefillPath: nil) }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(PruneButtonStyle(prominent: true))
             }
             .padding(.horizontal, 32)
             .padding(.vertical, 18)
@@ -31,12 +32,7 @@ struct RulesPage: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         if overview.policy.rules.isEmpty {
-                            ContentUnavailableView(
-                                "No rules yet",
-                                systemImage: "slider.horizontal.3",
-                                description: Text("Start from a template or write a rule. New rules should begin in Preview.")
-                            )
-                            .frame(maxWidth: .infinity)
+                            PruneEmptyState(title: "A lifetime starts with a rule", message: "Choose a template or write your own. Begin in Preview to see the matches before anything moves.", symbol: "slider.horizontal.3")
                             Button("Browse templates") { router.selection = .templates }
                                 .frame(maxWidth: .infinity)
                         }
@@ -54,10 +50,11 @@ struct RulesPage: View {
                         }
                     }
                     .padding(32)
+                    .pruneAnimation(value: overview.policy.rules.map(\.id))
                 }
                 .onChange(of: router.focusedRuleID) { _, id in
                     guard let id else { return }
-                    withAnimation { proxy.scrollTo(id, anchor: .center) }
+                    withAnimation(PruneDesign.motion(reduceMotion)) { proxy.scrollTo(id, anchor: .center) }
                 }
             }
         }
@@ -165,7 +162,7 @@ private struct RuleRow: View {
                     .font(.manropeCaption)
                     .foregroundStyle(PrunePalette.caution)
             }
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), alignment: .leading)], alignment: .leading, spacing: 12) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), alignment: .leading)], alignment: .leading, spacing: 12) {
                 Button("Edit", action: onEdit)
                     .accessibilityLabel("Edit \(rule.name)")
                 Button("Preview matches") { preview.start(rule, model: model) }
@@ -179,12 +176,12 @@ private struct RuleRow: View {
                     Button("Pause") { perform { try await model.setState(.paused, for: rule) } }
                         .accessibilityLabel("Pause \(rule.name)")
                 }
-                if rule.state == .preview && !rule.isVeryBroad {
-                    Button("Activate", action: onActivate)
-                        .accessibilityLabel("Activate \(rule.name)")
-                } else if rule.state == .active {
-                    Button("Return to Preview") { perform { try await model.setState(.preview, for: rule) } }
-                        .accessibilityLabel("Return \(rule.name) to Preview")
+                if rule.state != .paused {
+                    RuleModeControl(
+                        state: rule.state, canActivate: !rule.isVeryBroad,
+                        preview: { perform { try await model.setState(.preview, for: rule) } },
+                        activate: onActivate
+                    )
                 }
                 Button("Duplicate") { perform { try await model.duplicate(rule) } }
                     .accessibilityLabel("Duplicate \(rule.name)")
@@ -192,14 +189,14 @@ private struct RuleRow: View {
                     .foregroundStyle(.red)
                     .accessibilityLabel("Delete \(rule.name)")
             }
-            .buttonStyle(.link)
+            .buttonStyle(PruneButtonStyle())
 
             if preview.phase != .idle {
                 VStack(alignment: .leading, spacing: 8) {
                     RulePreviewResultView(controller: preview)
                     if case .finished(let result) = preview.phase, result.matches > 0 {
                         Button("Show scheduled matches in Upcoming") { router.previewMatches(of: rule.id) }
-                            .buttonStyle(.link)
+                            .buttonStyle(PruneLinkStyle())
                             .accessibilityLabel("Show scheduled matches of \(rule.name) in Upcoming")
                     }
                 }
@@ -211,6 +208,7 @@ private struct RuleRow: View {
         .padding(.horizontal, 10)
         .background(router.focusedRuleID == rule.id ? PrunePalette.plum.opacity(0.07) : .clear, in: RoundedRectangle(cornerRadius: 8))
         .accessibilityElement(children: .contain)
+        .pruneHover()
         .accessibilityLabel("\(rule.name), \(rule.state.label)")
     }
 }
@@ -316,6 +314,16 @@ package struct RuleEditorSheet: View {
             Text(editing == nil ? "New rule" : "Edit rule")
                 .font(Typography.display(size: 27))
                 .padding(.bottom, 14)
+            if let draft = currentDraft {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "text.quote").foregroundStyle(PrunePalette.plum).accessibilityHidden(true)
+                    Text(draft.naturalDescription()).fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(14)
+                .background(PrunePalette.plum.opacity(0.05), in: RoundedRectangle(cornerRadius: PruneDesign.Radius.row))
+                .padding(.bottom, 16)
+                .pruneAnimation(value: draft.naturalDescription())
+            }
 
             ScrollViewReader { proxy in
             ScrollView {
@@ -431,7 +439,7 @@ package struct RuleEditorSheet: View {
                         .disabled(!canSave)
                 }
                 Button(primaryLabel) { requestSave(primaryState) }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(PruneButtonStyle(prominent: true))
                     .keyboardShortcut(.defaultAction)
                     .disabled(!canSave)
             }
@@ -468,7 +476,7 @@ package struct RuleEditorSheet: View {
     private var impactPreview: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
-                Text("IMPACT PREVIEW").font(.manropeCaptionBold).foregroundStyle(PrunePalette.plum)
+                Text("Impact preview").font(.manropeHeadline).foregroundStyle(PrunePalette.plum)
                 Spacer()
                 Button(preview.phase == .idle ? "Preview matches" : "Preview again", action: startPreview)
                     .disabled(!canSave || preview.isRunning)
@@ -490,7 +498,7 @@ package struct RuleEditorSheet: View {
 
     private func editorSection<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(title.uppercased()).font(.manropeCaptionBold).foregroundStyle(PrunePalette.plum)
+            Text(title).font(Typography.panelTitle).foregroundStyle(PrunePalette.plum)
                 .accessibilityAddTraits(.isHeader)
             content()
         }

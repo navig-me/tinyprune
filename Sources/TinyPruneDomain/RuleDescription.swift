@@ -41,9 +41,9 @@ public extension LifetimeRule {
         if names.isEmpty && globs.isEmpty {
             subject = "any \(kindNoun)"
         } else if !names.isEmpty && globs.isEmpty {
-            subject = "a \(kindNoun) named \(names.joined(separator: " or "))"
+            subject = "\(kindNoun == "item" ? "an" : "a") \(kindNoun) named \(names.joined(separator: " or "))"
         } else {
-            subject = "a \(kindNoun) matching \((names + globs).joined(separator: ", "))"
+            subject = "\(kindNoun == "item" ? "an" : "a") \(kindNoun) matching \((names + globs).joined(separator: ", "))"
         }
         var display = scope.path
         if display == homeDirectory { display = "~" }

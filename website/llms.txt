@@ -11,7 +11,7 @@
 - Rules can use filename or folder patterns, age, and project inactivity. Developer templates support dependency and build folders such as node_modules.
 - Core cleanup requires no account or network access and reads filesystem metadata, not file contents. Key-enabled direct-download builds, including ad-hoc builds without an Apple account, use EdDSA-authenticated Sparkle updates over HTTPS. Checks follow Check for new versions (default on); installation is user-confirmed through Update Now/the native dialog, never automatic. Homebrew never constructs Sparkle; Homebrew/no-key copies use GitHub release notices and manual download or brew upgrade. First-install Gatekeeper approval is unchanged; non-quarantined Sparkle replacements are expected, not end-to-end verified.
 - Interfaces include the native app, Finder menu and tinyprune CLI with JSON output and configuration validate, preview, apply and export commands.
-- TinyPrune 0.1.0 is published as an unsigned, not notarized pre-release. Install with `brew install --cask navig-me/tap/tinyprune` or download the DMG from GitHub Releases. Landing-page window contents are illustrative examples, not release/version or reclaimed-space claims.
+- TinyPrune 0.1.0 is published as an unsigned, not notarized pre-release. Install with `brew install --cask navig-me/tap/tinyprune` or download the DMG from GitHub Releases. The landing-page time-machine playground uses sample files and simulated time; it never touches real files.
 - The app has no telemetry. Website analytics are separate: the tinyprune.com marketing website loads Google Analytics and PostHog.
 - Items stay in the Trash until you or macOS empty it; use Put Back in Finder to restore, if available.
 

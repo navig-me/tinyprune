@@ -37,6 +37,12 @@ struct OverviewPage: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 32) {
                 VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 7) {
+                        Image(systemName: needsAttention || overview.policy.globallyPaused || model.pruningHaltedReason != nil ? "pause.circle" : "checkmark.circle")
+                            .foregroundStyle(needsAttention || overview.policy.globallyPaused || model.pruningHaltedReason != nil ? PrunePalette.caution : PrunePalette.safe)
+                            .pruneBounce(value: model.isLoading)
+                        Text("On this Mac").font(.caption).foregroundStyle(.secondary)
+                    }
                     Text(headline)
                         .font(Typography.headline)
                         .accessibilityAddTraits(.isHeader)
@@ -46,30 +52,30 @@ struct OverviewPage: View {
                             model.acknowledgeAttention()
                             router.selection = .activity
                         }
-                        .buttonStyle(.link)
+                        .buttonStyle(PruneLinkStyle())
                     }
                 }
 
-                VStack(alignment: .leading, spacing: 10) {
-                    SectionTitle("Managed places")
+                VStack(alignment: .leading, spacing: 0) {
+                    SectionTitle("Managed places").padding(.bottom, 12)
                     if places.isEmpty {
-                        Text("No places are managed yet. Start from a template.")
-                            .foregroundStyle(.secondary)
+                        PruneEmptyState(title: "Choose your first place", message: "Give a folder’s disposable contents a lifetime. Start with a template, then review its matches.", symbol: "folder.badge.plus")
                         Button("Browse templates") { router.selection = .templates }
                     }
                     ForEach(places) { root in
                         let rules = overview.policy.rules.filter { $0.scope.path == root.path || $0.scope.path.hasPrefix(root.path + "/") }
                         HStack(alignment: .firstTextBaseline) {
+                            Image(systemName: "folder")
+                                .font(.system(size: 22, weight: .light))
+                                .foregroundStyle(PrunePalette.plum)
+                                .frame(width: 34)
+                                .accessibilityHidden(true)
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(root.displayName)
-                                if rules.isEmpty {
-                                    Text("No rules").font(.subheadline).foregroundStyle(.secondary)
-                                }
-                                ForEach(rules) { rule in
-                                    Text("\(rule.name) · \(ConfigPlan.durationDescription(rule.lifetime.seconds))")
-                                        .font(.subheadline)
-                                        .foregroundStyle(.secondary)
-                                }
+                                Text(root.displayName).font(Typography.body(size: 14, weight: .semibold))
+                                Text(rules.isEmpty ? "No rules yet" : "\(rules.count) lifecycle rule\(rules.count == 1 ? "" : "s")")
+                                    .font(.subheadline).foregroundStyle(.secondary)
+                                    .contentTransition(.numericText())
+                                    .help(rules.map { "\($0.name): \(ConfigPlan.durationDescription($0.lifetime.seconds))" }.joined(separator: "\n"))
                                 PathText(path: root.path)
                             }
                             Spacer()
@@ -80,6 +86,7 @@ struct OverviewPage: View {
                             }
                         }
                         .padding(.vertical, 8)
+                        .pruneHover()
                         .accessibilityElement(children: .combine)
                         Divider()
                     }
@@ -92,10 +99,11 @@ struct OverviewPage: View {
                             .font(.subheadline).foregroundStyle(.secondary)
                     }
                     if nextItems.isEmpty {
-                        Text("Nothing is scheduled.").foregroundStyle(.secondary)
+                        PruneEmptyState(title: "Nothing waiting", message: "When a matching item gets a deadline, it appears here. Keep protections take precedence over every rule.", symbol: "clock.badge.checkmark")
                     }
                     ForEach(nextItems.prefix(3)) { item in
                         HStack {
+                            DeadlineRing(deadline: item.explanation.scheduledAt, basis: item.explanation.basisDate, now: model.currentDate, preview: item.explanation.disposition == .preview)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(displayName(item.explanation.candidateIdentity.pathHint))
                                 PathText(path: item.explanation.candidateIdentity.pathHint)
@@ -105,17 +113,21 @@ struct OverviewPage: View {
                             Text(relativeDay(item.explanation.scheduledAt, now: model.currentDate)).foregroundStyle(.secondary)
                         }
                         .padding(.vertical, 4)
+                        .pruneHover()
                         .accessibilityElement(children: .combine)
                     }
                     if nextItems.count > 3 {
                         Button("See all \(nextItems.count) in Upcoming") { router.selection = .upcoming }
-                            .buttonStyle(.link)
+                            .buttonStyle(PruneLinkStyle())
                     }
                     if !nextIsPreviewOnly && !model.previewUpcoming.isEmpty {
                         Text("\(model.previewUpcoming.count) more match\(model.previewUpcoming.count == 1 ? "" : "es") from Preview rules will not move.")
                             .font(.subheadline).foregroundStyle(.secondary)
                     }
                 }
+                .padding(20)
+                .background(PrunePalette.row, in: RoundedRectangle(cornerRadius: PruneDesign.Radius.panel))
+                .overlay { RoundedRectangle(cornerRadius: PruneDesign.Radius.panel).strokeBorder(PrunePalette.plum.opacity(0.07)) }
             }
             .padding(32)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -130,7 +142,7 @@ struct OverviewPage: View {
         if !overview.policy.rules.contains(where: { $0.state == .active }) && overview.policy.rules.contains(where: { $0.state == .preview }) {
             return "Only previewing."
         }
-        return "Everything is tidy."
+        return "Running quietly."
     }
 
     private var subline: String {
@@ -212,28 +224,24 @@ struct UpcomingPage: View {
     private var selectedItem: AgentUpcomingItem? { items.first { $0.id == router.inspectedItemID } }
 
     var body: some View {
+        HStack(spacing: 0) {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 22, pinnedViews: []) {
                 if let rule = filterRule {
                     HStack {
                         Pill(text: "Matches of \(rule.name)")
-                        Button("Show all") { router.upcomingRuleFilter = nil }.buttonStyle(.link)
+                        Button("Show all") { router.upcomingRuleFilter = nil }.buttonStyle(PruneLinkStyle())
                     }
                 }
                 if items.isEmpty {
-                    ContentUnavailableView(
-                        "Nothing scheduled",
-                        systemImage: "clock",
-                        description: Text("Matches appear here once a rule finds items. Preview rules list them without touching your files.")
-                    )
-                    .frame(maxWidth: .infinity)
+                    PruneEmptyState(title: "Nothing scheduled", message: "Matches appear here once a rule finds items. Preview rules list them without touching your files.", symbol: "clock")
                 }
                 ForEach(UpcomingGroup.allCases, id: \.rawValue) { group in
                     let rows = items.filter { UpcomingGroup($0.explanation.scheduledAt) == group }
                     if !rows.isEmpty {
                         VStack(alignment: .leading, spacing: 0) {
                             SectionTitle(group.title).padding(.bottom, 8)
-                            ForEach(rows) { item in
+                            ForEach(Array(rows.enumerated()), id: \.element.id) { index, item in
                                 Button {
                                     router.inspectedItemID = item.id
                                 } label: {
@@ -248,6 +256,8 @@ struct UpcomingPage: View {
                                 .accessibilityLabel("Why will \(displayName(item.explanation.candidateIdentity.pathHint)) be pruned?")
                                 .accessibilityValue("\(item.explanation.candidateIdentity.pathHint), \(item.explanation.matchedRuleName), \(item.explanation.scheduledAt.formatted(date: .abbreviated, time: .shortened)), \(item.explanation.disposition == .preview ? "Preview" : "Active")")
                                 .accessibilityAddTraits(router.inspectedItemID == item.id ? [.isSelected] : [])
+                                .pruneEntrance(index)
+                                .transition(.opacity)
                                 Divider()
                             }
                         }
@@ -261,6 +271,7 @@ struct UpcomingPage: View {
                         }
                         ForEach(protectedOverrides) { override in
                             HStack(alignment: .firstTextBaseline) {
+                                Image(systemName: "lock.fill").foregroundStyle(PrunePalette.safe).accessibilityHidden(true)
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(displayName(override.path))
                                     PathText(path: override.path)
@@ -270,10 +281,13 @@ struct UpcomingPage: View {
                                     Pill(text: descendants ? "Protected with contents" : "Protected", color: PrunePalette.safe)
                                 }
                                 Button("Stop protecting") { Task { await model.perform { try await model.inherit(path: override.path) } } }
-                                    .buttonStyle(.link)
+                                    .buttonStyle(PruneLinkStyle())
                                     .accessibilityLabel("Stop protecting \(displayName(override.path))")
                             }
                             .padding(.vertical, 12)
+                            .padding(.horizontal, 10)
+                            .background(PrunePalette.safe.opacity(0.06), in: RoundedRectangle(cornerRadius: PruneDesign.Radius.row))
+                            .transition(.opacity)
                             Divider()
                         }
                     }
@@ -281,13 +295,18 @@ struct UpcomingPage: View {
             }
             .padding(32)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .pruneAnimation(value: items.map(\.id))
         }
-        .inspector(isPresented: Binding(get: { selectedItem != nil }, set: { if !$0 { router.inspectedItemID = nil } })) {
+        .frame(maxWidth: .infinity)
             if let item = selectedItem {
+                Divider()
                 WhyInspector(item: item, close: { router.inspectedItemID = nil }, onSize: { sizes[item.explanation.candidateIdentity.pathHint] = $0 })
-                    .inspectorColumnWidth(min: 280, ideal: 340, max: 440)
+                    .frame(width: 340)
+                    .background(PrunePalette.row)
+                    .transition(.opacity)
             }
         }
+        .pruneAnimation(value: router.inspectedItemID)
     }
 }
 
@@ -298,9 +317,12 @@ private struct UpcomingRow: View {
     let isCustom: Bool
     let size: AgentViewModel.ItemSize?
 
+    @EnvironmentObject private var model: AgentViewModel
+    @State private var hovered = false
     var body: some View {
         let explanation = item.explanation
         HStack(alignment: .firstTextBaseline, spacing: 14) {
+            DeadlineRing(deadline: explanation.scheduledAt, basis: explanation.basisDate, now: model.currentDate, preview: explanation.disposition == .preview)
             VStack(alignment: .leading, spacing: 3) {
                 Text(displayName(explanation.candidateIdentity.pathHint))
                 PathText(path: explanation.candidateIdentity.pathHint)
@@ -318,6 +340,10 @@ private struct UpcomingRow: View {
                     color: isCustom ? PrunePalette.plum : explanation.disposition == .preview ? PrunePalette.caution : PrunePalette.safe
                 )
             }
+            Image(systemName: "info.circle")
+                .foregroundStyle(PrunePalette.plum)
+                .opacity(hovered || isSelected ? 1 : 0.3)
+                .accessibilityHidden(true)
         }
         .padding(.vertical, 12)
         .padding(.horizontal, 10)
@@ -327,6 +353,9 @@ private struct UpcomingRow: View {
                 RoundedRectangle(cornerRadius: 8).strokeBorder(PrunePalette.plum, lineWidth: 2)
             }
         }
+        .pruneHover()
+        .onHover { hovered = $0 }
+        .pruneAnimation(value: hovered)
     }
 }
 
@@ -375,6 +404,8 @@ package struct WhyInspectorContent: View {
         }
         .padding(20)
         .task(id: path) { await load() }
+        .pruneAnimation(value: explanation)
+        .sensoryFeedback(.success, trigger: isWorking) { old, new in old && !new && failure == nil }
     }
 
     @ViewBuilder
@@ -391,7 +422,11 @@ package struct WhyInspectorContent: View {
             field("Scheduled", custom.expiresAt.formatted(date: .complete, time: .shortened))
             field("Reason", "An explicit expiry is set on this item")
         case .protected(let protected):
-            field("Protected", "Keep on \(protected.protectedPath)\(protected.protectsDescendants ? " including everything inside" : "")")
+            Label("Keep on \(protected.protectedPath)\(protected.protectsDescendants ? " including everything inside" : "")", systemImage: "lock.fill")
+                .foregroundStyle(PrunePalette.safe)
+                .padding(12)
+                .background(PrunePalette.safe.opacity(0.08), in: RoundedRectangle(cornerRadius: PruneDesign.Radius.row))
+                .pruneBounce(value: !isWorking)
         case .suppressed(let reason):
             field("Not scheduled", reason.userExplanation)
         case .noRule:
@@ -415,7 +450,7 @@ package struct WhyInspectorContent: View {
                         catch { failure = error.localizedDescription }
                     }
                 }
-                .buttonStyle(.link)
+                .buttonStyle(PruneLinkStyle())
                 .disabled(isMeasuring)
                 .help("Measure this item's size on disk")
             }
@@ -437,14 +472,14 @@ package struct WhyInspectorContent: View {
                     keepButton
                     extendButtons(base: scheduled.scheduledAt, disposition: scheduled.disposition)
                 }
-                Button("Open rule") { router.openRule(scheduled.matchedRuleID) }.buttonStyle(.link)
+                Button("Open rule") { router.openRule(scheduled.matchedRuleID) }.buttonStyle(PruneLinkStyle())
             case .customExpiry(let custom):
                 HStack {
                     keepButton
                     extendButtons(base: custom.expiresAt, disposition: custom.disposition)
                 }
                 Button("Follow the rule instead") { run { try await model.inherit(path: path) } }
-                    .buttonStyle(.link)
+                    .buttonStyle(PruneLinkStyle())
                     .disabled(isWorking)
                     .accessibilityHint("Removes the custom expiry from this item")
             case .protected(let protected):
@@ -473,7 +508,7 @@ package struct WhyInspectorContent: View {
     }
 
     private var keepButton: some View {
-        Button("Keep") { confirmsKeep = true }
+        Button { confirmsKeep = true } label: { Label("Keep", systemImage: "lock.open") }
             .disabled(isWorking)
             .accessibilityLabel("Keep \(displayName(path)) from being pruned")
     }
@@ -599,7 +634,7 @@ package struct CustomExpirySheet: View {
                         catch { errorMessage = error.localizedDescription }
                     }
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(PruneButtonStyle(prominent: true))
                 .keyboardShortcut(.defaultAction)
             }
         }

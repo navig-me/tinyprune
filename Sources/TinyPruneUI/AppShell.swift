@@ -91,9 +91,9 @@ package struct TinyPruneRootView: View {
     package init() {}
 
     package var body: some View {
-        NavigationSplitView {
-            TinyPruneSidebar(selection: $router.selection)
-        } detail: {
+        HStack(spacing: 0) {
+            TinyPruneSidebar(selection: $router.selection).frame(width: 220)
+            Divider()
             VStack(spacing: 0) {
                 if showsOnboarding {
                     OnboardingFlow { onboardingCompleted = true }
@@ -105,8 +105,8 @@ package struct TinyPruneRootView: View {
                 }
             }
             .background(PrunePalette.canvas)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .navigationSplitViewStyle(.balanced)
         .sheet(item: Binding(
             get: { showsOnboarding ? nil : router.pendingExpiryPath.map(PathItem.init) },
             set: { if $0 == nil { router.pendingExpiryPath = nil } }
@@ -181,8 +181,13 @@ package struct TinyPruneRootView: View {
     @ViewBuilder
     private var content: some View {
         if model.isLoading && model.overview == nil {
-            ProgressView("Connecting to the local agent")
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            VStack(spacing: 18) {
+                BrandMarkView(size: 44)
+                ProgressView("Connecting to the local agent").controlSize(.small)
+                Text("Loading rules and schedules from this Mac.")
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let errorMessage = model.errorMessage {
             AgentUnavailableView(message: errorMessage)
         } else if let overview = model.overview {
@@ -195,11 +200,8 @@ package struct TinyPruneRootView: View {
             case .settings: SettingsPage(overview: overview)
             }
         } else {
-            ContentUnavailableView {
-                Label { Text("No local state") } icon: { BrandMarkView(size: 44) }
-            } description: {
-                Text("Refresh to load TinyPrune rules.")
-            }
+            PruneEmptyState(title: "No local state", message: "Refresh to load TinyPrune rules from the local agent.", symbol: "arrow.clockwise")
+                .padding(32)
         }
     }
 
@@ -307,7 +309,12 @@ package struct MenuBarContent: View {
     package init() {}
 
     package var body: some View {
-        Group {
+        VStack(alignment: .leading, spacing: 12) {
+        HStack(spacing: 10) {
+            BrandMarkView(size: 30)
+            Text("TinyPrune").font(Typography.panelTitle)
+            Spacer()
+        }
         if let overview = model.overview {
             Text(statusLine(overview))
             if let issue = model.connectionIssue {
@@ -358,20 +365,24 @@ package struct MenuBarContent: View {
         Button("Open TinyPrune") {
             NSApp.activate(ignoringOtherApps: true)
             router.selection = .overview
-            if NSApp.windows.allSatisfy({ !$0.isVisible }) { openWindow(id: "main") }
+            if !NSApp.windows.contains(where: { $0.canBecomeMain && $0.isVisible }) { openWindow(id: "main") }
         }
         Divider()
         Button("Quit TinyPrune") { NSApp.terminate(nil) }
             .keyboardShortcut("q")
             .help("Quits this app. The background agent keeps applying your rules.")
         }
+        .padding(18)
+        .frame(width: 320, alignment: .leading)
+        .background(PrunePalette.canvas)
+        .tinyPruneWindowStyle()
         .task { await model.refresh() }
     }
 
     private func openActivity() {
         NSApp.activate(ignoringOtherApps: true)
         router.selection = .activity
-        if NSApp.windows.allSatisfy({ !$0.isVisible }) { openWindow(id: "main") }
+        if !NSApp.windows.contains(where: { $0.canBecomeMain && $0.isVisible }) { openWindow(id: "main") }
     }
 
     /// Says what TinyPrune is really doing: Preview rules never move files.
@@ -392,34 +403,83 @@ extension View {
     /// Tint and base typeface applied to every TinyPrune window, shared by the app and the snapshot harness.
     package func tinyPruneWindowStyle() -> some View {
         tint(PrunePalette.plum).font(Typography.body(size: 13))
+            .buttonStyle(PruneButtonStyle())
     }
 }
 
 package struct TinyPruneSidebar: View {
     @Binding var selection: AppSection?
+    @EnvironmentObject private var model: AgentViewModel
+    @Environment(\.accessibilityReduceMotion) private var reduced
+    @Namespace private var selectionIndicator
+    @Environment(\.colorSchemeContrast) private var contrast
 
     package init(selection: Binding<AppSection?>) { _selection = selection }
 
     package var body: some View {
-        List(selection: $selection) {
-            ForEach(AppSection.allCases) { section in
-                Label(section.rawValue, systemImage: section.symbol)
-                    .tag(section)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                BrandMarkView(size: 30)
+                Text("TinyPrune").font(Typography.brand).foregroundStyle(PrunePalette.plum)
             }
-        }
-        .listStyle(.sidebar)
-        .safeAreaInset(edge: .top, spacing: 0) {
-            HStack(spacing: 8) {
-                BrandMarkView(size: 24)
-                Text("TinyPrune")
-                    .font(Typography.brand)
-                    .foregroundStyle(PrunePalette.plum)
+            .padding(.horizontal, 12).padding(.top, 28).padding(.bottom, 24)
+            ForEach(Array(AppSection.allCases.enumerated()), id: \.element.id) { index, section in
+                Button { selection = section } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: section.symbol).frame(width: 18)
+                    Text(section.rawValue)
+                    Spacer(minLength: 4)
+                    if let count = badge(for: section), count > 0 {
+                        PruneCount(count).font(.caption.weight(.semibold))
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(PrunePalette.plum.opacity(0.08), in: Capsule())
+                    }
+                }
+                .padding(.vertical, 10).padding(.horizontal, 12)
+                .background {
+                    if selection == section {
+                        RoundedRectangle(cornerRadius: PruneDesign.Radius.row)
+                            .fill(PrunePalette.plum.opacity(0.09))
+                            .matchedGeometryEffect(id: "selectionWash", in: selectionIndicator)
+                    }
+                }
+                .overlay(alignment: .leading) {
+                    if selection == section {
+                        Capsule().fill(PrunePalette.plum).frame(width: 3, height: 18)
+                            .offset(x: 2)
+                            .matchedGeometryEffect(id: "selection", in: selectionIndicator)
+                    }
+                }
+                .overlay {
+                    if selection == section && contrast == .increased {
+                        RoundedRectangle(cornerRadius: PruneDesign.Radius.row).strokeBorder(PrunePalette.plum)
+                    }
+                }
+                .pruneHover()
+                .foregroundStyle(selection == section ? PrunePalette.plum : .primary)
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(KeyEquivalent(Character(String(index + 1))), modifiers: .command)
+                .accessibilityLabel(section.rawValue)
+                .accessibilityAddTraits(selection == section ? [.isSelected] : [])
             }
-            .accessibilityElement(children: .combine)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 18)
-            .padding(.vertical, 16)
+            Spacer()
+            Label("Local by design", systemImage: "externaldrive")
+                .font(.caption).foregroundStyle(.secondary)
+                .padding(12)
         }
+        .padding(.horizontal, 12)
+        .frame(maxHeight: .infinity)
+        .animation(PruneDesign.motion(reduced), value: selection)
         .background(PrunePalette.sidebar)
+    }
+
+    private func badge(for section: AppSection) -> Int? {
+        switch section {
+        case .rules: model.policy?.rules.count
+        case .upcoming: model.overview?.upcoming.count
+        case .activity: model.attentionItems.count
+        default: nil
+        }
     }
 }

@@ -44,5 +44,6 @@ struct TinyPruneApp: App {
             Image(nsImage: BrandMark.menuBarImage)
                 .accessibilityLabel("TinyPrune")
         }
+        .menuBarExtraStyle(.window)
     }
 }

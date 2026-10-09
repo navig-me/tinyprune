@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.4 - 2026-10-09
+
+### App
+- Design upgrade across the native app: a stone sidebar with an animated selection and live count badges (Command-1 to 6 switch sections), a calmer Overview, Upcoming rows with deadline rings and a Why inspector, an animated Preview/Active control, a plain-language sentence that updates as you edit a rule, staggered Preview results, tactile press and hover states, and a redesigned menu-bar popover and onboarding.
+- Motion honors Reduce Motion; Dynamic Type, VoiceOver labels and increased contrast are preserved. No change to rule evaluation, safety checks, Trash behavior or IPC.
+- Rule sentences read "an item" instead of "a item".
+
+### Website and docs
+- tinyprune.com is rebuilt around real app screenshots and an interactive sample (simulated time, Preview vs Active, Keep) with self-hosted fonts and no third-party CDN. docs.tinyprune.com shares the new design, with copyable commands, deep links, a scrollspy guide and a template filter.
+
 ## 0.1.3 - 2026-10-08
 
 - Fix the menu-bar plum's Retina drawing scale and increase its image size to 20 points.

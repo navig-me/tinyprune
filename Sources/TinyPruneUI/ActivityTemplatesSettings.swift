@@ -79,7 +79,7 @@ package struct ActivityTrashRecovery: View {
         VStack(alignment: .leading, spacing: 5) {
             if let path = item.detail { PathText(path: path) }
             Button("Show in Trash") { available = action.show(item) }
-                .buttonStyle(.bordered)
+                .buttonStyle(PruneButtonStyle())
                 .keyboardShortcut(shortcut)
                 .disabled(!available)
                 .accessibilityLabel("Show \(item.identity?.pathHint ?? "item") in Trash")
@@ -115,18 +115,17 @@ struct ActivityPage: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityAddTraits(.isStaticText)
                 if model.activity.isEmpty {
-                    ContentUnavailableView(
-                        "No activity yet",
-                        systemImage: "list.bullet.rectangle",
-                        description: Text("Rule changes, protections, and every move to Trash are recorded here. Audit history stays on this Mac.")
-                    )
-                    .frame(maxWidth: .infinity)
+                    PruneEmptyState(title: "A quiet beginning", message: "Rule changes, protections, and every move to Trash are recorded here. Audit history stays on this Mac.", symbol: "list.bullet.rectangle")
                 }
                 ForEach(days, id: \.day) { group in
                     VStack(alignment: .leading, spacing: 0) {
                         SectionTitle(group.day.formatted(date: .complete, time: .omitted)).padding(.bottom, 8)
                         ForEach(group.items) { item in
                             HStack(alignment: .firstTextBaseline, spacing: 14) {
+                                Image(systemName: item.kind == .movedToTrash ? "checkmark.circle.fill" : item.isAttention ? "exclamationmark.circle" : "circle")
+                                    .foregroundStyle(item.kind == .movedToTrash ? PrunePalette.safe : item.isAttention ? PrunePalette.caution : PrunePalette.plum)
+                                    .pruneBounce(value: model.isLoading)
+                                    .accessibilityHidden(true)
                                 Text(item.occurredAt.formatted(date: .omitted, time: .shortened))
                                     .font(Typography.mono(size: 13))
                                     .foregroundStyle(.secondary)
@@ -144,6 +143,8 @@ struct ActivityPage: View {
                                 Spacer()
                             }
                             .padding(.vertical, 8)
+                            .pruneHover()
+                            .transition(.opacity)
                             Divider()
                         }
                     }
@@ -152,6 +153,8 @@ struct ActivityPage: View {
             .padding(32)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .pruneAnimation(value: model.activity.map(\.id))
+        .sensoryFeedback(.success, trigger: model.activity.filter { $0.kind == .movedToTrash }.count)
         .font(.manropeBody)
     }
 }
@@ -181,6 +184,7 @@ struct TemplatesPage: View {
                             .accessibilityLabel("Use \(template.title) template")
                     }
                     .padding(.vertical, 16)
+                    .pruneHover()
                     Divider()
                 }
             }
@@ -256,7 +260,7 @@ package struct TemplateApplySheet: View {
                 Button("Cancel", role: .cancel) { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Button("Create rules") { Task { await create() } }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(PruneButtonStyle(prominent: true))
                     .keyboardShortcut(.defaultAction)
                     .disabled((folder == nil && prefillPath == nil) || isSaving)
             }
@@ -350,6 +354,7 @@ struct SettingsPage: View {
     @State private var confirmsRebuild = false
     @State private var customGraceActive = false
     @State private var customGraceHours = ""
+    @State private var copiedCommand = false
 
     private static let customGraceTag = -1.0
     private static let gracePresets: [Double] = [0, 3_600, 21_600, 86_400]
@@ -475,11 +480,19 @@ struct SettingsPage: View {
                             .contextMenu {
                                 Button("Copy install command") {
                                     NSPasteboard.general.clearContents()
-                                    NSPasteboard.general.setString(installCommand, forType: .string)
+                                    copiedCommand = NSPasteboard.general.setString(installCommand, forType: .string)
                                 }
                             }
                         Text("Never replaces an existing tinyprune command; remove that one first to relink.")
                             .font(.manropeCaption).foregroundStyle(.secondary)
+                        Button {
+                            NSPasteboard.general.clearContents()
+                            copiedCommand = NSPasteboard.general.setString(installCommand, forType: .string)
+                        } label: {
+                            Label(copiedCommand ? "Copied" : "Copy command", systemImage: copiedCommand ? "checkmark" : "doc.on.doc")
+                        }
+                        .sensoryFeedback(.success, trigger: copiedCommand)
+                        .pruneAnimation(value: copiedCommand)
                     }
                 }
             }
@@ -684,7 +697,7 @@ package struct ConfigImportSheet: View {
                         catch { errorMessage = error.localizedDescription }
                     }
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(PruneButtonStyle(prominent: true))
                 .keyboardShortcut(.defaultAction)
                 .disabled(!preview.plan.isApplicable || isApplying)
             }

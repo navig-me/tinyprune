@@ -2,8 +2,8 @@ import AppKit
 import SwiftUI
 import TinyPruneUI
 
-/// Hosts SwiftUI views in an offscreen `NSWindow` (never ordered on screen) and rasterizes them with AppKit,
-/// so no Screen Recording permission or window server capture is involved.
+/// Hosts SwiftUI views in offscreen windows and rasterizes them with AppKit.
+/// No Screen Recording permission or window-server capture is involved.
 @MainActor
 final class Snapshotter {
     let outputDirectory: URL

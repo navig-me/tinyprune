@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, access } from 'node:fs/promises';
 
 const html = await readFile(new URL('../index.html', import.meta.url), 'utf8');
 const required = [
@@ -49,4 +49,20 @@ if (!llms.startsWith('# TinyPrune') || !llms.includes('https://docs.tinyprune.co
 const socialImage = await readFile(new URL('../og.png', import.meta.url));
 if (socialImage.toString('hex', 0, 8) !== '89504e470d0a1a0a' || socialImage.readUInt32BE(16) !== 1200 || socialImage.readUInt32BE(20) !== 630) {
   throw new Error('social image must be a 1200x630 PNG');
+}
+
+if (/[—–]/u.test(html)) throw new Error('website must not contain em or en dashes');
+if ((html.match(/<h1[\s>]/g) ?? []).length !== 1) throw new Error('website must contain exactly one h1');
+if (/fonts\.googleapis|fonts\.gstatic|cdn\.tailwindcss/.test(html)) throw new Error('website must self-host fonts and styles');
+const site = new URL('../', import.meta.url);
+const references = [...html.matchAll(/\b(?:src|href|srcset)="([^"]+)"/g)].flatMap(([, value]) => value.split(',').map(part => part.trim().split(/\s+/)[0]));
+for (const reference of references) {
+  if (!reference || /^(?:[a-z]+:|\/\/|#)/i.test(reference)) continue;
+  const pathname = reference.split(/[?#]/)[0].replace(/^\//, '');
+  if (!pathname) continue;
+  await access(new URL(pathname, site)).catch(() => { throw new Error(`missing website asset: ${reference}`); });
+}
+for (const [, path] of html.matchAll(/(?:src|srcset)="(assets\/screens\/[^"]+\.png)"/g)) {
+  const image = await readFile(new URL(path, site));
+  if (image.toString('hex', 0, 8) !== '89504e470d0a1a0a') throw new Error(`screenshot must be a PNG: ${path}`);
 }

@@ -128,6 +128,7 @@ struct RulePreviewResultView: View {
     var isStale = false
     var body: some View {
         content.font(.manropeBody)
+            .pruneAnimation(value: controller.phase)
     }
 
     @ViewBuilder
@@ -155,6 +156,7 @@ struct RulePreviewResultView: View {
         case .finished(let preview):
             VStack(alignment: .leading, spacing: 10) {
                 Text(RulePreviewText.headline(preview)).font(.manropeHeadline)
+                    .contentTransition(.numericText())
                 if let note = RulePreviewText.truncationNote(preview) {
                     Label(note, systemImage: "exclamationmark.triangle")
                         .font(.manropeSubheadline)
@@ -171,7 +173,7 @@ struct RulePreviewResultView: View {
                     Text("Soonest \(preview.samples.count) to be pruned")
                         .font(.manropeCaptionSemibold).foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(preview.samples.enumerated()), id: \.offset) { _, sample in
+                        ForEach(Array(preview.samples.enumerated()), id: \.offset) { index, sample in
                             HStack(alignment: .firstTextBaseline, spacing: 12) {
                                 PathText(path: sample.path)
                                 Spacer(minLength: 8)
@@ -184,6 +186,8 @@ struct RulePreviewResultView: View {
                                     .frame(minWidth: 62, alignment: .trailing)
                             }
                             .padding(.vertical, 4)
+                            .pruneEntrance(index)
+                            .pruneHover()
                             Divider()
                         }
                     }
