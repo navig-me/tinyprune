@@ -133,6 +133,7 @@ package protocol AgentSystemServices: AnyObject {
     var agentStatus: SMAppService.Status { get }
     func registerAgent() throws
     func restartAgent() throws
+    func reconcileAgentAfterUpdate() throws -> Bool
     func openLoginItems()
     var launchesAtLogin: Bool { get }
     func setLaunchAtLogin(_ enabled: Bool) throws
@@ -149,6 +150,21 @@ package final class SMAppSystemServices: AgentSystemServices {
     package func restartAgent() throws {
         try? launchAgent.unregister()
         try launchAgent.register()
+    }
+
+    /// `brew upgrade` and direct replacement leave macOS listing the agent as enabled while launchd has lost or
+    /// cannot spawn the job, and the first request then hangs. Re-register once whenever the installed app build
+    /// differs from the one that last registered, before anything talks to the agent. Returns true if it did.
+    package func reconcileAgentAfterUpdate() throws -> Bool {
+        let info = Bundle.main.infoDictionary
+        let build = "\(info?["CFBundleShortVersionString"] as? String ?? "?") (\(info?["CFBundleVersion"] as? String ?? "?"))"
+        let key = "agentRegisteredByBuild"
+        let defaults = UserDefaults.standard
+        guard launchAgent.status == .enabled else { return false }
+        if defaults.string(forKey: key) == build { return false }
+        try restartAgent()
+        defaults.set(build, forKey: key)
+        return true
     }
     package func openLoginItems() { SMAppService.openSystemSettingsLoginItems() }
     package var launchesAtLogin: Bool { SMAppService.mainApp.status == .enabled }
@@ -248,6 +264,7 @@ package final class AgentViewModel: ObservableObject {
     package func refreshRegistrationStatus() { registrationStatus = services.agentStatus }
 
     private var repairedAgentThisSession = false
+    private var reconciledAgentThisSession = false
 
     package func registerAgent() async {
         do {
@@ -321,6 +338,10 @@ package final class AgentViewModel: ObservableObject {
     /// A failed load keeps the last good overview and sets `connectionIssue`.
     package func refresh() async {
         registrationStatus = services.agentStatus
+        if !reconciledAgentThisSession {
+            reconciledAgentThisSession = true
+            if (try? services.reconcileAgentAfterUpdate()) == true { registrationStatus = services.agentStatus }
+        }
         if isRefreshing {
             refreshPending = true
             await withCheckedContinuation { refreshWaiters.append($0) }

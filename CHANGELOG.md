@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.8 - 2026-10-09
+
+- Fixed the app sitting on "Connecting to the local agent" after an upgrade. When the installed build differs from the one that last registered the background agent, TinyPrune now re-registers the agent before its first request, instead of waiting for a request that never answers.
+
 ## 0.1.7 - 2026-10-09
 
 - The app now recovers from "Agent unavailable" by itself after a Homebrew upgrade. `brew upgrade` unloads the background agent while macOS still lists it as enabled; TinyPrune re-registers it once at launch and retries. A **Restart background agent** button covers the case where that does not work.
