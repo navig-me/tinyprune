@@ -9,7 +9,42 @@ on:
 permissions:
   contents: read
 
+# A newer push supersedes an unfinished run for the same ref, so macOS jobs do not pile up.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  changes:
+    name: Detect native changes
+    runs-on: ubuntu-24.04
+    outputs:
+      native: ${{ steps.diff.outputs.native }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+      # Website, docs and Markdown-only changes cannot affect the native app, so skip the macOS matrix for them.
+      # Any doubt (manual run, unknown base, new branch) runs everything.
+      - id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -uo pipefail
+          base=""
+          if [[ "$EVENT" == pull_request ]]; then base="$PR_BASE"; elif [[ "$EVENT" == push ]]; then base="$BEFORE"; fi
+          native=true
+          if [[ -n "$base" && "$base" != 0000000000000000000000000000000000000000 ]] \
+             && files="$(git diff --name-only "$base" "$GITHUB_SHA" 2>/dev/null)" && [[ -n "$files" ]]; then
+            if ! grep -qvE '^(website/|docs/|[^/]+\.md$|\.github/workflows/(deploy-pages|publish-update-feed|homebrew)\.yml$)' <<<"$files"; then
+              native=false
+            fi
+          fi
+          echo "native=$native" >> "$GITHUB_OUTPUT"
+          echo "Native jobs needed: $native"
+
   static-sites:
     name: Validate ${{ matrix.site }}
     runs-on: ubuntu-24.04
@@ -27,6 +62,8 @@ jobs:
 
   native:
     name: Native acceptance (${{ matrix.runner }})
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     strategy:
@@ -40,11 +77,30 @@ jobs:
       - name: Select Xcode 16.2 on deployment-floor runner
         if: matrix.runner == 'macos-14'
         run: sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
+      # Compiled modules only; restored by Swift version so a toolchain change never reuses stale objects.
+      - name: Cache SwiftPM build products
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: |
+            .build/checkouts
+            .build/repositories
+            .build/artifacts
+            .build/arm64-apple-macosx
+            .build/x86_64-apple-macosx
+          key: swiftpm-${{ matrix.runner }}-${{ hashFiles('Package.swift', 'Package.resolved') }}-${{ github.sha }}
+          restore-keys: |
+            swiftpm-${{ matrix.runner }}-${{ hashFiles('Package.swift', 'Package.resolved') }}-
+      # The 100k-entry index benchmark and 60 second idle soak take minutes; one runner is enough to guard them.
       - name: Native behavior and safety suite
+        env:
+          SKIP_BENCHMARK: ${{ matrix.runner == 'macos-15' && 'no' || 'yes' }}
         run: |
           set -euo pipefail
           mkdir -p .build
-          swift test 2>&1 | tee .build/native-tests.log
+          skip=()
+          if [[ "$SKIP_BENCHMARK" == yes ]]; then skip=(--skip PhaseTwoBenchmarkTests); fi
+          # bash 3.2 on macOS treats an empty array as unbound under set -u, hence the ${var+...} guard.
+          swift test ${skip[@]+"${skip[@]}"} 2>&1 | tee .build/native-tests.log
       - name: Real domain and filesystem fixtures
         run: |
           set -euo pipefail
