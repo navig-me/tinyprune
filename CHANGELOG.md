@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.5 - 2026-10-09
+
+- The menu-bar mark is larger: the plum now fills a 22 pt status item instead of sitting small inside padding.
+- The "agent not found" message now says to open /Applications/TinyPrune.app instead of referring to a development executable.
+- tinyprune.com and the docs explain how to open TinyPrune after installing and what to do on first run.
+
 ## 0.1.4 - 2026-10-09
 
 ### App
