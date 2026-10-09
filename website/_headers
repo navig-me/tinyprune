@@ -7,3 +7,5 @@
   Cache-Control: public, max-age=86400
 /updates/*
   Cache-Control: no-transform, public, max-age=300
+/stats.json
+  Cache-Control: public, max-age=3600

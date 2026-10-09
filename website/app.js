@@ -166,3 +166,12 @@ function showTemplate(index,animate=true){
 }
 rail.addEventListener('click',event=>{const button=event.target.closest('[data-template]');if(button)showTemplate(Number(button.dataset.template));});
 showTemplate(0,false);
+// Download total written at deploy time from GitHub Releases; the line stays hidden if the file is missing.
+fetch('stats.json').then(r=>r.ok?r.json():Promise.reject()).then(stats=>{
+  const anchor=document.querySelector('.install-note');
+  if(!anchor||!Number.isFinite(stats.downloads)||stats.downloads<1)return;
+  const line=document.createElement('p');
+  line.className='download-stat';
+  line.textContent=`${stats.downloads.toLocaleString('en-US')} downloads from GitHub Releases and Homebrew so far.`;
+  anchor.after(line);
+}).catch(()=>{});

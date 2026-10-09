@@ -41,6 +41,11 @@ jobs:
           node-version: 22.14.0
       - name: Validate website
         run: npm --prefix website run check
+      - name: Generate download stats
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node website/scripts/stats.mjs
       - name: Report missing deployment credentials
         if: ${{ env.CLOUDFLARE_ACCOUNT_ID == '' || env.CLOUDFLARE_API_TOKEN == '' }}
         run: |

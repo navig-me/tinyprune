@@ -2,3 +2,4 @@
 .DS_Store
 .cloudflare/
 .wrangler/
+website/stats.json
