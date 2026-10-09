@@ -122,6 +122,16 @@ First installation of an ad-hoc browser download still requires the Gatekeeper a
 5. For any key-enabled direct release, including an ad-hoc prerelease, review the appcast PR, retained older entries, increasing build number, direct enclosure and release notes. Merge, approve Pages deploy, then dispatch `verify_public=true`; require passing public URL/length/EdDSA verification.
 6. Before claiming proven direct installation, exercise a genuine older/newer key-enabled ad-hoc direct pair against a signed test feed: native check, no-update, download failure/tampering, dismissal/skip, pending resume, user-confirmed Update Now/native dialog, install-on-quit, relaunch, interrupted install, agent reconciliation, and collision with a disposable fixture Trash operation. Packaging and signed-byte fixtures are not end-to-end installation proof. Developer ID/notarized acceptance remains separate and requires Apple credentials. Test first-open, Finder and login-item approval on actual macOS 15/26 before widening distribution.
 
+
+### Release cheat sheet (ad-hoc direct release)
+
+1. Bump the version in `Scripts/package-app.swift`, `Sources/TinyPruneAgentCore/AgentRequestHandler.swift` and the two `serviceVersion` assertions in `Tests/TinyPruneAgentCoreTests`, and add a `CHANGELOG.md` entry.
+2. Commit, push `main`, and make sure the tag points at a commit that is on `main` (do not tag before a `git pull --rebase`): `git tag -a vX.Y.Z -m "TinyPrune X.Y.Z" && git push origin vX.Y.Z`. The tag triggers `release.yml`.
+3. When the run finishes it opens an `updates/vX.Y.Z` PR (needs the "Allow GitHub Actions to create and approve pull requests" setting). Review and merge it, then wait for the Pages deploy of `main`.
+4. Verify the live feed: `gh workflow run publish-update-feed.yml -f tag=vX.Y.Z -f verify_public=true`. The input is `tag`, not `release_tag`. Check it with `gh run list --workflow=publish-update-feed.yml --limit 1`.
+5. Without `HOMEBREW_TAP_TOKEN` the `homebrew` job skips and the tap is not updated. Render the cask by hand (`RUNNER_TEMP=/tmp/rt RELEASE_TAG=vX.Y.Z CASK_OUTPUT=<tap>/Casks/tinyprune.rb GITHUB_REPOSITORY=navig-me/tinyprune GH_TOKEN=$(gh auth token) python3 Scripts/distribution.py cask`), then commit and push the tap, or add the token so the workflow opens the tap PR.
+6. `brew upgrade` unloads the background agent; the app re-registers it on next launch (0.1.7 and later).
+
 Local universal smoke: `TINYPRUNE_UNIVERSAL=1 swift Scripts/package-app.swift && Scripts/verify-signing.sh .build/package/TinyPrune.app`. Repeat with `TINYPRUNE_DISTRIBUTION=homebrew` for the package-manager channel. Universal ad-hoc builds work with this host's Command Line Tools; Developer ID signing and notarization still require real Apple credentials.
 
 ### Native acceptance and clean-install verification
