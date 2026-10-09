@@ -138,14 +138,18 @@ public struct TrashAuditEvent: Hashable, Codable, Sendable, Identifiable {
     public let identity: FilesystemIdentity?
     public let ruleID: UUID?
     public let detail: String?
+    public let bytes: Int64?
+    public let itemCount: Int?
 
-    public init(id: UUID = UUID(), occurredAt: Date, kind: TrashAuditKind, identity: FilesystemIdentity? = nil, ruleID: UUID? = nil, detail: String? = nil) {
+    public init(id: UUID = UUID(), occurredAt: Date, kind: TrashAuditKind, identity: FilesystemIdentity? = nil, ruleID: UUID? = nil, detail: String? = nil, bytes: Int64? = nil, itemCount: Int? = nil) {
         self.id = id
         self.occurredAt = occurredAt
         self.kind = kind
         self.identity = identity
         self.ruleID = ruleID
         self.detail = detail
+        self.bytes = kind == .movedToTrash ? bytes : nil
+        self.itemCount = kind == .movedToTrash ? itemCount : nil
     }
 }
 
@@ -208,6 +212,7 @@ public actor TrashCoordinator {
     private let updateGate: UpdateInstallationGate
     private let hydrator: (any CandidateHydrating)?
     private let walkLimits: DescendantWalkLimits
+    private let sizeMeasurer: @Sendable (String) async throws -> ItemSizeMeasurement?
 
     /// - Parameter candidateHydrator: overlays persisted activity on freshly inspected candidates. Defaults to the
     ///   policy store itself when it can hydrate (the SQLite store does), so execution-time evaluation sees the same
@@ -219,7 +224,13 @@ public actor TrashCoordinator {
         clock: any SafetyClock = SystemSafetyClock(),
         updateGate: UpdateInstallationGate = UpdateInstallationGate(),
         candidateHydrator: (any CandidateHydrating)? = nil,
-        descendantWalkLimits: DescendantWalkLimits = DescendantWalkLimits()
+        descendantWalkLimits: DescendantWalkLimits = DescendantWalkLimits(),
+        sizeMeasurer: @escaping @Sendable (String) async throws -> ItemSizeMeasurement? = { path in
+            await Task.detached(priority: .utility) {
+                let deadline = ProcessInfo.processInfo.systemUptime + 0.25
+                return ItemSizeMeasurer.measure(path: path, shouldStop: { ProcessInfo.processInfo.systemUptime >= deadline })
+            }.value
+        }
     ) {
         self.policyStore = policyStore
         self.fileAccess = fileAccess
@@ -228,6 +239,7 @@ public actor TrashCoordinator {
         self.updateGate = updateGate
         self.hydrator = candidateHydrator ?? (policyStore as? any CandidateHydrating)
         self.walkLimits = descendantWalkLimits
+        self.sizeMeasurer = sizeMeasurer
     }
 
     public nonisolated func observeUpdateGateChanges(_ onChange: @escaping @Sendable () -> Void) throws -> UpdateInstallationObservation {
@@ -280,6 +292,9 @@ public actor TrashCoordinator {
         }
 
         let ruleID = confirmed.authorization.rule?.id
+        // Metadata is best effort and never grants or revokes permission to move.
+        let measurement = try? await sizeMeasurer(path)
+        let reliableMeasurement = measurement.flatMap { $0.truncated ? nil : $0 }
         try await append(TrashAuditEvent(occurredAt: clock.now(), kind: .trashAttempted, identity: request.candidateIdentity, ruleID: ruleID))
         let trashedPath: String
         do {
@@ -294,7 +309,7 @@ public actor TrashCoordinator {
         }
 
         do {
-            try await append(TrashAuditEvent(occurredAt: clock.now(), kind: .movedToTrash, identity: request.candidateIdentity, ruleID: ruleID, detail: trashedPath))
+            try await append(TrashAuditEvent(occurredAt: clock.now(), kind: .movedToTrash, identity: request.candidateIdentity, ruleID: ruleID, detail: trashedPath, bytes: reliableMeasurement?.bytes, itemCount: reliableMeasurement?.items ?? 1))
         } catch {
             throw TrashExecutionError.movedButAuditFailed(path: trashedPath, detail: String(describing: error))
         }

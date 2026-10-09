@@ -192,6 +192,8 @@ package final class AgentViewModel: ObservableObject {
     /// Failure of the last menu-bar or quick action, shown where the action was offered.
     @Published package private(set) var actionError: String?
     @Published private var attentionSeenAt: Date?
+    @Published package private(set) var ledgerSizes: [String: ItemSize] = [:]
+    @Published package private(set) var ledgerSizeFailures: Set<String> = []
 
     /// First load failure or a lost connection with nothing cached.
     package var errorMessage: String? { overview == nil ? connectionIssue : nil }
@@ -243,11 +245,13 @@ package final class AgentViewModel: ObservableObject {
 
     /// Keeps the model honest while the window is closed or the Mac was asleep: refreshes on a timer and
     /// whenever the app becomes active. Idempotent.
-    package func startBackgroundRefresh(interval: Duration = .seconds(30)) {
+    package func startBackgroundRefresh(interval: Duration = .seconds(30), busyInterval: Duration = .seconds(2)) {
         guard backgroundTask == nil else { return }
         backgroundTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: interval)
+                // While the agent indexes or recovers a folder, matches keep arriving; poll quickly until it settles.
+                let busy = await self?.agentIsWorking ?? false
+                try? await Task.sleep(for: busy ? busyInterval : interval)
                 guard !Task.isCancelled, let self else { return }
                 await self.refresh()
             }
@@ -257,6 +261,11 @@ package final class AgentViewModel: ObservableObject {
         ) { [weak self] _ in
             Task { @MainActor in await self?.refresh() }
         }
+    }
+
+    /// True while any managed folder is still being indexed or recovered.
+    package var agentIsWorking: Bool {
+        overview?.rootStatuses.contains { $0.state == .indexing || $0.state == .recovering } ?? false
     }
 
     // MARK: Agent registration
@@ -518,7 +527,14 @@ package final class AgentViewModel: ObservableObject {
         await refresh()
     }
 
-    package struct ItemSize { package let bytes: Int64; package let items: Int; package let truncated: Bool }
+    package struct ItemSize: Sendable {
+        package let bytes: Int64
+        package let items: Int
+        package let truncated: Bool
+        package init(bytes: Int64, items: Int, truncated: Bool) {
+            self.bytes = bytes; self.items = items; self.truncated = truncated
+        }
+    }
 
     /// Sizes are computed only when the user asks for them.
     package func size(of path: String) async throws -> ItemSize {
@@ -526,6 +542,54 @@ package final class AgentViewModel: ObservableObject {
             throw PolicyMutationError.unexpectedResponse
         }
         return ItemSize(bytes: bytes, items: items, truncated: truncated)
+    }
+
+    package static func ledgerKey(_ item: AgentUpcomingItem) -> String {
+        "\(item.explanation.candidateIdentity.pathHint)|\(item.explanation.scheduledAt.timeIntervalSinceReferenceDate)"
+    }
+
+    /// A bounded, lazy metadata ledger. Cached deadlines survive ordinary overview refreshes.
+    private var ledgerMeasurementRunning = false
+    private var ledgerMeasurementWaiters: [CheckedContinuation<Void, Never>] = []
+
+    package func measureLedgerSizes() async {
+        // Replacement SwiftUI tasks can overlap while cancelled XPC calls settle. Serialize batches
+        // across those invocations too, so the agent never sees more than four ledger requests.
+        while ledgerMeasurementRunning {
+            await withCheckedContinuation { ledgerMeasurementWaiters.append($0) }
+        }
+        guard !Task.isCancelled else { return }
+        ledgerMeasurementRunning = true
+        defer {
+            ledgerMeasurementRunning = false
+            let waiters = ledgerMeasurementWaiters
+            ledgerMeasurementWaiters.removeAll()
+            for waiter in waiters { waiter.resume() }
+        }
+        let candidates = activeUpcoming.sorted { $0.explanation.scheduledAt < $1.explanation.scheduledAt }.prefix(100)
+        let missing = candidates.filter {
+            let key = Self.ledgerKey($0)
+            return ledgerSizes[key] == nil && !ledgerSizeFailures.contains(key)
+        }
+        for start in stride(from: 0, to: missing.count, by: 4) {
+            guard !Task.isCancelled else { return }
+            let batch = missing[start..<min(start + 4, missing.count)]
+            await withTaskGroup(of: (String, ItemSize?).self) { group in
+                for item in batch {
+                    let key = Self.ledgerKey(item)
+                    let path = item.explanation.candidateIdentity.pathHint
+                    group.addTask { [self] in
+                        guard !Task.isCancelled else { return (key, nil) }
+                        return (key, try? await size(of: path))
+                    }
+                }
+                for await (key, result) in group {
+                    guard !Task.isCancelled else { group.cancelAll(); continue }
+                    if let result { ledgerSizes[key] = result }
+                    else { ledgerSizeFailures.insert(key) }
+                }
+            }
+        }
     }
 
     /// Applies an imported configuration with the same plan the CLI uses. Returns a short summary.

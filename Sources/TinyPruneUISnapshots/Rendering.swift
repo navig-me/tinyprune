@@ -59,7 +59,8 @@ final class Snapshotter {
     /// Renders `hosted` to PNGs. Returns the written URLs.
     @discardableResult
     func snapshot(_ hosted: Hosted, name: String, dynamicType: DynamicTypeSize? = nil) async -> [URL] {
-        await pump(0.25)
+        // Together with host settling, let the ledger's 0.65-second count-up reach its final value.
+        await pump(0.4)
         hosted.host.layoutSubtreeIfNeeded()
         hosted.host.setNeedsDisplay(hosted.host.bounds)
         hosted.window.displayIfNeeded()

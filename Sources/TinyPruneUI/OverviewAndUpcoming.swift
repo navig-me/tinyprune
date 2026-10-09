@@ -56,6 +56,8 @@ struct OverviewPage: View {
                     }
                 }
 
+                ReclaimLedger(overview: overview)
+
                 VStack(alignment: .leading, spacing: 0) {
                     SectionTitle("Managed places").padding(.bottom, 12)
                     if places.isEmpty {
@@ -234,7 +236,12 @@ struct UpcomingPage: View {
                     }
                 }
                 if items.isEmpty {
-                    PruneEmptyState(title: "Nothing scheduled", message: "Matches appear here once a rule finds items. Preview rules list them without touching your files.", symbol: "clock")
+                    PruneEmptyState(
+                        title: model.agentIsWorking ? "Looking through your folders" : "Nothing scheduled",
+                        message: model.agentIsWorking
+                            ? "Matches appear here as TinyPrune finishes indexing. This page updates on its own."
+                            : "Matches appear here once a rule finds items. Preview rules list them without touching your files.",
+                        symbol: "clock")
                 }
                 ForEach(UpcomingGroup.allCases, id: \.rawValue) { group in
                     let rows = items.filter { UpcomingGroup($0.explanation.scheduledAt) == group }

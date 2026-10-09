@@ -120,6 +120,7 @@ package struct TinyPruneRootView: View {
             await model.refresh()
             model.startBackgroundRefresh()
         }
+        .onChange(of: router.selection) { _, _ in Task { await model.refresh() } }
     }
 
     /// Reactive: follows every policy refresh. Completing onboarding (or any managed folder or rule appearing) ends it.
@@ -320,15 +321,13 @@ package struct MenuBarContent: View {
             }
             if let overview = model.overview {
                 summary(overview)
-                actions(overview)
+                actions(overview).pruneEntrance(2)
             } else {
                 Text(model.errorMessage ?? "Connecting…").foregroundStyle(.secondary)
                 Button("Open TinyPrune", action: openMainWindow)
                     .buttonStyle(PruneButtonStyle(prominent: true))
             }
             HStack {
-                Button("Refresh") { Task { await model.refresh() } }
-                    .buttonStyle(PruneLinkStyle())
                 Spacer()
                 Button("Quit TinyPrune") { NSApp.terminate(nil) }
                     .buttonStyle(PruneLinkStyle())
@@ -336,7 +335,6 @@ package struct MenuBarContent: View {
                     .help("Quits this app. The background agent keeps applying your rules.")
             }
             .font(Typography.body(size: 12, weight: .medium))
-            .padding(.top, 2)
         }
         .padding(18)
         .frame(width: 340, alignment: .leading)
@@ -350,31 +348,17 @@ package struct MenuBarContent: View {
         let active = model.activeUpcoming
         let preview = model.previewUpcoming
         VStack(alignment: .leading, spacing: 10) {
-            Text(statusLine(overview)).font(.callout).foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text("\(active.count)").font(Typography.display(size: 34)).monospacedDigit()
-                    Text(active.count == 1 ? "item will move to Trash" : "items will move to Trash")
-                        .foregroundStyle(.secondary)
-                }
-                if let next = active.first {
-                    HStack(spacing: 8) {
-                        Text("Next").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                        Text(URL(fileURLWithPath: next.explanation.candidateIdentity.pathHint).lastPathComponent)
-                            .font(Typography.path).lineLimit(1).truncationMode(.middle)
-                        Spacer(minLength: 4)
-                        Text(next.explanation.scheduledAt.formatted(date: .omitted, time: .shortened))
-                            .font(.caption).foregroundStyle(.secondary).monospacedDigit()
-                    }
-                }
-                if !preview.isEmpty {
-                    Text("\(preview.count) in Preview. Nothing is moved.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
+            if model.pruningHaltedReason != nil || overview.policy.globallyPaused {
+                Text(statusLine(overview)).font(.callout).foregroundStyle(.secondary)
             }
-            .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(PrunePalette.row, in: RoundedRectangle(cornerRadius: PruneDesign.Radius.row))
+            if overview.policy.rules.isEmpty {
+                templatesHero.pruneEntrance(1)
+            } else {
+                PopoverTally(active: active, previewCount: preview.count, now: model.currentDate) {
+                    showMainWindow(section: .upcoming)
+                }
+                .pruneEntrance(1)
+            }
             if let issue = model.connectionIssue {
                 notice("Showing last known state. \(issue)")
             }
@@ -410,30 +394,77 @@ package struct MenuBarContent: View {
                 Text("Open TinyPrune").frame(maxWidth: .infinity)
             }
             .buttonStyle(PruneButtonStyle(prominent: true))
-            if overview.policy.globallyPaused {
-                Button { Task { await model.perform { try await model.setGlobalPause(false) } } } label: {
-                    Text("Resume").frame(maxWidth: .infinity)
+            if !overview.policy.rules.isEmpty {
+            HStack(spacing: 8) {
+                Button { showMainWindow(section: .templates) } label: {
+                    Label("Templates", systemImage: AppSection.templates.symbol).frame(maxWidth: .infinity)
                 }
-            } else {
-                Menu {
-                    Button("1 hour") { Task { await model.perform { try await model.pause(until: model.currentDate.addingTimeInterval(3_600)) } } }
-                    Button("Today") { Task { await model.perform { try await model.pause(until: endOfToday(now: model.currentDate)) } } }
-                    Button("Until tomorrow") { Task { await model.perform { try await model.pause(until: tomorrowMorning(now: model.currentDate)) } } }
-                    Button("Until I resume") { Task { await model.perform { try await model.setGlobalPause(true) } } }
-                } label: {
-                    Label("Pause pruning", systemImage: "pause").frame(maxWidth: .infinity)
-                }
-                .menuStyle(.button)
                 .buttonStyle(PruneButtonStyle())
-                .menuIndicator(.hidden)
+                .help("Ready-made rules for Downloads, screenshots, developer caches and more. You choose the folder and can start in Preview.")
+                if overview.policy.globallyPaused {
+                    Button { Task { await model.perform { try await model.setGlobalPause(false) } } } label: {
+                        Label("Resume", systemImage: "play").frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(PruneButtonStyle())
+                } else {
+                    Menu {
+                        Button("For 1 hour") { Task { await model.perform { try await model.pause(until: model.currentDate.addingTimeInterval(3_600)) } } }
+                        Button("For today") { Task { await model.perform { try await model.pause(until: endOfToday(now: model.currentDate)) } } }
+                        Button("Until tomorrow") { Task { await model.perform { try await model.pause(until: tomorrowMorning(now: model.currentDate)) } } }
+                        Button("Until I resume") { Task { await model.perform { try await model.setGlobalPause(true) } } }
+                    } label: {
+                        Label("Pause", systemImage: "pause").frame(maxWidth: .infinity)
+                    }
+                    .menuStyle(.button)
+                    .buttonStyle(PruneButtonStyle())
+                    .menuIndicator(.hidden)
+                }
+            }
             }
         }
     }
 
-    private func openMainWindow() {
-        NSApp.activate(ignoringOtherApps: true)
-        router.selection = .overview
-        if !NSApp.windows.contains(where: { $0.canBecomeMain && $0.isVisible }) { openWindow(id: "main") }
+    /// First-run hero: with no rules there is nothing to count, so point at the easy way in.
+    private var templatesHero: some View {
+        Button { showMainWindow(section: .templates) } label: {
+            HStack(spacing: 12) {
+                Image(systemName: AppSection.templates.symbol).font(.system(size: 20, weight: .light))
+                    .foregroundStyle(PrunePalette.plum).accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Start from a template").font(Typography.body(size: 14, weight: .semibold))
+                    Text("Pick ready-made rules, preview them, then turn them on.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(PrunePalette.plum.opacity(0.5)).accessibilityHidden(true)
+            }
+            .padding(14).frame(maxWidth: .infinity, alignment: .leading)
+            .background(PrunePalette.row, in: RoundedRectangle(cornerRadius: PruneDesign.Radius.row))
+            .overlay(RoundedRectangle(cornerRadius: PruneDesign.Radius.row).strokeBorder(PrunePalette.plum.opacity(0.18), lineWidth: 1))
+            .contentShape(RoundedRectangle(cornerRadius: PruneDesign.Radius.row))
+        }
+        .buttonStyle(.plain)
+        .pruneHover()
+    }
+
+    private func openMainWindow() { showMainWindow(section: .overview) }
+
+    /// Brings the main window in front of everything, whether it is open behind other apps, minimized, or closed.
+    /// A menu-bar popover is not a main-capable window, so a plain `activate` was not enough to raise it.
+    private func showMainWindow(section: AppSection) {
+        router.selection = section
+        let raise = {
+            NSApp.activate(ignoringOtherApps: true)
+            guard let window = NSApp.windows.first(where: { $0.canBecomeMain && !($0 is NSPanel) }) else { return false }
+            if window.isMiniaturized { window.deminiaturize(nil) }
+            window.makeKeyAndOrderFront(nil)
+            return true
+        }
+        if !raise() {
+            openWindow(id: "main")
+            DispatchQueue.main.async { _ = raise() }
+        }
     }
 
     private func badge(_ overview: AgentOverviewSnapshot) -> (text: String, color: Color) {
@@ -446,11 +477,7 @@ package struct MenuBarContent: View {
         return ("Paused", PrunePalette.caution)
     }
 
-    private func openActivity() {
-        NSApp.activate(ignoringOtherApps: true)
-        router.selection = .activity
-        if !NSApp.windows.contains(where: { $0.canBecomeMain && $0.isVisible }) { openWindow(id: "main") }
-    }
+    private func openActivity() { showMainWindow(section: .activity) }
 
     /// Says what TinyPrune is really doing: Preview rules never move files.
     private func statusLine(_ overview: AgentOverviewSnapshot) -> String {

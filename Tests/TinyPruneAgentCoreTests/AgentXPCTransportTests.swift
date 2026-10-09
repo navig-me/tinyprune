@@ -41,7 +41,7 @@ import TinyPrunePersistence
         let response = try JSONDecoder().decode(AgentResponse.self, from: replyData)
         #expect(response.protocolVersion == TinyPruneAgentXPC.protocolVersion)
         guard case .health(let health) = response.payload else { Issue.record("Expected health response over XPC"); return }
-        #expect(health.serviceVersion == "0.1.8")
+        #expect(health.serviceVersion == "0.1.9")
     }
 }
 

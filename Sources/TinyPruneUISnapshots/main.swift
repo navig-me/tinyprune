@@ -210,6 +210,138 @@ do {
     }
     await shoot("40-rules-after-activate", .rules, model: model, router: router, size: CGSize(width: 1100, height: 1000))
 
+    // MARK: - Reclaim ledger states through the live model and scripted metadata
+
+    phase("Overview reclaim ledger")
+    await waitFor("active ledger candidates") {
+        await model.refresh()
+        return !model.activeUpcoming.isEmpty && !model.previewUpcoming.isEmpty
+    }
+    do {
+        let source = try model.overview.unwrap("ledger overview")
+        let now = Date()
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: now)
+        var days: [AgentReclaimedDay] = []
+        for offset in 0..<14 {
+            let day = calendar.date(byAdding: .day, value: offset - 13, to: today)!
+            let count: Int = offset < 7 || offset == 9 ? 0 : offset - 6
+            let bytes = Int64(count) * 140_000_000
+            days.append(AgentReclaimedDay(day: day, items: count, bytes: bytes))
+        }
+        let history = AgentReclaimedSummary(
+            lifetimeItems: 128, lifetimeBytes: 18_400_000_000, itemsWithKnownSize: 121,
+            firstMovedAt: calendar.date(byAdding: .day, value: -42, to: now),
+            lastMovedAt: now.addingTimeInterval(-3_600), days: days,
+            weekItems: days.reduce(0) { $0 + $1.items }, weekBytes: days.reduce(0) { $0 + $1.bytes }
+        )
+        let emptyHistory = AgentReclaimedSummary(
+            lifetimeItems: 0, lifetimeBytes: 0, itemsWithKnownSize: 0,
+            firstMovedAt: nil, lastMovedAt: nil, days: [], weekItems: 0, weekBytes: 0
+        )
+        func overview(history: AgentReclaimedSummary) -> AgentOverviewSnapshot {
+            AgentOverviewSnapshot(
+                policy: source.policy, upcoming: source.upcoming, ruleStats: source.ruleStats,
+                indexedItems: source.indexedItems, databaseBytes: source.databaseBytes,
+                rootStatuses: source.rootStatuses, reclaimed: history
+            )
+        }
+        let active = source.upcoming.filter { $0.explanation.disposition == .active }
+        let pending = ScheduledLedgerEstimate(items: source.upcoming, sizes: [:])
+        Check.expect(pending.items == active.count, "scheduled ledger excludes Preview items from its count")
+        Check.expect(pending.bytes == nil && pending.pending && pending.sizeText == "Measuring size", "unknown scheduled sizes never claim measured bytes")
+        let known = Dictionary(uniqueKeysWithValues: source.upcoming.map {
+            (AgentViewModel.ledgerKey($0), AgentViewModel.ItemSize(bytes: $0.explanation.disposition == .active ? 240_000_000 : 9_000_000_000, items: 1, truncated: false))
+        })
+        let complete = ScheduledLedgerEstimate(items: source.upcoming, sizes: known)
+        Check.expect(complete.bytes == Int64(active.count) * 240_000_000 && !complete.partial, "Preview metadata contributes no bytes to the active-only scheduled ledger")
+        let truncated = Dictionary(uniqueKeysWithValues: active.map {
+            (AgentViewModel.ledgerKey($0), AgentViewModel.ItemSize(bytes: 240_000_000, items: 500_000, truncated: true))
+        })
+        let partial = ScheduledLedgerEstimate(items: source.upcoming, sizes: truncated)
+        Check.expect(partial.partial && partial.sizeText.hasPrefix("At least "), "bounded partial metadata uses honest at-least wording")
+        let failures = Set(active.map(AgentViewModel.ledgerKey))
+        let unavailable = ScheduledLedgerEstimate(items: source.upcoming, sizes: [:], failures: failures)
+        Check.expect(unavailable.bytes == nil && !unavailable.pending && unavailable.sizeText == "Size unavailable", "failed measurements never claim zero bytes or an exact estimate")
+
+        let activeExample = try active.first.unwrap("active ledger fixture item")
+        let activeRule = try source.policy.rules.first { $0.id == activeExample.explanation.matchedRuleID }.unwrap("active ledger fixture rule")
+        let boundedItems = (0..<101).map { index in
+            let identity = FilesystemIdentity(
+                volumeIdentifier: activeExample.id.volumeIdentifier,
+                resourceIdentifier: Data("ledger-\(index)".utf8),
+                pathHint: tree.scratch.appendingPathComponent("ledger-\(index).tmp").path
+            )
+            let candidate = RuleCandidate(identity: identity, name: "ledger-\(index).tmp", kind: .file, timestamps: CandidateTimestamps(modified: now))
+            return AgentUpcomingItem(explanation: CandidateExplanation(
+                candidate: candidate, rule: activeRule, basisDate: now,
+                eligibleAt: now.addingTimeInterval(Double(index) + 3_600),
+                scheduledAt: now.addingTimeInterval(Double(index) + 3_600), disposition: .active
+            ))
+        }
+        agent.transport.setOverviewFixture(AgentOverviewSnapshot(
+            policy: source.policy, upcoming: boundedItems + source.upcoming.filter { $0.explanation.disposition == .preview },
+            rootStatuses: source.rootStatuses, reclaimed: history
+        ))
+        agent.transport.setSizeMode(.canned(bytes: 240_000_000, items: 12, truncated: false))
+        let boundedModel = agent.model(services: services)
+        await boundedModel.refresh()
+        let requestsBeforeMeasurement = agent.transport.requests { if case .itemSize = $0 { true } else { false } }
+        async let firstMeasurement: Void = boundedModel.measureLedgerSizes()
+        async let overlappingMeasurement: Void = boundedModel.measureLedgerSizes()
+        _ = await (firstMeasurement, overlappingMeasurement)
+        let requestsAfterMeasurement = agent.transport.requests { if case .itemSize = $0 { true } else { false } }
+        Check.expect(requestsAfterMeasurement - requestsBeforeMeasurement == 100 && boundedModel.ledgerSizes.count == 100, "overlapping measurements share cached results and cap IPC at the first 100 active deadlines")
+        Check.expect(boundedModel.ledgerSizes[AgentViewModel.ledgerKey(boundedItems[100])] == nil, "bounded measurement leaves the latest active deadline unmeasured")
+        Check.expect((1...4).contains(agent.transport.maximumConcurrentCannedSizes), "overlapping measurements never exceed four concurrent IPC requests")
+        let capped = ScheduledLedgerEstimate(items: boundedModel.activeUpcoming, sizes: boundedModel.ledgerSizes)
+        Check.expect(capped.items == 101 && capped.partial && !capped.pending && capped.sizeText.hasPrefix("At least "), "more than 100 active candidates retains an honest partial total without an endless measuring state")
+        await boundedModel.refresh()
+        await boundedModel.measureLedgerSizes()
+        Check.expect(agent.transport.requests { if case .itemSize = $0 { true } else { false } } == requestsAfterMeasurement, "ordinary overview refresh reuses deadline-keyed sizes without repeated IPC")
+
+        // Include accessibility5 even in quick mode for these acceptance snapshots.
+        let previousDynamicTypeSizes = snap.dynamicTypeSizes
+        snap.dynamicTypeSizes = [nil, .accessibility5]
+        agent.transport.setOverviewFixture(overview(history: history))
+        agent.transport.setSizeMode(.canned(bytes: 240_000_000, items: 12, truncated: false))
+        let populatedModel = agent.model(services: services)
+        await populatedModel.refresh()
+        await populatedModel.measureLedgerSizes()
+        await shoot("40b-overview-ledger-populated", .overview, model: populatedModel, router: router, size: CGSize(width: 1100, height: 1200))
+        await shoot("40b-narrow-overview-ledger-populated", .overview, model: populatedModel, router: router, size: CGSize(width: 760, height: 1200))
+        snap.colorScheme = .dark
+        await shoot("40c-dark-overview-ledger-populated", .overview, model: populatedModel, router: router, size: CGSize(width: 1100, height: 1200))
+        snap.colorScheme = .light
+
+        agent.transport.setOverviewFixture(overview(history: emptyHistory))
+        let noHistoryModel = agent.model(services: services)
+        await noHistoryModel.refresh()
+        await noHistoryModel.measureLedgerSizes()
+        await shoot("40d-overview-ledger-empty-history", .overview, model: noHistoryModel, router: router, size: CGSize(width: 1100, height: 1200))
+
+        agent.transport.setOverviewFixture(overview(history: history))
+        agent.transport.setSizeMode(.hang)
+        let measuringModel = agent.model(services: services)
+        await measuringModel.refresh()
+        await shoot("40e-overview-ledger-measuring", .overview, model: measuringModel, router: router, size: CGSize(width: 1100, height: 1200))
+
+        agent.transport.setSizeMode(.canned(bytes: 240_000_000, items: 500_000, truncated: true))
+        let partialModel = agent.model(services: services)
+        await partialModel.refresh()
+        await partialModel.measureLedgerSizes()
+        await shoot("40f-overview-ledger-partial-at-least", .overview, model: partialModel, router: router, size: CGSize(width: 1100, height: 1200))
+
+        agent.transport.setSizeMode(.unavailable)
+        let unavailableModel = agent.model(services: services)
+        await unavailableModel.refresh()
+        await unavailableModel.measureLedgerSizes()
+        await shoot("40g-overview-ledger-size-unavailable", .overview, model: unavailableModel, router: router, size: CGSize(width: 1100, height: 1200))
+        agent.transport.setOverviewFixture(nil)
+        agent.transport.setSizeMode(.passthrough)
+        snap.dynamicTypeSizes = previousDynamicTypeSizes
+    }
+
     // MARK: - Keep
 
     phase("keep an item")
@@ -643,6 +775,7 @@ do {
         return cleanupModel.activity.contains { $0.kind == .previewSkipped && $0.identity?.pathHint == expiredFile.path }
     }
     Check.expect(FileManager.default.fileExists(atPath: expiredFile.path), "due Preview preserves the actual fixture file")
+    Check.expect(cleanupModel.overview?.reclaimed?.lifetimeItems == 0, "real due Preview never increments moved-to-Trash ledger history")
     try await cleanupModel.keep(path: keptFile.path, protectDescendants: false)
     try await cleanupModel.setState(.active, for: previewRule)
     await waitFor("active cleanup and Activity outcome") {
@@ -655,6 +788,10 @@ do {
     Check.expect(FileManager.default.fileExists(atPath: keptFile.path), "Keep survives the active cleanup")
     let trashEvent = try cleanupModel.activity.first { $0.kind == .movedToTrash }.unwrap("Trash event")
     let trashPath = try trashEvent.detail.unwrap("Trash destination")
+    let movedOverview = try cleanupModel.overview.unwrap("real moved-to-Trash overview")
+    let movedLedger = try movedOverview.reclaimed.unwrap("real moved-to-Trash ledger")
+    Check.expect(movedLedger.lifetimeItems == 1 && movedLedger.lastMovedAt == trashEvent.occurredAt, "real successful Trash move records one ledger item and its time")
+    await shoot("89-real-trash-overview-ledger", .overview, model: cleanupModel, router: router, size: CGSize(width: 1100, height: 1200))
     var revealed: [URL] = []
     let revealAction = ActivityTrashReveal(reveal: { revealed = $0 })
     Check.expect(revealAction.show(trashEvent) && revealed == [URL(fileURLWithPath: trashPath)], "Show in Trash selects the actual audited destination, not the original path")
@@ -691,6 +828,7 @@ do {
         Check.fail("restart lost Keep: \(recovered.resolution)")
     }
     Check.expect(restartedModel.activity.contains { $0.kind == .movedToTrash && $0.identity?.pathHint == expiredFile.path }, "Trash Activity survives agent restart")
+    Check.expect(restartedModel.overview?.reclaimed == movedLedger, "ledger metadata survives restart even after the fixture Trash destination is removed")
     await shoot("91-restarted-overview", .overview, model: restartedModel, router: router)
     phase("revoked folder access")
     let unreadable = cleanupRoot.appendingPathComponent("unreadable", isDirectory: true)

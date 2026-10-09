@@ -283,6 +283,84 @@ import TinyPruneIPC
         #expect(failureEvents.map(\.kind) == [.trashAttempted, .trashFailed])
     }
 
+    @Test func successfulMoveRecordsReliableSizeOnlyOnSuccess() async throws {
+        let candidate = makeCandidate()
+        let rule = try makeRule(state: .active)
+        let harness = makeCoordinator(candidate: candidate, rules: [rule], sizeMeasurer: { _ in
+            ItemSizeMeasurement(bytes: 4096, items: 7, truncated: false)
+        })
+        _ = try await harness.coordinator.execute(request(for: candidate, rule: rule))
+        let events = await harness.audit.events()
+        #expect(events.first?.bytes == nil)
+        #expect(events.first?.itemCount == nil)
+        #expect(events.last?.bytes == 4096)
+        #expect(events.last?.itemCount == 7)
+        #expect(events.last?.detail == "/.Trash/node_modules")
+    }
+
+    @Test func unknownOrTruncatedSizesNeverBlockTrash() async throws {
+        let candidate = makeCandidate()
+        let rule = try makeRule(state: .active)
+        let measurers: [@Sendable (String) async throws -> ItemSizeMeasurement?] = [
+            { _ in nil },
+            { _ in throw StubError.failed },
+            { _ in ItemSizeMeasurement(bytes: 1024, items: 2, truncated: true) }
+        ]
+        for measurer in measurers {
+            let harness = makeCoordinator(candidate: candidate, rules: [rule], sizeMeasurer: measurer)
+            _ = try await harness.coordinator.execute(request(for: candidate, rule: rule))
+            #expect(await harness.fileAccess.moveCount() == 1)
+            let moved = try #require(await harness.audit.events().last)
+            #expect(moved.kind == .movedToTrash)
+            #expect(moved.bytes == nil)
+            #expect(moved.itemCount == 1)
+        }
+    }
+
+    @Test func failedTrashDoesNotRecordMeasuredSize() async throws {
+        let candidate = makeCandidate()
+        let rule = try makeRule(state: .active)
+        let harness = makeCoordinator(candidate: candidate, rules: [rule], trashError: StubError.failed, sizeMeasurer: { _ in
+            ItemSizeMeasurement(bytes: 4096, items: 7, truncated: false)
+        })
+        await #expect(throws: TrashExecutionError.self) {
+            try await harness.coordinator.execute(request(for: candidate, rule: rule))
+        }
+        let events = await harness.audit.events()
+        #expect(events.map(\.kind) == [.trashAttempted, .trashFailed])
+        #expect(events.allSatisfy { $0.bytes == nil && $0.itemCount == nil })
+    }
+
+    @Test func measurementRunsAfterFinalPreflightAndNotForPreview() async throws {
+        let candidate = makeCandidate()
+        let rule = try makeRule(state: .active)
+        let access = MockTrashFileAccess(candidate: candidate, walkResult: .none, symlinkAncestor: false, trashError: nil)
+        let coordinator = TrashCoordinator(
+            policyStore: MockPolicyStore(snapshot: PolicySnapshot(rules: [rule], overrides: [], managedRoots: [try makeRoot()], globallyPaused: false)),
+            fileAccess: access, audit: MockAudit(), clock: FixedClock(Date(timeIntervalSinceReferenceDate: 1_000)),
+            sizeMeasurer: { path in
+                #expect(path == candidate.identity.pathHint)
+                #expect(await access.eventLog() == ["inspect", "inspect"])
+                return nil
+            }
+        )
+        _ = try await coordinator.execute(request(for: candidate, rule: rule))
+        let preview = try makeRule(state: .preview)
+        let harness = makeCoordinator(candidate: candidate, rules: [preview], sizeMeasurer: { _ in
+            Issue.record("Preview must not measure ledger sizes")
+            return nil
+        })
+        _ = try await harness.coordinator.execute(request(for: candidate, rule: preview))
+    }
+
+    @Test func legacyAuditDecodesWithUnknownSize() throws {
+        let data = Data(#"{"id":"00000000-0000-0000-0000-000000000001","occurredAt":0,"kind":"movedToTrash","detail":"/.Trash/old"}"#.utf8)
+        let event = try JSONDecoder().decode(TrashAuditEvent.self, from: data)
+        #expect(event.bytes == nil)
+        #expect(event.itemCount == nil)
+        #expect(event.detail == "/.Trash/old")
+    }
+
     private func makeRoot() throws -> ManagedRoot {
         try ManagedRoot(displayName: "Developer", path: "/Developer", bookmarkData: Data([1]))
     }
@@ -299,7 +377,8 @@ import TinyPruneIPC
         symlinkAncestor: Bool = false,
         hydrated: RuleCandidate? = nil,
         trashError: Error? = nil,
-        now: Date = Date(timeIntervalSinceReferenceDate: 1_000)
+        now: Date = Date(timeIntervalSinceReferenceDate: 1_000),
+        sizeMeasurer: @escaping @Sendable (String) async throws -> ItemSizeMeasurement? = { _ in nil }
     ) -> (coordinator: TrashCoordinator, fileAccess: MockTrashFileAccess, audit: MockAudit) {
         let fileAccess = MockTrashFileAccess(
             candidate: candidate,
@@ -314,7 +393,8 @@ import TinyPruneIPC
             fileAccess: fileAccess,
             audit: audit,
             clock: FixedClock(now),
-            candidateHydrator: hydrated.map { StubHydrator(result: $0) }
+            candidateHydrator: hydrated.map { StubHydrator(result: $0) },
+            sizeMeasurer: sizeMeasurer
         )
         return (coordinator, fileAccess, audit)
     }

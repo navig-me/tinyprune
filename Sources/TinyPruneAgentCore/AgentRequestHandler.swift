@@ -9,16 +9,18 @@ public actor AgentRequestHandler {
     private let serviceVersion: String
     private let runtime: ManagedRootAgentRuntime?
     private let clock: any SafetyClock
+    private let calendar: Calendar
 
     /// Mutating operations run one at a time: their read-modify-write sequences span awaits and must not interleave.
     private var mutationInFlight = false
     private var mutationWaiters: [CheckedContinuation<Void, Never>] = []
 
-    public init(store: SQLiteSafetyStore, runtime: ManagedRootAgentRuntime? = nil, serviceVersion: String = "0.1.8", clock: any SafetyClock = SystemSafetyClock()) {
+    public init(store: SQLiteSafetyStore, runtime: ManagedRootAgentRuntime? = nil, serviceVersion: String = "0.1.9", clock: any SafetyClock = SystemSafetyClock(), calendar: Calendar = .current) {
         self.store = store
         self.runtime = runtime
         self.serviceVersion = serviceVersion
         self.clock = clock
+        self.calendar = calendar
     }
 
     private func acquireMutation() async {
@@ -79,13 +81,15 @@ public actor AgentRequestHandler {
                 let upcoming = try await store.upcomingDeadlines(limit: 200).map { AgentUpcomingItem(explanation: $0.explanation) }
                 let stats = try await store.deadlineCountsByRule(now: clock.now()).map { AgentRuleStats(ruleID: $0.key, matches: $0.value.matches, due: $0.value.due) }
                 let statuses = await runtime?.rootStatuses() ?? []
+                let reclaimed = try await reclaimedSummary(now: clock.now())
                 return encode(AgentResponse(payload: .overview(AgentOverviewSnapshot(
                     policy: agentPolicy(from: snapshot),
                     upcoming: upcoming,
                     ruleStats: stats,
                     indexedItems: try await store.indexedDeadlineCount(),
                     databaseBytes: await store.databaseSizeBytes(),
-                    rootStatuses: statuses
+                    rootStatuses: statuses,
+                    reclaimed: reclaimed
                 ))))
             case .loadRoots:
                 let snapshot = try await store.loadSnapshot()
@@ -107,7 +111,9 @@ public actor AgentRequestHandler {
                         kind: kind,
                         identity: event.identity,
                         ruleID: event.ruleID,
-                        detail: event.detail
+                        detail: event.detail,
+                        bytes: event.bytes,
+                        itemCount: event.itemCount
                     )
                 }
                 return encode(AgentResponse(payload: .activity(activity)))
@@ -248,6 +254,47 @@ public actor AgentRequestHandler {
         } catch {
             return encode(AgentResponse(payload: .failure(.storageUnavailable(String(describing: error)))))
         }
+    }
+
+    private struct ReclaimedTally: Sendable {
+        var lifetimeItems = 0
+        var lifetimeBytes: Int64 = 0
+        var itemsWithKnownSize = 0
+        var firstMovedAt: Date?
+        var lastMovedAt: Date?
+        var dayItems: [Int]
+        var dayBytes: [Int64]
+    }
+
+    private func reclaimedSummary(now: Date) async throws -> AgentReclaimedSummary {
+        let calendar = self.calendar
+        let today = calendar.startOfDay(for: now)
+        let dates = (-13...0).compactMap { calendar.date(byAdding: .day, value: $0, to: today) }
+        let indexes = Dictionary(uniqueKeysWithValues: dates.enumerated().map { ($0.element, $0.offset) })
+        let initial = ReclaimedTally(
+            dayItems: Array(repeating: 0, count: dates.count),
+            dayBytes: Array(repeating: 0, count: dates.count)
+        )
+        let tally = try await store.reduceMovedToTrashEvents(into: initial) { tally, event in
+            let items = event.itemCount ?? 1
+            let bytes = event.bytes ?? 0
+            tally.lifetimeItems += items
+            tally.lifetimeBytes += bytes
+            if event.bytes != nil { tally.itemsWithKnownSize += items }
+            tally.firstMovedAt = min(tally.firstMovedAt ?? event.occurredAt, event.occurredAt)
+            tally.lastMovedAt = max(tally.lastMovedAt ?? event.occurredAt, event.occurredAt)
+            if let index = indexes[calendar.startOfDay(for: event.occurredAt)] {
+                tally.dayItems[index] += items
+                tally.dayBytes[index] += bytes
+            }
+        }
+        let days = dates.indices.map { AgentReclaimedDay(day: dates[$0], items: tally.dayItems[$0], bytes: tally.dayBytes[$0]) }
+        return AgentReclaimedSummary(
+            lifetimeItems: tally.lifetimeItems, lifetimeBytes: tally.lifetimeBytes, itemsWithKnownSize: tally.itemsWithKnownSize,
+            firstMovedAt: tally.firstMovedAt, lastMovedAt: tally.lastMovedAt, days: days,
+            weekItems: days.suffix(7).reduce(0) { $0 + $1.items },
+            weekBytes: days.suffix(7).reduce(0) { $0 + $1.bytes }
+        )
     }
 
     // MARK: - Atomic rule save

@@ -24,7 +24,7 @@ let finderEntitlementsURL = repositoryRoot.appendingPathComponent("Resources/Ent
 let environment = ProcessInfo.processInfo.environment
 let signIdentity = environment["TINYPRUNE_SIGN_IDENTITY"].flatMap { $0.isEmpty ? nil : $0 } ?? "-"
 let isAdHoc = signIdentity == "-"
-let marketingVersion = environment["TINYPRUNE_VERSION"].flatMap { $0.isEmpty ? nil : $0 } ?? "0.1.8"
+let marketingVersion = environment["TINYPRUNE_VERSION"].flatMap { $0.isEmpty ? nil : $0 } ?? "0.1.9"
 let buildNumber = environment["TINYPRUNE_BUILD"].flatMap { $0.isEmpty ? nil : $0 } ?? "1"
 let universal = environment["TINYPRUNE_UNIVERSAL"] == "1" || !isAdHoc
 let distribution = environment["TINYPRUNE_DISTRIBUTION"] ?? "direct"

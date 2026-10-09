@@ -118,14 +118,16 @@ public struct AgentOverviewSnapshot: Codable, Equatable, Sendable {
     public let indexedItems: Int
     public let databaseBytes: Int64
     public let rootStatuses: [AgentRootStatus]
+    public let reclaimed: AgentReclaimedSummary?
 
-    public init(policy: AgentPolicySnapshot, upcoming: [AgentUpcomingItem], ruleStats: [AgentRuleStats] = [], indexedItems: Int = 0, databaseBytes: Int64 = 0, rootStatuses: [AgentRootStatus] = []) {
+    public init(policy: AgentPolicySnapshot, upcoming: [AgentUpcomingItem], ruleStats: [AgentRuleStats] = [], indexedItems: Int = 0, databaseBytes: Int64 = 0, rootStatuses: [AgentRootStatus] = [], reclaimed: AgentReclaimedSummary? = nil) {
         self.policy = policy
         self.upcoming = upcoming
         self.ruleStats = ruleStats
         self.indexedItems = indexedItems
         self.databaseBytes = databaseBytes
         self.rootStatuses = rootStatuses
+        self.reclaimed = reclaimed
     }
 
     public init(from decoder: any Decoder) throws {
@@ -136,6 +138,42 @@ public struct AgentOverviewSnapshot: Codable, Equatable, Sendable {
         indexedItems = try container.decodeIfPresent(Int.self, forKey: .indexedItems) ?? 0
         databaseBytes = try container.decodeIfPresent(Int64.self, forKey: .databaseBytes) ?? 0
         rootStatuses = try container.decodeIfPresent([AgentRootStatus].self, forKey: .rootStatuses) ?? []
+        reclaimed = try container.decodeIfPresent(AgentReclaimedSummary.self, forKey: .reclaimed)
+    }
+}
+
+/// Metadata recorded when items moved to Trash, not space freed from the disk.
+public struct AgentReclaimedSummary: Codable, Equatable, Sendable {
+    public let lifetimeItems: Int
+    public let lifetimeBytes: Int64
+    public let itemsWithKnownSize: Int
+    public let firstMovedAt: Date?
+    public let lastMovedAt: Date?
+    public let days: [AgentReclaimedDay]
+    public let weekItems: Int
+    public let weekBytes: Int64
+
+    public init(lifetimeItems: Int, lifetimeBytes: Int64, itemsWithKnownSize: Int, firstMovedAt: Date?, lastMovedAt: Date?, days: [AgentReclaimedDay], weekItems: Int, weekBytes: Int64) {
+        self.lifetimeItems = lifetimeItems
+        self.lifetimeBytes = lifetimeBytes
+        self.itemsWithKnownSize = itemsWithKnownSize
+        self.firstMovedAt = firstMovedAt
+        self.lastMovedAt = lastMovedAt
+        self.days = days
+        self.weekItems = weekItems
+        self.weekBytes = weekBytes
+    }
+}
+
+public struct AgentReclaimedDay: Codable, Equatable, Sendable {
+    public let day: Date
+    public let items: Int
+    public let bytes: Int64
+
+    public init(day: Date, items: Int, bytes: Int64) {
+        self.day = day
+        self.items = items
+        self.bytes = bytes
     }
 }
 
@@ -165,14 +203,18 @@ public struct AgentActivityItem: Codable, Equatable, Sendable, Identifiable {
     public let identity: FilesystemIdentity?
     public let ruleID: UUID?
     public let detail: String?
+    public let bytes: Int64?
+    public let itemCount: Int?
 
-    public init(id: UUID, occurredAt: Date, kind: AgentActivityKind, identity: FilesystemIdentity? = nil, ruleID: UUID? = nil, detail: String? = nil) {
+    public init(id: UUID, occurredAt: Date, kind: AgentActivityKind, identity: FilesystemIdentity? = nil, ruleID: UUID? = nil, detail: String? = nil, bytes: Int64? = nil, itemCount: Int? = nil) {
         self.id = id
         self.occurredAt = occurredAt
         self.kind = kind
         self.identity = identity
         self.ruleID = ruleID
         self.detail = detail
+        self.bytes = bytes
+        self.itemCount = itemCount
     }
 }
 

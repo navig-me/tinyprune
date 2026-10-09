@@ -14,7 +14,7 @@ import TinyPrunePersistence
         let health = try await response(from: harness.handler, request: AgentRequest(operation: .health))
         #expect(health.protocolVersion == TinyPruneAgentXPC.protocolVersion)
         guard case .health(let healthDTO) = health.payload else { Issue.record("Expected health response"); return }
-        #expect(healthDTO.serviceVersion == "0.1.8")
+        #expect(healthDTO.serviceVersion == "0.1.9")
 
         let policy = try await response(from: harness.handler, request: AgentRequest(operation: .loadPolicy))
         guard case .policy(let snapshot) = policy.payload else { Issue.record("Expected policy response"); return }
@@ -284,6 +284,77 @@ import TinyPrunePersistence
         defer { try? FileManager.default.removeItem(at: harness.directory) }
         let result = try await response(from: harness.handler, request: AgentRequest(operation: .cancelPreview))
         #expect(result.payload == .acknowledged)
+    }
+
+    @Test func reclaimedLedgerCountsUnknownSizesAndLocalDayBoundariesWithoutActivityLimit() async throws {
+        let harness = try makeHandler()
+        defer { try? FileManager.default.removeItem(at: harness.directory) }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(identifier: "America/Los_Angeles"))
+        let now = try #require(calendar.date(from: DateComponents(year: 2026, month: 3, day: 9, hour: 12)))
+        let today = calendar.startOfDay(for: now)
+        let oldestDay = try #require(calendar.date(byAdding: .day, value: -13, to: today))
+        let outside = oldestDay.addingTimeInterval(-1)
+        let excludedWeekDay = try #require(calendar.date(byAdding: .day, value: -7, to: today))
+        let includedWeekDay = try #require(calendar.date(byAdding: .day, value: -6, to: today))
+        let events = [
+            TrashAuditEvent(occurredAt: outside, kind: .movedToTrash, bytes: 100, itemCount: 2),
+            TrashAuditEvent(occurredAt: oldestDay, kind: .movedToTrash, bytes: 200, itemCount: 3),
+            TrashAuditEvent(occurredAt: excludedWeekDay, kind: .movedToTrash, bytes: 300, itemCount: 4),
+            TrashAuditEvent(occurredAt: includedWeekDay, kind: .movedToTrash, bytes: 400, itemCount: 5),
+            TrashAuditEvent(occurredAt: today, kind: .movedToTrash, detail: "/.Trash/legacy"),
+            TrashAuditEvent(occurredAt: now, kind: .movedToTrash, detail: "/.Trash/empty", bytes: 0, itemCount: 6)
+        ]
+        for event in events { try await harness.store.append(event) }
+        // Enough unrelated Activity to hide all older moves from a bounded Activity request.
+        for _ in 0..<501 {
+            try await harness.store.append(TrashAuditEvent(occurredAt: now.addingTimeInterval(1), kind: .safetySkipped))
+        }
+        let handler = AgentRequestHandler(store: harness.store, clock: FixedClock(now), calendar: calendar)
+        let loaded = try await response(from: handler, request: AgentRequest(operation: .loadOverview))
+        guard case .overview(let overview) = loaded.payload else { Issue.record("Expected overview"); return }
+        let summary = try #require(overview.reclaimed)
+        #expect(summary.lifetimeItems == 21)
+        #expect(summary.lifetimeBytes == 1000)
+        #expect(summary.itemsWithKnownSize == 20)
+        #expect(summary.firstMovedAt == outside)
+        #expect(summary.lastMovedAt == now)
+        #expect(summary.days.count == 14)
+        #expect(summary.days.first?.day == oldestDay)
+        #expect(summary.days.last?.day == today)
+        #expect(summary.days.map(\.items) == [3, 0, 0, 0, 0, 0, 4, 5, 0, 0, 0, 0, 0, 7])
+        #expect(summary.days.map(\.bytes) == [200, 0, 0, 0, 0, 0, 300, 400, 0, 0, 0, 0, 0, 0])
+        #expect(summary.weekItems == 12)
+        #expect(summary.weekBytes == 400)
+        #expect(summary.days.last!.day.timeIntervalSince(summary.days[12].day) == 23 * 3600)
+        let activity = try await response(from: handler, request: AgentRequest(operation: .loadActivity(limit: 500)))
+        guard case .activity(let items) = activity.payload else { Issue.record("Expected activity"); return }
+        #expect(items.count == 500)
+        #expect(items.allSatisfy { $0.kind == .safetySkipped })
+    }
+
+    @Test func emptyReclaimedLedgerHasFourteenZeroDaysAndActivityMapsMeasurements() async throws {
+        let harness = try makeHandler()
+        defer { try? FileManager.default.removeItem(at: harness.directory) }
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let handler = AgentRequestHandler(store: harness.store, clock: FixedClock(now))
+        let empty = try await response(from: handler, request: AgentRequest(operation: .loadOverview))
+        guard case .overview(let overview) = empty.payload else { Issue.record("Expected overview"); return }
+        let summary = try #require(overview.reclaimed)
+        #expect(summary.lifetimeItems == 0)
+        #expect(summary.lifetimeBytes == 0)
+        #expect(summary.itemsWithKnownSize == 0)
+        #expect(summary.firstMovedAt == nil)
+        #expect(summary.lastMovedAt == nil)
+        #expect(summary.days.count == 14)
+        #expect(summary.days.allSatisfy { $0.items == 0 && $0.bytes == 0 })
+        #expect(summary.weekItems == 0)
+        #expect(summary.weekBytes == 0)
+        let moved = TrashAuditEvent(occurredAt: now, kind: .movedToTrash, detail: "/.Trash/item", bytes: 4096, itemCount: 2)
+        try await harness.store.append(moved)
+        let activity = try await response(from: handler, request: AgentRequest(operation: .loadActivity(limit: 10)))
+        guard case .activity(let items) = activity.payload else { Issue.record("Expected activity"); return }
+        #expect(items == [AgentActivityItem(id: moved.id, occurredAt: now, kind: .movedToTrash, detail: "/.Trash/item", bytes: 4096, itemCount: 2)])
     }
 
     private struct FixedClock: SafetyClock {

@@ -34,6 +34,20 @@ import TinyPruneDomain
 
         let legacy = Data(#"{"policy":{"rules":[],"overrides":[],"globallyPaused":false},"upcoming":[]}"#.utf8)
         #expect(try JSONDecoder().decode(AgentOverviewSnapshot.self, from: legacy).rootStatuses.isEmpty)
+        #expect(try JSONDecoder().decode(AgentOverviewSnapshot.self, from: legacy).reclaimed == nil)
+    }
+
+    @Test func reclaimedDTOsAndActivitySizesRoundTrip() throws {
+        let day = Date(timeIntervalSince1970: 1_000)
+        let summary = AgentReclaimedSummary(lifetimeItems: 3, lifetimeBytes: 4096, itemsWithKnownSize: 2, firstMovedAt: day, lastMovedAt: day, days: [AgentReclaimedDay(day: day, items: 3, bytes: 4096)], weekItems: 3, weekBytes: 4096)
+        let overview = AgentOverviewSnapshot(policy: AgentPolicySnapshot(rules: [], overrides: [], globallyPaused: false), upcoming: [], reclaimed: summary)
+        #expect(try JSONDecoder().decode(AgentOverviewSnapshot.self, from: JSONEncoder().encode(overview)) == overview)
+        let activity = AgentActivityItem(id: UUID(), occurredAt: day, kind: .movedToTrash, detail: "/.Trash/item", bytes: 4096, itemCount: 2)
+        #expect(try JSONDecoder().decode(AgentActivityItem.self, from: JSONEncoder().encode(activity)) == activity)
+        let legacy = Data(#"{"id":"00000000-0000-0000-0000-000000000001","occurredAt":0,"kind":"movedToTrash","detail":"/.Trash/old"}"#.utf8)
+        let decoded = try JSONDecoder().decode(AgentActivityItem.self, from: legacy)
+        #expect(decoded.bytes == nil)
+        #expect(decoded.itemCount == nil)
     }
 
     @Test func newOperationsAndFailuresSurviveTheIPCEncoding() throws {

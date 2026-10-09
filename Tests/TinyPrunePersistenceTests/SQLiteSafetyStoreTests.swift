@@ -281,6 +281,8 @@ import Testing
 
         let old = TrashAuditEvent(occurredAt: clock.now().addingTimeInterval(-90 * 86_400), kind: .notDue)
         try await store.append(old)
+        let oldMove = TrashAuditEvent(occurredAt: old.occurredAt, kind: .movedToTrash, detail: "/.Trash/old", bytes: 4096, itemCount: 3)
+        try await store.append(oldMove)
         try await store.performMaintenance()
         let keptWhenDisabled = try await store.auditEvents().map(\.id)
         #expect(keptWhenDisabled.contains(old.id))
@@ -293,6 +295,9 @@ import Testing
         let afterChange = try await store.auditEvents().map(\.id)
         #expect(!(afterChange.contains(old.id)))
         #expect(afterChange.contains(change.id))
+        #expect(afterChange.contains(oldMove.id))
+        let ledger = try await store.reduceMovedToTrashEvents(into: [TrashAuditEvent]()) { $0.append($1) }
+        #expect(ledger == [oldMove])
     }
 
     @Test func testEveryPolicyMutationBumpsRevisionAndStaleReplaceIsRejected() async throws {

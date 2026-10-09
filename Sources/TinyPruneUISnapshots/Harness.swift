@@ -119,6 +119,13 @@ final class ScriptedTransport: AgentTransport, @unchecked Sendable {
         case hang
     }
 
+    enum SizeMode: Sendable {
+        case passthrough
+        case canned(bytes: Int64, items: Int, truncated: Bool)
+        case unavailable
+        case hang
+    }
+
     private let base: any AgentTransport
     private let lock = NSLock()
     private var mode = PreviewMode.passthrough
@@ -127,6 +134,10 @@ final class ScriptedTransport: AgentTransport, @unchecked Sendable {
     private var pendingConflicts = 0
     private var overviewFails = false
     private var interruptsNextMutation = false
+    private var overviewFixture: AgentOverviewSnapshot?
+    private var sizeMode = SizeMode.passthrough
+    private var activeCannedSizes = 0
+    private var peakCannedSizes = 0
 
     init(base: any AgentTransport) { self.base = base }
 
@@ -138,6 +149,10 @@ final class ScriptedTransport: AgentTransport, @unchecked Sendable {
     func injectPolicyConflicts(_ count: Int) { lock.withLock { pendingConflicts = count } }
     /// While set, `loadOverview` throws `AgentClientError.unavailable`.
     func setOverviewFailing(_ failing: Bool) { lock.withLock { overviewFails = failing } }
+    /// Overrides only the loaded overview; mutations still reach the real agent.
+    func setOverviewFixture(_ fixture: AgentOverviewSnapshot?) { lock.withLock { overviewFixture = fixture } }
+    func setSizeMode(_ newMode: SizeMode) { lock.withLock { sizeMode = newMode } }
+    var maximumConcurrentCannedSizes: Int { lock.withLock { peakCannedSizes } }
     /// The next mutating request throws `AgentClientError.interrupted` after it has been applied by the real agent.
     func interruptNextMutationAfterApplying() { lock.withLock { interruptsNextMutation = true } }
 
@@ -156,6 +171,23 @@ final class ScriptedTransport: AgentTransport, @unchecked Sendable {
         switch request.operation {
         case .loadOverview:
             if lock.withLock({ overviewFails }) { throw AgentClientError.unavailable }
+            if let fixture = lock.withLock({ overviewFixture }) { return AgentResponse(payload: .overview(fixture)) }
+        case .itemSize(let path):
+            switch lock.withLock({ sizeMode }) {
+            case .passthrough: break
+            case .canned(let bytes, let items, let truncated):
+                lock.withLock {
+                    activeCannedSizes += 1
+                    peakCannedSizes = max(peakCannedSizes, activeCannedSizes)
+                }
+                defer { lock.withLock { activeCannedSizes -= 1 } }
+                await Task.yield()
+                return AgentResponse(payload: .itemSize(path: path, bytes: bytes, items: items, truncated: truncated))
+            case .unavailable: throw AgentClientError.unavailable
+            case .hang:
+                // A hosted ledger remains visibly measuring until its SwiftUI task is cancelled.
+                try await Task.sleep(for: .seconds(3_600))
+            }
         case .replacePolicy, .saveRule:
             let conflict = lock.withLock { () -> Bool in
                 guard pendingConflicts > 0 else { return false }

@@ -7,6 +7,12 @@ public struct ItemSizeMeasurement: Equatable, Sendable {
     public let items: Int
     /// True when the walk stopped at `maxEntries` or was cancelled, so `bytes` is a lower bound.
     public let truncated: Bool
+
+    public init(bytes: Int64, items: Int, truncated: Bool) {
+        self.bytes = bytes
+        self.items = items
+        self.truncated = truncated
+    }
 }
 
 public enum ItemSizeMeasurer {
@@ -31,22 +37,23 @@ public enum ItemSizeMeasurer {
         let isDirectory = rootValues.isDirectory == true && rootValues.isSymbolicLink != true
         guard isDirectory else { return ItemSizeMeasurement(bytes: bytes, items: items, truncated: false) }
 
+        var enumerationFailed = false
         guard let enumerator = FileManager.default.enumerator(
             at: url,
             includingPropertiesForKeys: keys,
             options: [],
-            errorHandler: { _, _ in true }
-        ) else { return ItemSizeMeasurement(bytes: bytes, items: items, truncated: false) }
+            errorHandler: { _, _ in enumerationFailed = true; return false }
+        ) else { return nil }
 
         while let child = enumerator.nextObject() as? URL {
             if Task.isCancelled || shouldStop() || items >= maxEntries {
                 return ItemSizeMeasurement(bytes: bytes, items: items, truncated: true)
             }
             items += 1
-            if let values = try? child.resourceValues(forKeys: keySet) {
-                bytes += allocatedSize(values)
-            }
+            guard let values = try? child.resourceValues(forKeys: keySet) else { return nil }
+            bytes += allocatedSize(values)
         }
+        guard !enumerationFailed else { return nil }
         return ItemSizeMeasurement(bytes: bytes, items: items, truncated: false)
     }
 

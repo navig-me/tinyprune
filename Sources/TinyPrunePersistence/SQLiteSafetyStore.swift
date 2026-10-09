@@ -231,7 +231,8 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
     private func pruneAuditEvents(retentionDays: Int, keeping keptID: UUID? = nil) throws {
         guard retentionDays > 0 else { return }
         let cutoff = clock.now().addingTimeInterval(-Double(retentionDays) * 86_400)
-        let statement = try prepare("DELETE FROM audit_events WHERE occurred_at < ? AND id <> ?")
+        // Successful moves are the durable lifetime ledger, independent of Activity retention.
+        let statement = try prepare("DELETE FROM audit_events WHERE occurred_at < ? AND id <> ? AND kind <> 'movedToTrash'")
         defer { sqlite3_finalize(statement) }
         try check(sqlite3_bind_double(statement, 1, cutoff.timeIntervalSince1970))
         try bind(keptID?.uuidString ?? "", to: statement, at: 2)
@@ -379,6 +380,20 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
         var result: [TrashAuditEvent] = []
         while try rowAvailable(statement) {
             result.append(try decode(TrashAuditEvent.self, from: columnData(statement, at: 0)))
+        }
+        return result
+    }
+
+    /// Streams only successful moves into an accumulator; unrelated audit rows and Activity limits are excluded.
+    public func reduceMovedToTrashEvents<Result: Sendable>(
+        into initial: Result,
+        _ update: @Sendable (inout Result, TrashAuditEvent) -> Void
+    ) throws -> Result {
+        let statement = try prepare("SELECT payload FROM audit_events WHERE kind = 'movedToTrash' ORDER BY occurred_at ASC, id ASC")
+        defer { sqlite3_finalize(statement) }
+        var result = initial
+        while try rowAvailable(statement) {
+            update(&result, try decode(TrashAuditEvent.self, from: columnData(statement, at: 0)))
         }
         return result
     }
@@ -1162,6 +1177,17 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
             CREATE INDEX deadline_rule_idx ON deadlines(rule_id);
             INSERT INTO schema_migrations(version, applied_at) VALUES(8, strftime('%s', 'now'));
             PRAGMA user_version = 8;
+            COMMIT;
+            """
+            do { try Self.execute(database, migration) }
+            catch { sqlite3_exec(database, "ROLLBACK", nil, nil, nil); throw error }
+        }
+        if version < 9 {
+            let migration = """
+            BEGIN IMMEDIATE;
+            CREATE INDEX audit_moved_ledger_idx ON audit_events(occurred_at ASC, id ASC) WHERE kind = 'movedToTrash';
+            INSERT INTO schema_migrations(version, applied_at) VALUES(9, strftime('%s', 'now'));
+            PRAGMA user_version = 9;
             COMMIT;
             """
             do { try Self.execute(database, migration) }

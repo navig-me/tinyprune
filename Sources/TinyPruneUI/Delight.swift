@@ -157,3 +157,19 @@ struct PruneEmptyState: View {
         .background(PrunePalette.row, in: RoundedRectangle(cornerRadius: PruneDesign.Radius.panel))
     }
 }
+
+/// Interpolates an honest measured value; callers decide when an increase deserves motion.
+package struct CountUp: View, Animatable {
+    nonisolated package var value: Double
+    nonisolated package var bytes: Bool
+    package init(value: Double, bytes: Bool = false) { self.value = value; self.bytes = bytes }
+    nonisolated package var animatableData: Double {
+        get { value }
+        set { value = newValue }
+    }
+    package var body: some View {
+        Text(bytes
+             ? ByteCountFormatter.string(fromByteCount: Int64(max(0, value)), countStyle: .file)
+             : Int64(max(0, value)).formatted())
+    }
+}

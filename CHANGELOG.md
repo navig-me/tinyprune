@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.9 - 2026-10-09
+
+- Menu-bar popover: **Open TinyPrune** now reliably brings the main window to the front, including when it is minimized, behind other apps, or closed.
+- Menu-bar popover redesigned to be simpler: one card with the count of items due, the next item and its lifetime ring (click it to open Upcoming), then **Open TinyPrune**, **Templates** and **Pause**. With no rules yet it offers **Start from a template** instead.
+- Overview: a quiet reclaim ledger with what has moved to Trash (lifetime and last 14 days), what moves soon and what is scheduled, with sizes measured from file metadata only. It says "Moved to Trash", never "freed": space returns when you empty the Trash.
+- Upcoming and Overview no longer sit empty until you press Refresh: the app refreshes when you change pages and polls every 2 seconds while the agent is still indexing a folder.
+
 ## 0.1.8 - 2026-10-09
 
 - Fixed the app sitting on "Connecting to the local agent" after an upgrade. When the installed build differs from the one that last registered the background agent, TinyPrune now re-registers the agent before its first request, instead of waiting for a request that never answers.

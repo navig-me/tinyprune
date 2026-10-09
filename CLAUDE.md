@@ -40,7 +40,7 @@ Use the Stitch references in `stitch_tinyprune_macos_app/` as visual direction, 
 
 - Calm desktop utility: warm stone surfaces, editorial Newsreader titles, Manrope controls/body, JetBrains Mono for paths.
 - Deep plum is the primary action/selection color; green represents safe/healthy states; amber represents caution. Preserve macOS accessibility contrast and state clarity.
-- Overview remains quiet: managed places and next-to-prune, not charts or inflated storage KPIs.
+- Overview remains quiet: managed places and next-to-prune, with one honest reclaim ledger showing moved-to-Trash, moving-soon, and scheduled totals plus a tiny 14-day bar sparkline. No axes, filled tracks, or inflated storage KPIs; moving to Trash does not free space until Trash is emptied.
 - Explain safety and reversibility without inventing guarantees beyond the actual engine behavior.
 - Use Preview as the primary affordance for broad developer rules.
 

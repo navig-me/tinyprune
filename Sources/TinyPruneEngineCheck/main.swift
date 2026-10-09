@@ -125,7 +125,14 @@ struct TinyPruneEngineCheck {
         let overviewResponse = try JSONDecoder().decode(AgentResponse.self, from: overviewReply)
         guard case .overview(let overview) = overviewResponse.payload,
               overview.policy.rules == [folderRule],
-              overview.upcoming.isEmpty else {
+              overview.upcoming.isEmpty,
+              let reclaimed = overview.reclaimed,
+              reclaimed.lifetimeItems == (moveEvent.itemCount ?? 1),
+              reclaimed.lifetimeBytes == (moveEvent.bytes ?? 0),
+              reclaimed.itemsWithKnownSize == (moveEvent.bytes == nil ? 0 : (moveEvent.itemCount ?? 1)),
+              reclaimed.days.count == 14,
+              reclaimed.firstMovedAt == moveEvent.occurredAt,
+              reclaimed.lastMovedAt == moveEvent.occurredAt else {
             throw SmokeFailure.agentRequestFailed
         }
         let malformedReply = await handler.handle(Data("not-json".utf8))
