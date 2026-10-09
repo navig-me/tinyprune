@@ -99,7 +99,8 @@ jobs:
           mkdir -p .build
           skip=()
           if [[ "$SKIP_BENCHMARK" == yes ]]; then skip=(--skip PhaseTwoBenchmarkTests); fi
-          swift test "${skip[@]}" 2>&1 | tee .build/native-tests.log
+          # bash 3.2 on macOS treats an empty array as unbound under set -u, hence the ${var+...} guard.
+          swift test ${skip[@]+"${skip[@]}"} 2>&1 | tee .build/native-tests.log
       - name: Real domain and filesystem fixtures
         run: |
           set -euo pipefail
