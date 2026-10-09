@@ -133,6 +133,8 @@ package protocol AgentSystemServices: AnyObject {
     var agentStatus: SMAppService.Status { get }
     func registerAgent() throws
     func restartAgent() throws
+    /// Restarts the launchd job without re-registering it. Returns whether launchd accepted the request.
+    func kickstartAgent() -> Bool
     func reconcileAgentAfterUpdate() throws -> Bool
     func openLoginItems()
     var launchesAtLogin: Bool { get }
@@ -150,6 +152,22 @@ package final class SMAppSystemServices: AgentSystemServices {
     package func restartAgent() throws {
         try? launchAgent.unregister()
         try launchAgent.register()
+        // Registration alone can leave launchd's job throttled after repeated spawn failures; start it now.
+        _ = kickstartAgent()
+    }
+
+    /// `launchctl kickstart -k` restarts the job and clears launchd's crash back-off. The app is not sandboxed.
+    package func kickstartAgent() -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.arguments = ["kickstart", "-k", "gui/\(getuid())/com.navig-me.tinyprune.agent"]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            process.waitUntilExit()
+            return process.terminationStatus == 0
+        } catch { return false }
     }
 
     /// `brew upgrade` and direct replacement leave macOS listing the agent as enabled while launchd has lost or
@@ -242,23 +260,39 @@ package final class AgentViewModel: ObservableObject {
         return true
     }
 
-    /// Before the first load, make sure the agent actually answers: probe briefly, re-register once if it does not,
-    /// then give the freshly started job a few seconds to come up. Never runs once an overview is cached.
+    private var lastAgentRepair: Date?
+
+    /// Polls `health` until it answers or `seconds` pass.
+    private func agentAnswers(within seconds: Double) async -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        repeat {
+            if await agentAnswers() { return true }
+            try? await Task.sleep(for: .milliseconds(750))
+        } while Date() < deadline
+        return false
+    }
+
+    /// Before the first load, make sure the agent actually answers. After `brew upgrade` launchd can keep a job that
+    /// fails to spawn (exit 78) for a long time, so one re-registration is not enough. Escalate, cheapest first:
+    /// kickstart the job (also resets launchd's crash throttle), re-register it, kickstart again. At most one cycle a
+    /// minute, and never once an overview is cached.
     private func waitUntilAgentAnswers() async {
         guard overview == nil, registrationStatus == .enabled else { return }
-        for attempt in 0..<2 {
-            if await agentAnswers() { return }
-            if attempt == 0 { try? await Task.sleep(for: .milliseconds(400)) }
-        }
-        guard !repairedAgentThisSession else { return }
+        if await agentAnswers() { return }
+        if await agentAnswers() { return }
+        if let last = lastAgentRepair, now().timeIntervalSince(last) < 60 { return }
+        lastAgentRepair = now()
         repairedAgentThisSession = true
-        startupNote = "Starting the background agent after the update…"
         defer { startupNote = nil }
-        guard (try? services.restartAgent()) != nil else { return }
-        for _ in 0..<8 {
-            if await agentAnswers() { return }
-            try? await Task.sleep(for: .milliseconds(750))
-        }
+        startupNote = "Starting the background agent after the update…"
+        _ = services.kickstartAgent()
+        if await agentAnswers(within: 6) { return }
+        startupNote = "Registering the background agent again…"
+        _ = try? services.restartAgent()
+        if await agentAnswers(within: 10) { return }
+        startupNote = "Still starting. Restarting the background agent…"
+        _ = services.kickstartAgent()
+        _ = await agentAnswers(within: 10)
     }
 
     package var policy: AgentPolicySnapshot? { overview?.policy }

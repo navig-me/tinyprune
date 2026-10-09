@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.11 - 2026-10-09
+
+- Stronger recovery when the background agent does not start after an upgrade. After `brew upgrade`, launchd can keep a job that fails to spawn (exit 78) and back off for a long time, so re-registering once was not enough. TinyPrune now restarts the job directly with `launchctl kickstart -k` (which also clears launchd's back-off), then re-registers it, then restarts it again, telling you what it is doing at each step. The menu-bar popover also gained a **Restart background agent** button when the agent cannot be reached.
+
 ## 0.1.10 - 2026-10-09
 
 - Fixed the long "Connecting to the local agent" screen after an upgrade. The app now probes the agent for a few seconds, re-registers the background agent right away if it does not answer, and says "Starting the background agent after the update…" instead of waiting out a 30 second timeout.

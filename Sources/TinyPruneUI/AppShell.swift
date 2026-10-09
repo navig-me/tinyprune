@@ -343,9 +343,13 @@ package struct MenuBarContent: View {
                 summary(overview)
                 actions(overview).pruneEntrance(2)
             } else {
-                Text(model.errorMessage ?? "Connecting…").foregroundStyle(.secondary)
+                Text(model.startupNote ?? model.errorMessage ?? "Connecting…").foregroundStyle(.secondary)
                 Button("Open TinyPrune", action: openMainWindow)
                     .buttonStyle(PruneButtonStyle(prominent: true))
+                if model.errorMessage != nil {
+                    Button("Restart background agent") { Task { await model.restartAgent() } }
+                        .buttonStyle(PruneButtonStyle())
+                }
             }
             HStack {
                 Spacer()

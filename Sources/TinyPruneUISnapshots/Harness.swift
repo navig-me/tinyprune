@@ -231,6 +231,7 @@ final class StubServices: AgentSystemServices {
     private(set) var restartCalls = 0
     func restartAgent() throws { restartCalls += 1 }
     func reconcileAgentAfterUpdate() throws -> Bool { false }
+    func kickstartAgent() -> Bool { true }
     func openLoginItems() {}
     func setLaunchAtLogin(_ enabled: Bool) throws { launchesAtLogin = enabled }
 }
