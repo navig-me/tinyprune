@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.12 - 2026-10-09
+
+- Fixed the "Only items with certain names" and "More options" toggles in the New Rule editor. They were stock macOS disclosure groups that only react to their tiny chevron; the whole header row is now the button.
+
 ## 0.1.11 - 2026-10-09
 
 - Stronger recovery when the background agent does not start after an upgrade. After `brew upgrade`, launchd can keep a job that fails to spawn (exit 78) and back off for a long time, so re-registering once was not enough. TinyPrune now restarts the job directly with `launchctl kickstart -k` (which also clears launchd's back-off), then re-registers it, then restarts it again, telling you what it is doing at each step. The menu-bar popover also gained a **Restart background agent** button when the agent cannot be reached.

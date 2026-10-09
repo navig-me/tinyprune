@@ -412,7 +412,7 @@ package struct RuleEditorSheet: View {
                             Text("Files").tag(ItemKind.file)
                             Text("Folders").tag(ItemKind.directory)
                         }
-                        DisclosureGroup("Only items with certain names (optional)", isExpanded: $showsNameFilter) {
+                        EditorDisclosure(title: "Only items with certain names (optional)", isExpanded: $showsNameFilter) {
                             VStack(alignment: .leading, spacing: 8) {
                                 TextField("Exact names", text: $names, prompt: Text(verbatim: "Exact names, comma separated (node_modules, .venv)"))
                                 // Verbatim: the glob example contains `**`, which Markdown-aware Text would swallow.
@@ -422,8 +422,6 @@ package struct RuleEditorSheet: View {
                             }
                             .padding(.top, 8)
                         }
-                        .font(.manropeBody.weight(.semibold))
-                        .foregroundStyle(PrunePalette.plum)
                     }
 
                     editorSection("When") {
@@ -445,7 +443,7 @@ package struct RuleEditorSheet: View {
                         }
                     }
 
-                    DisclosureGroup("More options", isExpanded: $showsMore) {
+                    EditorDisclosure(title: "More options", isExpanded: $showsMore) {
                         VStack(alignment: .leading, spacing: 14) {
                             VStack(alignment: .leading, spacing: 6) {
                                 Text("Grace period").font(.manropeSubheadline.weight(.semibold))
@@ -477,8 +475,6 @@ package struct RuleEditorSheet: View {
                         }
                         .padding(.top, 8)
                     }
-                    .font(.manropeBody.weight(.semibold))
-                    .foregroundStyle(PrunePalette.plum)
                     .onChange(of: graceIssue) { _, issue in if issue != nil { showsMore = true } }
 
                     Label("Matching items move to the macOS Trash, never permanently deleted. Use Put Back in Finder to restore.", systemImage: "arrow.uturn.backward.circle")
@@ -833,6 +829,37 @@ package struct RuleEditorSheet: View {
             dismiss()
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+}
+
+/// A disclosure whose whole header row is the button. The stock macOS `DisclosureGroup` only toggles from its tiny
+/// chevron, which read as a broken toggle in the New Rule editor.
+private struct EditorDisclosure<Content: View>: View {
+    let title: String
+    @Binding var isExpanded: Bool
+    @ViewBuilder var content: () -> Content
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                if reduceMotion { isExpanded.toggle() } else { withAnimation(.easeOut(duration: 0.18)) { isExpanded.toggle() } }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 11, weight: .bold))
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    Text(title)
+                    Spacer(minLength: 0)
+                }
+                .font(.manropeBody.weight(.semibold))
+                .foregroundStyle(PrunePalette.plum)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+            if isExpanded { content() }
         }
     }
 }
