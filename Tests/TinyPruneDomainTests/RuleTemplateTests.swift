@@ -35,6 +35,8 @@ import Testing
             (.pipCache, "~/Library/Caches/pip", 90, .file, true),
             (.cargoRegistryCache, "~/.cargo/registry/cache", 90, .file, true),
             (.gradleCaches, "~/.gradle/caches", 90, .file, true),
+            (.agentSessionLogs, "~/.claude/projects", 60, .file, true),
+            (.agentEditBackups, "~/.claude/file-history", 30, .file, true),
         ]
         for (template, suggestion, days, kind, recursive) in presets {
             #expect(template.suggestedFolder == suggestion)
@@ -55,11 +57,22 @@ import Testing
             #expect(template.suggestedFolder == nil)
             #expect(try template.rules(in: home + "/Work", state: .active).allSatisfy { $0.state == .active })
         }
-        for template in [RuleTemplate.developerCleanup, .buildArtifacts] {
+        for template in [RuleTemplate.developerCleanup, .buildArtifacts, .agentDebugLogs] {
             #expect(template.isBroad)
             #expect(template.suggestedFolder == nil)
             #expect(try template.rules(in: home + "/Work", state: .active).allSatisfy { $0.state == .preview })
         }
+    }
+
+    @Test func agentTemplatesTargetOnlyTheirLogAndTranscriptFiles() throws {
+        let sessions = try #require(RuleTemplate.agentSessionLogs.rules(in: home + "/.claude/projects", state: .preview).first)
+        #expect(sessions.matcher.matches(name: "abc.jsonl", relativePath: "proj/abc.jsonl", kind: .file))
+        #expect(!sessions.matcher.matches(name: "settings.json", relativePath: "proj/settings.json", kind: .file))
+        #expect(!sessions.matcher.matches(name: "abc.jsonl", relativePath: "proj/abc.jsonl", kind: .directory))
+        let logs = try #require(RuleTemplate.agentDebugLogs.rules(in: home + "/Work", state: .active).first)
+        #expect(logs.state == .preview)
+        for name in ["debug.log", "run.trace"] { #expect(logs.matcher.matches(name: name, relativePath: "a/" + name, kind: .file)) }
+        for name in ["notes.md", "main.swift", "log"] { #expect(!logs.matcher.matches(name: name, relativePath: name, kind: .file)) }
     }
 
     @Test func cacheGlobsExcludeIncompleteAndUnrelatedFiles() throws {

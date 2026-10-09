@@ -199,6 +199,7 @@ package final class AgentViewModel: ObservableObject {
     package var errorMessage: String? { overview == nil ? connectionIssue : nil }
 
     private let transport: any AgentTransport
+    private let probeTransport: (any AgentTransport)?
     package let services: any AgentSystemServices
     private let now: @Sendable () -> Date
     private let defaults: UserDefaults
@@ -216,17 +217,48 @@ package final class AgentViewModel: ObservableObject {
 
     package init(
         transport: any AgentTransport = TinyPruneAgentClient(),
+        probeTransport: (any AgentTransport)? = nil,
         services: any AgentSystemServices = SMAppSystemServices(),
         postsNotifications: Bool = true,
         defaults: UserDefaults = .standard,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.transport = transport
+        self.probeTransport = probeTransport
         self.services = services
         self.postsNotifications = postsNotifications
         self.defaults = defaults
         self.now = now
         attentionSeenAt = defaults.object(forKey: Self.attentionSeenKey) as? Date
+    }
+
+    /// Says what the first launch is waiting for, so a restart of the background agent is not a silent spinner.
+    @Published package private(set) var startupNote: String?
+
+    /// `health` with a short timeout. A stale launchd registration after an upgrade makes a normal request hang for the
+    /// full client timeout; probing quickly lets the app repair the registration in seconds instead.
+    private func agentAnswers() async -> Bool {
+        guard case .health? = try? await (probeTransport ?? transport).request(AgentRequest(operation: .health)).payload else { return false }
+        return true
+    }
+
+    /// Before the first load, make sure the agent actually answers: probe briefly, re-register once if it does not,
+    /// then give the freshly started job a few seconds to come up. Never runs once an overview is cached.
+    private func waitUntilAgentAnswers() async {
+        guard overview == nil, registrationStatus == .enabled else { return }
+        for attempt in 0..<2 {
+            if await agentAnswers() { return }
+            if attempt == 0 { try? await Task.sleep(for: .milliseconds(400)) }
+        }
+        guard !repairedAgentThisSession else { return }
+        repairedAgentThisSession = true
+        startupNote = "Starting the background agent after the update…"
+        defer { startupNote = nil }
+        guard (try? services.restartAgent()) != nil else { return }
+        for _ in 0..<8 {
+            if await agentAnswers() { return }
+            try? await Task.sleep(for: .milliseconds(750))
+        }
     }
 
     package var policy: AgentPolicySnapshot? { overview?.policy }
@@ -357,9 +389,12 @@ package final class AgentViewModel: ObservableObject {
             return
         }
         isRefreshing = true
-        isLoading = true
+        // Only the very first load is "loading". Later refreshes (timer, page change, activation) are silent, so the
+        // header and icons do not flicker every few seconds.
+        isLoading = overview == nil
         repeat {
             refreshPending = false
+            await waitUntilAgentAnswers()
             await loadState()
         } while refreshPending
         isLoading = false

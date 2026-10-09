@@ -40,7 +40,6 @@ struct OverviewPage: View {
                     HStack(spacing: 7) {
                         Image(systemName: needsAttention || overview.policy.globallyPaused || model.pruningHaltedReason != nil ? "pause.circle" : "checkmark.circle")
                             .foregroundStyle(needsAttention || overview.policy.globallyPaused || model.pruningHaltedReason != nil ? PrunePalette.caution : PrunePalette.safe)
-                            .pruneBounce(value: model.isLoading)
                         Text("On this Mac").font(.caption).foregroundStyle(.secondary)
                     }
                     Text(headline)

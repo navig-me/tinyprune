@@ -60,7 +60,7 @@ struct RulesPage: View {
         }
         .font(.manropeBody)
         .sheet(item: $editorTarget) { target in
-            RuleEditorSheet(target: target, overview: overview)
+            RuleEditorSheet(target: target, overview: overview, openTemplates: { router.selection = .templates })
         }
         .onAppear(perform: consumePendingPath)
         .onChange(of: router.pendingRulePath) { _, _ in consumePendingPath() }
@@ -291,16 +291,52 @@ package struct RuleEditorSheet: View {
     let overview: AgentOverviewSnapshot
 
     /// `preview` lets tooling observe the explicit impact preview; production callers use the default.
-    package init(target: RuleEditorTarget, overview: AgentOverviewSnapshot, preview: RulePreviewController = RulePreviewController()) {
+    package init(
+        target: RuleEditorTarget, overview: AgentOverviewSnapshot,
+        preview: RulePreviewController = RulePreviewController(), openTemplates: (() -> Void)? = nil
+    ) {
         self.target = target
         self.overview = overview
+        self.openTemplates = openTemplates
         _preview = StateObject(wrappedValue: preview)
+    }
+
+    private let openTemplates: (() -> Void)?
+
+    /// The easy way in: most people want a template, not a blank rule.
+    private var templateStrip: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "square.on.square").foregroundStyle(PrunePalette.plum).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Easier: start from a template").font(.manropeBody.weight(.semibold))
+                Text("Downloads, screenshots, developer caches, AI agent clutter and more.")
+                    .font(.manropeCaption).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            Menu("Fill from…") {
+                ForEach(Self.singleRuleTemplates) { template in
+                    Button(template.title) { applyTemplate(template) }
+                }
+                if let openTemplates {
+                    Divider()
+                    Button("Browse all templates…") { dismiss(); openTemplates() }
+                }
+            }
+            .menuStyle(.button)
+            .fixedSize()
+            .accessibilityLabel("Fill this rule from a template")
+        }
+        .padding(12)
+        .background(PrunePalette.row, in: RoundedRectangle(cornerRadius: PruneDesign.Radius.row))
+        .padding(.bottom, 14)
     }
 
     @StateObject private var preview: RulePreviewController
     @State private var draftID = UUID()
 
     @State private var name = "New rule"
+    @State private var showsNameFilter = false
+    @State private var showsMore = false
     @State private var scopePath = ""
     @State private var chosenFolder: ChosenFolder?
     @State private var recursive = true
@@ -338,6 +374,7 @@ package struct RuleEditorSheet: View {
                 .padding(.bottom, 16)
                 .pruneAnimation(value: draft.naturalDescription())
             }
+            if editing == nil { templateStrip }
 
             ScrollViewReader { proxy in
             ScrollView {
@@ -375,11 +412,18 @@ package struct RuleEditorSheet: View {
                             Text("Files").tag(ItemKind.file)
                             Text("Folders").tag(ItemKind.directory)
                         }
-                        TextField("Exact names", text: $names, prompt: Text(verbatim: "Exact names, comma separated (node_modules, .venv)"))
-                        // Verbatim: the glob example contains `**`, which Markdown-aware Text would swallow.
-                        TextField("Glob patterns", text: $globs, prompt: Text(verbatim: "Glob patterns, comma separated (*.dmg, **/.cache/**)"))
-                        Text("Leave both empty to match every \(kind == .file ? "file" : kind == .directory ? "folder" : "item").")
-                            .font(.manropeCaption).foregroundStyle(.secondary)
+                        DisclosureGroup("Only items with certain names (optional)", isExpanded: $showsNameFilter) {
+                            VStack(alignment: .leading, spacing: 8) {
+                                TextField("Exact names", text: $names, prompt: Text(verbatim: "Exact names, comma separated (node_modules, .venv)"))
+                                // Verbatim: the glob example contains `**`, which Markdown-aware Text would swallow.
+                                TextField("Glob patterns", text: $globs, prompt: Text(verbatim: "Patterns, comma separated (*.dmg, **/.cache/**)"))
+                                Text("Leave both empty to match every \(kind == .file ? "file" : kind == .directory ? "folder" : "item") in the folder.")
+                                    .font(.manropeCaption).foregroundStyle(.secondary)
+                            }
+                            .padding(.top, 8)
+                        }
+                        .font(.manropeBody.weight(.semibold))
+                        .foregroundStyle(PrunePalette.plum)
                     }
 
                     editorSection("When") {
@@ -399,38 +443,46 @@ package struct RuleEditorSheet: View {
                         if let amountIssue {
                             Text(amountIssue).font(.manropeCaption).foregroundStyle(PrunePalette.caution)
                         }
-                        HStack {
-                            Text("Grace period")
-                            TextField("Hours", text: $graceText)
-                                .frame(width: 60)
-                                .accessibilityLabel("Grace period in hours")
-                            Text("hours (0 for none)").foregroundStyle(.secondary)
-                        }
-                        if let graceIssue {
-                            Text(graceIssue).font(.manropeCaption).foregroundStyle(PrunePalette.caution)
-                        }
                     }
 
-                    editorSection("Then") {
-                        Text("Move the matching item to Trash")
-                        Text("Items go to the macOS Trash, never permanently deleted. They stay there until you or macOS empty it; use Put Back in Finder to restore.")
-                            .font(.manropeCaption).foregroundStyle(.secondary)
-                    }
-
-                    editorSection("Except") {
-                        ForEach(exceptions, id: \.self) { path in
-                            HStack {
-                                PathText(path: path)
-                                Spacer()
-                                Button { removeException(path) } label: { Image(systemName: "minus.circle") }
-                                    .buttonStyle(.borderless)
-                                    .accessibilityLabel("Remove exception \(path)")
+                    DisclosureGroup("More options", isExpanded: $showsMore) {
+                        VStack(alignment: .leading, spacing: 14) {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Grace period").font(.manropeSubheadline.weight(.semibold))
+                                HStack {
+                                    TextField("Hours", text: $graceText)
+                                        .frame(width: 60)
+                                        .accessibilityLabel("Grace period in hours")
+                                    Text("hours of extra time after an item expires (0 for none)").foregroundStyle(.secondary)
+                                }
+                                if let graceIssue {
+                                    Text(graceIssue).font(.manropeCaption).foregroundStyle(PrunePalette.caution)
+                                }
+                            }
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Except").font(.manropeSubheadline.weight(.semibold))
+                                ForEach(exceptions, id: \.self) { path in
+                                    HStack {
+                                        PathText(path: path)
+                                        Spacer()
+                                        Button { removeException(path) } label: { Image(systemName: "minus.circle") }
+                                            .buttonStyle(.borderless)
+                                            .accessibilityLabel("Remove exception \(path)")
+                                    }
+                                }
+                                Button("Add exception…", action: addException)
+                                Text("Exceptions are Keep protections for the item and everything inside it.")
+                                    .font(.manropeCaption).foregroundStyle(.secondary)
                             }
                         }
-                        Button("Add exception…", action: addException)
-                        Text("Exceptions are Keep protections for the item and everything inside it.")
-                            .font(.manropeCaption).foregroundStyle(.secondary)
+                        .padding(.top, 8)
                     }
+                    .font(.manropeBody.weight(.semibold))
+                    .foregroundStyle(PrunePalette.plum)
+                    .onChange(of: graceIssue) { _, issue in if issue != nil { showsMore = true } }
+
+                    Label("Matching items move to the macOS Trash, never permanently deleted. Use Put Back in Finder to restore.", systemImage: "arrow.uturn.backward.circle")
+                        .font(.manropeCaption).foregroundStyle(.secondary)
 
                     impactPreview.id("impact")
                 }
@@ -668,10 +720,35 @@ package struct RuleEditorSheet: View {
             }
             exceptions = kept.sorted()
             originalExceptions = exceptions
+            showsNameFilter = !names.isEmpty || !globs.isEmpty
+            showsMore = graceText != "0" || !exceptions.isEmpty
         case .new(let prefill):
             if let prefill { scopePath = prefill }
         }
         initialFields = currentFields
+    }
+
+    /// Fills the form from a single-rule template so the user starts from something sensible. The folder is still
+    /// theirs to choose (and authorize); nothing is saved until they confirm.
+    private func applyTemplate(_ template: RuleTemplate) {
+        guard let rule = try? template.rules(in: "/Users/example/Work", state: .preview).first else { return }
+        name = rule.name
+        recursive = rule.scope.recursive
+        kind = rule.matcher.itemKind
+        names = rule.matcher.exactNames.sorted().joined(separator: ", ")
+        globs = rule.matcher.globPatterns.sorted().joined(separator: ", ")
+        basis = rule.expiryBasis
+        if rule.lifetime.seconds.truncatingRemainder(dividingBy: 86_400) == 0 {
+            unit = .days; amountText = Self.format(rule.lifetime.seconds / 86_400)
+        } else {
+            unit = .hours; amountText = Self.format(rule.lifetime.seconds / 3_600)
+        }
+        showsNameFilter = !names.isEmpty || !globs.isEmpty
+    }
+
+    /// Templates that are a single ordinary rule can fill this form; multi-rule templates go through the Templates page.
+    private static let singleRuleTemplates: [RuleTemplate] = RuleTemplate.allCases.filter {
+        (try? $0.rules(in: "/Users/example/Work", state: .preview).count) == 1
     }
 
     private func split(_ text: String) -> Set<String> {

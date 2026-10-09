@@ -84,7 +84,8 @@ for template in RuleTemplate.allCases where template.suggestedFolder != nil {
     let folder = "/Users/example" + template.suggestedFolder!.dropFirst()
     let rule = try template.rules(in: folder, state: .active)[0]
     let name = template == .cargoRegistryCache ? "registry/package.crate" :
-        template == .homebrewDownloads ? "hash--package.tar.gz" : "old-cache"
+        template == .homebrewDownloads ? "hash--package.tar.gz" :
+        template == .agentSessionLogs ? "project/session.jsonl" : "old-cache"
     let modified = Date(timeIntervalSince1970: 0)
     let item = RuleCandidate(
         identity: FilesystemIdentity(volumeIdentifier: UUID(), resourceIdentifier: Data(name.utf8), pathHint: folder + "/" + name),

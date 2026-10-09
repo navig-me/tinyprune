@@ -15,6 +15,9 @@ public enum RuleTemplate: String, CaseIterable, Codable, Sendable, Identifiable 
     case pipCache
     case cargoRegistryCache
     case gradleCaches
+    case agentSessionLogs
+    case agentEditBackups
+    case agentDebugLogs
 
     public var id: String { rawValue }
 
@@ -33,6 +36,9 @@ public enum RuleTemplate: String, CaseIterable, Codable, Sendable, Identifiable 
         case .pipCache: "pip Cache"
         case .cargoRegistryCache: "Cargo Registry Cache"
         case .gradleCaches: "Gradle Caches"
+        case .agentSessionLogs: "AI Agent Session Logs"
+        case .agentEditBackups: "AI Agent Edit Backups"
+        case .agentDebugLogs: "AI Agent Debug Logs"
         }
     }
 
@@ -51,6 +57,9 @@ public enum RuleTemplate: String, CaseIterable, Codable, Sendable, Identifiable 
         case .pipCache: "HTTP and wheel cache files after 90 days without modification; pip downloads or rebuilds them."
         case .cargoRegistryCache: "Downloaded .crate archives after 90 days without modification; leaves sources, credentials, and tools alone."
         case .gradleCaches: "Generated and downloaded cache files after 90 days without modification; leaves Gradle settings and wrappers alone."
+        case .agentSessionLogs: "Conversation transcripts (.jsonl) that coding agents keep, after 60 days without modification. Old sessions can no longer be resumed."
+        case .agentEditBackups: "Per-session file backups that coding agents keep for undo, after 30 days without modification."
+        case .agentDebugLogs: "Log and trace files (.log, .trace) in a folder you choose, after 14 days without modification."
         }
     }
 
@@ -65,6 +74,8 @@ public enum RuleTemplate: String, CaseIterable, Codable, Sendable, Identifiable 
         case .pipCache: "~/Library/Caches/pip"
         case .cargoRegistryCache: "~/.cargo/registry/cache"
         case .gradleCaches: "~/.gradle/caches"
+        case .agentSessionLogs: "~/.claude/projects"
+        case .agentEditBackups: "~/.claude/file-history"
         default: nil
         }
     }
@@ -74,7 +85,7 @@ public enum RuleTemplate: String, CaseIterable, Codable, Sendable, Identifiable 
         switch self {
         case .developerCleanup, .buildArtifacts, .xcodeDerivedData, .xcodeDeviceSupport,
              .homebrewDownloads, .npmCache, .yarnClassicCache, .pipCache,
-             .cargoRegistryCache, .gradleCaches: true
+             .cargoRegistryCache, .gradleCaches, .agentSessionLogs, .agentEditBackups, .agentDebugLogs: true
         case .downloads, .screenshots, .temporaryWorkspace: false
         }
     }
@@ -144,6 +155,12 @@ public enum RuleTemplate: String, CaseIterable, Codable, Sendable, Identifiable 
             return [try rule("Old downloaded crates", kind: .file, globs: ["**/*.crate"], basis: .modified, days: 90)]
         case .gradleCaches:
             return [try rule("Old Gradle cache files", kind: .file, basis: .modified, days: 90)]
+        case .agentSessionLogs:
+            return [try rule("Old agent session logs", kind: .file, globs: ["*.jsonl"], basis: .modified, days: 60)]
+        case .agentEditBackups:
+            return [try rule("Old agent edit backups", kind: .file, basis: .modified, days: 30)]
+        case .agentDebugLogs:
+            return [try rule("Old agent debug logs", kind: .file, globs: ["*.log", "*.trace"], basis: .modified, days: 14)]
         }
     }
 }

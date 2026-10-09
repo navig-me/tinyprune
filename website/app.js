@@ -154,7 +154,10 @@ const templates = [
   ['Yarn Classic Cache','~/Library/Caches/Yarn','Yarn 1 cache files','90 days without modification','Preview'],
   ['pip Cache','~/Library/Caches/pip','HTTP and wheel cache files','90 days without modification','Preview'],
   ['Cargo Registry Cache','~/.cargo/registry/cache','.crate files only','90 days without modification','Preview'],
-  ['Gradle Caches','~/.gradle/caches','Cache files only','90 days without modification','Preview']
+  ['Gradle Caches','~/.gradle/caches','Cache files only','90 days without modification','Preview'],
+  ['AI Agent Session Logs','~/.claude/projects','Transcript .jsonl files','60 days without modification','Preview'],
+  ['AI Agent Edit Backups','~/.claude/file-history','Per-session backup files','30 days without modification','Preview'],
+  ['AI Agent Debug Logs','A folder you choose','.log and .trace files','14 days without modification','Preview']
 ];
 const rail=document.getElementById('template-rail');
 rail.innerHTML=templates.map(([name],index)=>`<button type="button" data-template="${index}" aria-pressed="${index===0}">${sprite(index<3?'folder':'terminal')}<span>${name}</span></button>`).join('');

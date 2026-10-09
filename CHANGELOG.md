@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.10 - 2026-10-09
+
+- Fixed the long "Connecting to the local agent" screen after an upgrade. The app now probes the agent for a few seconds, re-registers the background agent right away if it does not answer, and says "Starting the background agent after the update…" instead of waiting out a 30 second timeout.
+- Header and icons no longer flicker: background refreshes (every 30 seconds, every 2 seconds while indexing, on page change) are silent, the Activity and Overview icons no longer bounce on each refresh, and **Refresh** shows its own brief "Refreshing" state.
+- New Rule is simpler: a **Fill from…** menu and **Browse all templates…** link sit at the top, name filters are tucked into "Only items with certain names (optional)", and the grace period and exceptions moved into **More options**.
+- New templates for the clutter AI coding agents leave behind: **AI Agent Session Logs** (transcripts, 60 days), **AI Agent Edit Backups** (30 days) and **AI Agent Debug Logs** (`.log` and `.trace`, 14 days). All start in Preview.
+
 ## 0.1.9 - 2026-10-09
 
 - Menu-bar popover: **Open TinyPrune** now reliably brings the main window to the front, including when it is minimized, behind other apps, or closed.

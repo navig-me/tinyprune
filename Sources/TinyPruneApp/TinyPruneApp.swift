@@ -1,4 +1,5 @@
 import SwiftUI
+import TinyPruneIPC
 import TinyPruneUI
 
 @main
@@ -9,7 +10,7 @@ struct TinyPruneApp: App {
 
     @MainActor
     init() {
-        let model = AgentViewModel()
+        let model = AgentViewModel(probeTransport: TinyPruneAgentClient(timeout: 3))
         let updater = AppUpdater()
         // The updater's pruning halt is shown in Overview, the header, and the menu bar.
         updater.bind(to: model)

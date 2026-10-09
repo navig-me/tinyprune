@@ -124,7 +124,6 @@ struct ActivityPage: View {
                             HStack(alignment: .firstTextBaseline, spacing: 14) {
                                 Image(systemName: item.kind == .movedToTrash ? "checkmark.circle.fill" : item.isAttention ? "exclamationmark.circle" : "circle")
                                     .foregroundStyle(item.kind == .movedToTrash ? PrunePalette.safe : item.isAttention ? PrunePalette.caution : PrunePalette.plum)
-                                    .pruneBounce(value: model.isLoading)
                                     .accessibilityHidden(true)
                                 Text(item.occurredAt.formatted(date: .omitted, time: .shortened))
                                     .font(Typography.mono(size: 13))

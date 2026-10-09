@@ -142,13 +142,7 @@ package struct TinyPruneRootView: View {
             } else if model.policy?.globallyPaused == true {
                 Pill(text: pausedLabel(model.policy?.pausedUntil), color: PrunePalette.caution)
             }
-            Button {
-                Task { await model.refresh() }
-            } label: {
-                Label("Refresh", systemImage: "arrow.clockwise")
-            }
-            .disabled(model.isLoading)
-            .accessibilityLabel("Refresh local state")
+            RefreshButton()
         }
         .padding(.horizontal, 32)
         .padding(.vertical, 22)
@@ -185,8 +179,8 @@ package struct TinyPruneRootView: View {
             VStack(spacing: 18) {
                 BrandMarkView(size: 44)
                 ProgressView("Connecting to the local agent").controlSize(.small)
-                Text("Loading rules and schedules from this Mac.")
-                    .foregroundStyle(.secondary)
+                Text(model.startupNote ?? "Loading rules and schedules from this Mac.")
+                    .foregroundStyle(.secondary).multilineTextAlignment(.center)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let errorMessage = model.errorMessage {
@@ -207,7 +201,7 @@ package struct TinyPruneRootView: View {
     }
 
     private var statusText: String {
-        if model.isLoading { return "Refreshing local state" }
+        if model.isLoading { return "Connecting to the local agent" }
         if model.overview != nil, model.connectionIssue != nil {
             return "Agent unreachable · Last updated \(model.refreshedAt?.formatted(date: .omitted, time: .shortened) ?? "earlier")"
         }
@@ -215,6 +209,32 @@ package struct TinyPruneRootView: View {
             return "Local agent connected · Updated \(refreshedAt.formatted(date: .omitted, time: .shortened))"
         }
         return "Local-first file lifetimes"
+    }
+}
+
+/// Manual refresh with its own short-lived feedback, so background refreshes never flicker the header.
+private struct RefreshButton: View {
+    @EnvironmentObject private var model: AgentViewModel
+    @State private var working = false
+
+    var body: some View {
+        Button {
+            working = true
+            Task {
+                await model.refresh()
+                // Long enough to read as an acknowledgement even when the agent answers instantly.
+                try? await Task.sleep(for: .milliseconds(600))
+                working = false
+            }
+        } label: {
+            if working {
+                Label { Text("Refreshing") } icon: { ProgressView().controlSize(.small) }
+            } else {
+                Label("Refresh", systemImage: "arrow.clockwise")
+            }
+        }
+        .disabled(working || model.isLoading)
+        .accessibilityLabel("Refresh local state")
     }
 }
 
