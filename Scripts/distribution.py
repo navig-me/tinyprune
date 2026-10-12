@@ -26,6 +26,12 @@ If you deliberately trust this preview and Open Anyway is unavailable, run exact
 
 Then open /Applications/TinyPrune.app again. This removes quarantine, not proof of safety; it does not notarize the app. Finder extension and launch-at-login may need separate approval in System Settings > General > Login Items & Extensions. Direct builds with a configured update public key support EdDSA-authenticated in-app updates; without that key, download updates manually. Homebrew updates only through the cask. EdDSA authentication is not Apple trust or notarization. Preview signing does not guarantee Finder extension or login-item activation on every Mac.'''
 
+def changelog_section(version, text):
+    match = re.search(r'^## ' + re.escape(version) + r' - [^\n]*\n(.*?)(?=^## |\Z)', text, re.M | re.S)
+    if match is None or not match.group(1).strip():
+        raise ValueError(f'CHANGELOG.md has no entry for {version}')
+    return match.group(1).strip()
+
 def run(*args, **kwargs):
     return subprocess.run(args, check=True, **kwargs)
 
@@ -278,7 +284,9 @@ def verify():
 if __name__ == '__main__':
     command = sys.argv[1]
     if command == 'notes':
-        print(WARNING if os.environ['SIGNING_MODE'] == 'unsigned' else 'Developer ID signed and notarized universal macOS release.')
+        changes = changelog_section(tag()[1:], Path('CHANGELOG.md').read_text())
+        trust = WARNING if os.environ['SIGNING_MODE'] == 'unsigned' else 'Developer ID signed and notarized universal macOS release.'
+        print("## What's changed\n\n" + changes + '\n\n## Install and trust\n\n' + trust)
     elif command == 'metadata':
         build = os.environ['TINYPRUNE_BUILD']
         release_build(build)
