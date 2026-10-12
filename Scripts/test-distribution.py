@@ -34,6 +34,14 @@ class DistributionTests(unittest.TestCase):
         self.metadata['signing'] = 'signed'
         self.assertEqual(distribution.bundle_configuration(self.info, self.metadata), (self.key, '42'))
 
+    def test_release_notes_use_only_the_tagged_changelog_entry(self):
+        log = '# Changelog\n\n## 1.2.4 - 2026-01-02\n\n- newer\n\n## 1.2.3 - 2026-01-01\n\n- fixed a\n- fixed b\n\n## 1.2.2 - 2025-12-31\n\n- older\n'
+        self.assertEqual(distribution.changelog_section('1.2.3', log), '- fixed a\n- fixed b')
+        with self.assertRaises(ValueError):
+            distribution.changelog_section('1.2.9', log)
+        with self.assertRaises(ValueError):
+            distribution.changelog_section('1.2.', log)
+
     def test_homebrew_is_never_eligible(self):
         self.info['TinyPruneDistribution'] = 'homebrew'
         with self.assertRaises(ValueError):
