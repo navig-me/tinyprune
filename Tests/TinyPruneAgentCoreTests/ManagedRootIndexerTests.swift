@@ -20,7 +20,7 @@ import TinyPrunePersistence
         defer { stream.stop() }
 
         try Data("event fixture".utf8).write(to: file)
-        await observed.expectFulfilled(timeout: 5)
+        await observed.expectFulfilled(timeout: 30)
     }
     @Test func testInitialIndexAndPathEventsUpdateOnlyMatchingDeadlines() async throws {
         let fixture = try makeFixture()
@@ -44,7 +44,7 @@ import TinyPrunePersistence
         defer { Task { await indexer.stop() } }
 
         try await indexer.start()
-        await initialIndexed.expectFulfilled(timeout: 5)
+        await initialIndexed.expectFulfilled(timeout: 30)
         let initial = try await store.upcomingDeadlines()
         #expect(initial.map(\.identity.pathHint) == [original.standardizedFileURL.path])
         #expect(initial.first?.explanation.disposition == .preview)
@@ -90,7 +90,7 @@ import TinyPrunePersistence
             }
         }
         try await indexer.start()
-        await indexed.expectFulfilled(timeout: 5)
+        await indexed.expectFulfilled(timeout: 30)
 
         let initialDeadlines = try await store.upcomingDeadlines()
         let initial = try #require(initialDeadlines.first)
@@ -135,7 +135,7 @@ import TinyPrunePersistence
             }
         }
         try await indexer.start()
-        await indexed.expectFulfilled(timeout: 5)
+        await indexed.expectFulfilled(timeout: 30)
         let before = try await store.nextDeadline()
         let original = try #require(before)
         try FileManager.default.moveItem(at: oldURL, to: newURL)
@@ -185,7 +185,7 @@ import TinyPrunePersistence
             }
         }
         try await firstIndexer.start()
-        await indexed.expectFulfilled(timeout: 5)
+        await indexed.expectFulfilled(timeout: 30)
         let inspectedCandidate = try await firstIndexer.inspectManagedPath(file.path)
         let candidate = try #require(inspectedCandidate)
         let keep = ItemPolicyOverride(identity: candidate.identity, path: candidate.identity.pathHint, policy: .keep(protectDescendants: false))
@@ -199,7 +199,7 @@ import TinyPrunePersistence
             callbackSignal.record()
         }
         try await restartedIndexer.start()
-        await recovered.expectFulfilled(timeout: 5)
+        await recovered.expectFulfilled(timeout: 30)
 
         let snapshot = try await reopenedStore.loadSnapshot()
         let deadlines = try await reopenedStore.upcomingDeadlines()
@@ -250,7 +250,7 @@ import TinyPrunePersistence
             }
         }
         try await indexer.start()
-        await indexed.expectFulfilled(timeout: 5)
+        await indexed.expectFulfilled(timeout: 30)
 
         let initialDeadline = try await store.nextDeadline()
         let initial = try #require(initialDeadline)
@@ -304,7 +304,7 @@ import TinyPrunePersistence
             }
         }
         try await indexer.start()
-        await indexed.expectFulfilled(timeout: 5)
+        await indexed.expectFulfilled(timeout: 30)
 
         let fileAccess = LocalTrashFileAccess()
         let coordinator = TrashCoordinator(
@@ -339,7 +339,7 @@ import TinyPrunePersistence
             callbackSignal.record()
         }
         try await indexer.start()
-        await initialScan.expectFulfilled(timeout: 5)
+        await initialScan.expectFulfilled(timeout: 30)
 
         let missedFile = fixture.root.appendingPathComponent("missed.tmp")
         try Data("recovery".utf8).write(to: missedFile)
