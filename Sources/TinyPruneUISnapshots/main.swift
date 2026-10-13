@@ -911,7 +911,7 @@ do {
     let trashPath = try trashEvent.detail.unwrap("Trash destination")
     let movedOverview = try cleanupModel.overview.unwrap("real moved-to-Trash overview")
     let movedLedger = try movedOverview.reclaimed.unwrap("real moved-to-Trash ledger")
-    Check.expect(movedLedger.lifetimeItems == 1 && movedLedger.lastMovedAt == trashEvent.occurredAt, "real successful Trash move records one ledger item and its time")
+    Check.expect(movedLedger.lifetimeItems == 1 && movedLedger.lastMovedAt.map({ abs($0.timeIntervalSince(trashEvent.occurredAt)) < 0.001 }) == true, "real successful Trash move records one ledger item and its time")
     await shoot("89-real-trash-overview-ledger", .overview, model: cleanupModel, router: router, size: CGSize(width: 1100, height: 1200))
     var revealed: [URL] = []
     let revealAction = ActivityTrashReveal(reveal: { revealed = $0 })

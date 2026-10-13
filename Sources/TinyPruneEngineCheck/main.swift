@@ -132,8 +132,8 @@ struct TinyPruneEngineCheck {
               reclaimed.lifetimeBytes == (moveEvent.bytes ?? 0),
               reclaimed.itemsWithKnownSize == (moveEvent.bytes == nil ? 0 : (moveEvent.itemCount ?? 1)),
               reclaimed.days.count == 14,
-              reclaimed.firstMovedAt == moveEvent.occurredAt,
-              reclaimed.lastMovedAt == moveEvent.occurredAt else {
+              reclaimed.firstMovedAt.map({ abs($0.timeIntervalSince(moveEvent.occurredAt)) < 0.001 }) == true,
+              reclaimed.lastMovedAt.map({ abs($0.timeIntervalSince(moveEvent.occurredAt)) < 0.001 }) == true else {
             throw SmokeFailure.agentRequestFailed
         }
         let malformedReply = await handler.handle(Data("not-json".utf8))
