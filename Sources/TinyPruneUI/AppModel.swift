@@ -150,7 +150,10 @@ package final class SMAppSystemServices: AgentSystemServices {
     package var agentStatus: SMAppService.Status { launchAgent.status }
     package func registerAgent() throws { try launchAgent.register() }
     package func restartAgent() async throws {
-        try? await launchAgent.unregister()
+        let agent = launchAgent
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            agent.unregister { _ in continuation.resume() }
+        }
         try launchAgent.register()
         // Registration alone can leave launchd's job throttled after repeated spawn failures; start it now.
         _ = await kickstartAgent()
