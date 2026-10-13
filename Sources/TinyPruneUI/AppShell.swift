@@ -222,8 +222,6 @@ private struct RefreshButton: View {
             working = true
             Task {
                 await model.refresh()
-                // Long enough to read as an acknowledgement even when the agent answers instantly.
-                try? await Task.sleep(for: .milliseconds(600))
                 working = false
             }
         } label: {
@@ -370,7 +368,6 @@ package struct MenuBarContent: View {
     @ViewBuilder
     private func summary(_ overview: AgentOverviewSnapshot) -> some View {
         let active = model.activeUpcoming
-        let preview = model.previewUpcoming
         VStack(alignment: .leading, spacing: 10) {
             if model.pruningHaltedReason != nil || overview.policy.globallyPaused {
                 Text(statusLine(overview)).font(.callout).foregroundStyle(.secondary)
@@ -378,10 +375,13 @@ package struct MenuBarContent: View {
             if overview.policy.rules.isEmpty {
                 templatesHero.pruneEntrance(1)
             } else {
-                PopoverTally(active: active, previewCount: preview.count, now: model.currentDate) {
+                PopoverTally(active: active, activeCount: model.activeCount, previewCount: model.previewCount, now: model.currentDate) {
                     showMainWindow(section: .upcoming)
                 }
                 .pruneEntrance(1)
+                if let note = model.scheduleReadinessNote {
+                    Text(note).font(.caption).foregroundStyle(PrunePalette.caution)
+                }
             }
             if let issue = model.connectionIssue {
                 notice("Showing last known state. \(issue)")
@@ -595,7 +595,7 @@ package struct TinyPruneSidebar: View {
     private func badge(for section: AppSection) -> Int? {
         switch section {
         case .rules: model.policy?.rules.count
-        case .upcoming: model.overview?.upcoming.count
+        case .upcoming: model.activeCount + model.previewCount
         case .activity: model.attentionItems.count
         default: nil
         }

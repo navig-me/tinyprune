@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Preserve first-observed deadlines through parent-folder renames and restarts. Replayed filesystem hints reconcile durable timestamps and metadata rather than restarting inactivity timers at replay time.
+- Keep published schedules visible while indexing or when a managed folder is unavailable. Successful scans publish a coherent replacement; unreadable locations retain known schedules. Cleanup waits for available roots and completed wake-event replay, with the existing final safety preflight unchanged.
+- Show complete Active, Preview, and moving-soon counts independently of sampled detail rows. Upcoming filters before pagination and offers Load more; the CLI reads every bounded page without truncating at 200 items.
+- Index project metadata in one filesystem pass with bounded SQLite staging. Unchanged roots keep their watchers; ordinary project-marker edits and meaningful source changes update only relevant deadlines, with batched writes and indexed project ancestry.
+- Ignore Git directory bookkeeping as an inactivity signal during restart scans. Due Preview/deferred candidates are processed in bounded keyset pages instead of repeatedly decoding an expanding prefix.
+- Finish rule and item actions after their authoritative overview refresh, without waiting for Activity, Settings, or notification work. Remove the artificial Refresh delay and keep bounded agent-repair process waits off the main actor.
+- Clear stale inspector actions during selection or policy changes. Settings edits read authoritative values, preserve unrelated safety preferences, reject delayed pre-save replies, and offer an explicit retry when settings are unavailable.
+- Maintain transactional lifetime Trash totals and indexed local-day summaries instead of decoding all successful-move history on each refresh. SQLite schema 10 migrates existing records; XPC protocol 3 adds filtered Upcoming pages and complete count summaries.
+
 ## 0.1.12 - 2026-10-09
 
 - Fixed the "Only items with certain names" and "More options" toggles in the New Rule editor. They were stock macOS disclosure groups that only react to their tiny chevron; the whole header row is now the button.

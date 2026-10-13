@@ -189,17 +189,41 @@ struct TinyPruneCLI {
             }
         case "upcoming":
             _ = try CommandArguments(arguments, command: command, operandCount: 0...0, operandUsage: "no arguments")
-            guard case .overview(let overview) = try await send(.loadOverview) else { throw CLIError.unexpected }
+            var cursor: AgentUpcomingCursor?
+            var emitted = false
+            let outputURL = FileManager.default.temporaryDirectory.appendingPathComponent("tinyprune-upcoming-\(UUID().uuidString).json")
+            let output: FileHandle?
             if json {
-                try printJSON(UpcomingOutput(schemaVersion: schemaVersion, items: overview.upcoming.map(\.explanation)))
-            } else if overview.upcoming.isEmpty {
-                print("No scheduled items.")
-            } else {
-                for item in overview.upcoming {
-                    let explanation = item.explanation
-                    print("\(explanation.candidateIdentity.pathHint)  \(explanation.scheduledAt.formatted(date: .abbreviated, time: .shortened))  \(explanation.matchedRuleName)  \(explanation.disposition.rawValue)")
-                }
+                guard FileManager.default.createFile(atPath: outputURL.path, contents: nil) else { throw CLIError.unexpected }
+                output = try FileHandle(forUpdating: outputURL)
+            } else { output = nil }
+            defer {
+                try? output?.close()
+                if json { try? FileManager.default.removeItem(at: outputURL) }
             }
+            try output?.write(contentsOf: Data("{\"schemaVersion\":\(schemaVersion),\"items\":[".utf8))
+            repeat {
+                guard case .upcomingPage(let page) = try await send(.loadUpcoming(ruleID: nil, disposition: nil, after: cursor, limit: 200)) else { throw CLIError.unexpected }
+                for item in page.items {
+                    let explanation = item.explanation
+                    if json {
+                        if emitted { try output?.write(contentsOf: Data(",".utf8)) }
+                        let data = try JSONEncoder.sorted.encode(explanation)
+                        try output?.write(contentsOf: data)
+                    } else {
+                        print("\(explanation.candidateIdentity.pathHint)  \(explanation.scheduledAt.formatted(date: .abbreviated, time: .shortened))  \(explanation.matchedRuleName)  \(explanation.disposition.rawValue)")
+                    }
+                    emitted = true
+                }
+                cursor = page.nextCursor
+            } while cursor != nil
+            if let output {
+                try output.write(contentsOf: Data("]}\n".utf8))
+                try output.seek(toOffset: 0)
+                while let chunk = try output.read(upToCount: 65_536), !chunk.isEmpty {
+                    try FileHandle.standardOutput.write(contentsOf: chunk)
+                }
+            } else if !emitted { print("No scheduled items.") }
         case "activity":
             _ = try CommandArguments(arguments, command: command, operandCount: 0...0, operandUsage: "no arguments")
             guard case .activity(let items) = try await send(.loadActivity(limit: 50)) else { throw CLIError.unexpected }
@@ -347,10 +371,6 @@ private struct RulesOutput: Encodable {
     let rules: [LifetimeRule]
 }
 
-private struct UpcomingOutput: Encodable {
-    let schemaVersion: Int
-    let items: [CandidateExplanation]
-}
 
 private struct ActivityOutput: Encodable {
     let schemaVersion: Int

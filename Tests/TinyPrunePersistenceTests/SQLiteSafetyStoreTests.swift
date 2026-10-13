@@ -1,3 +1,4 @@
+import CSQLite
 import Foundation
 import Testing
 @testable import TinyPruneDomain
@@ -296,8 +297,9 @@ import Testing
         #expect(!(afterChange.contains(old.id)))
         #expect(afterChange.contains(change.id))
         #expect(afterChange.contains(oldMove.id))
-        let ledger = try await store.reduceMovedToTrashEvents(into: [TrashAuditEvent]()) { $0.append($1) }
-        #expect(ledger == [oldMove])
+        let ledger = try await store.reclaimedTotals()
+        #expect(ledger.lifetimeItems == 3)
+        #expect(ledger.lifetimeBytes == 4096)
     }
 
     @Test func testEveryPolicyMutationBumpsRevisionAndStaleReplaceIsRejected() async throws {
@@ -452,6 +454,192 @@ import Testing
         #expect(snapshot.managedRoots.map(\.bookmarkData) == [Data([9, 9])])
         #expect(snapshot.managedRoots.first?.path == root.path)
         #expect(snapshot.revision == revision + 1)
+    }
+
+    @Test func testRenamedObservationPreservesTimestampsAcrossRestartAndOldPathCleanup() async throws {
+        let harness = try makeStore()
+        defer { try? FileManager.default.removeItem(at:harness.directory) }
+        let original = makeIdentity(path:"/Developer/old/nested/item")
+        let renamed = makeIdentity(path:"/Developer/new/nested/item")
+        try await harness.store.recordObservedActivity(identity:original,at:Date(timeIntervalSince1970:100))
+        try await harness.store.recordObservedActivity(identity:original,at:Date(timeIntervalSince1970:200))
+        try await harness.store.recordInitialObservations([
+            PersistedObservedActivity(identity:renamed,firstObservedAt:Date(timeIntervalSince1970:999),lastObservedAt:Date(timeIntervalSince1970:999))
+        ])
+        try await harness.store.recordObservedActivity(identity:renamed,at:Date(timeIntervalSince1970:50))
+        try await harness.store.removeObservedActivity(atOrBelow:"/Developer/old")
+        let reopened = try SQLiteSafetyStore(databaseURL:harness.directory.appendingPathComponent("state.sqlite3"))
+        let observation = try await reopened.observedActivity(for:renamed)
+        #expect(observation?.firstObservedAt == Date(timeIntervalSince1970:100))
+        #expect(observation?.lastObservedAt == Date(timeIntervalSince1970:200))
+    }
+
+    @Test func testFilteredUpcomingPagesAndSummaryCountBeyondTwoHundred() async throws {
+        let harness = try makeStore()
+        defer { try? FileManager.default.removeItem(at:harness.directory) }
+        let activeRule = try makeRule(name:"Active")
+        let previewRule = try makeRule(name:"Preview")
+        var expected: Set<FilesystemIdentity> = []
+        for index in 0..<620 {
+            let identity = makeIdentity(resource:Data(String(index).utf8),path:"/Developer/\(index)")
+            let disposition: ScheduledDisposition = index < 310 ? .preview : .active
+            let rule = disposition == .active ? activeRule : previewRule
+            let candidate = RuleCandidate(identity:identity,name:"item",kind:.file,timestamps:CandidateTimestamps())
+            let when = Date(timeIntervalSince1970:100)
+            let explanation = CandidateExplanation(candidate:candidate,rule:rule,basisDate:when,eligibleAt:when,scheduledAt:when,disposition:disposition)
+            try await harness.store.saveDeadline(PersistedDeadline(identity:identity,scheduledAt:when,explanation:explanation))
+            if disposition == .active { expected.insert(identity) }
+        }
+        var cursor: PersistedUpcomingCursor?
+        var found: Set<FilesystemIdentity> = []
+        repeat {
+            let page = try await harness.store.upcomingDeadlinePage(ruleID:activeRule.id,disposition:.active,after:cursor,limit:71)
+            #expect(page.deadlines.count <= 71)
+            #expect(page.totalCount == 310)
+            #expect(page.deadlines.allSatisfy { $0.explanation.disposition == .active })
+            for deadline in page.deadlines { #expect(found.insert(deadline.identity).inserted) }
+            cursor = page.nextCursor
+        } while cursor != nil
+        #expect(found == expected)
+        let summary = try await harness.store.deadlineSummary(now:Date(timeIntervalSince1970:0))
+        #expect(summary.active == 310)
+        #expect(summary.preview == 310)
+        #expect(summary.activeSoon == 310)
+        #expect(try await harness.store.upcomingDeadlinePage(disposition:.active,limit:10_000).deadlines.count == 256)
+        #expect(try await harness.store.dueDeadlinePage(through:Date(timeIntervalSince1970:99)).deadlines.isEmpty)
+    }
+
+    @Test func testCandidateScanAbortAndAtomicCutover() async throws {
+        let harness = try makeStore()
+        defer { try? FileManager.default.removeItem(at:harness.directory) }
+        let rule = try makeRule(name:"Rule")
+        let old = makeDeadline(identity:makeIdentity(resource:Data([1]),path:"/Developer/old"),rule:rule,at:10)
+        let new = makeDeadline(identity:makeIdentity(resource:Data([2]),path:"/Developer/new"),rule:rule,at:20)
+        try await harness.store.saveDeadline(old)
+        let aborted = try await harness.store.beginCandidateScan(atOrBelow:"/Developer")
+        try await harness.store.stageDeadlines([new],scanID:aborted)
+        #expect(try await harness.store.upcomingDeadlines() == [old])
+        try await harness.store.endCandidateScan(scanID:aborted)
+        #expect(try await harness.store.upcomingDeadlines() == [old])
+        let canceledScan = try await harness.store.beginCandidateScan(atOrBelow:"/Developer")
+        try await harness.store.stageDeadlines([new],scanID:canceledScan)
+        let canceled = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            try await harness.store.commitCandidateScan(scanID:canceledScan)
+        }
+        do {
+            try await canceled.value
+            Issue.record("Canceled scan must not publish")
+        } catch is CancellationError {}
+        #expect(try await harness.store.upcomingDeadlines() == [old])
+        try await harness.store.endCandidateScan(scanID:canceledScan)
+        let scan = try await harness.store.beginCandidateScan(atOrBelow:"/Developer")
+        for index in 0..<300 {
+            let candidate = RuleCandidate(identity:makeIdentity(resource:Data(String(index).utf8)),name:"item",kind:.file,timestamps:CandidateTimestamps())
+            try await harness.store.stageCandidates([candidate],scanID:scan)
+        }
+        let first = try await harness.store.candidatePage(scanID:scan,limit:999)
+        #expect(first.candidates.count == 256)
+        let second = try await harness.store.candidatePage(scanID:scan,afterIdentityKey:first.nextCursor)
+        #expect(second.candidates.count == 44)
+        try await harness.store.stageDeadlines([new],scanID:scan)
+        try await harness.store.commitCandidateScan(scanID:scan)
+        #expect(try await harness.store.upcomingDeadlines() == [new])
+        #expect(try await harness.store.candidatePage(scanID:scan).candidates.isEmpty)
+    }
+
+    @Test func testProjectScanAbortRetainsPublishedNearestAncestor() async throws {
+        let harness = try makeStore()
+        defer { try? FileManager.default.removeItem(at:harness.directory) }
+        let project = makeIdentity(path:"/Developer/project")
+        let initial = try await harness.store.beginProjectActivityScan()
+        try await harness.store.recordProjectActivities([PersistedProjectActivity(identity:project,lastActivityAt:Date(timeIntervalSince1970:100))],scanID:initial)
+        try await harness.store.finishProjectActivityScan(scanID:initial,atOrBelow:"/Developer")
+        let abandoned = try await harness.store.beginProjectActivityScan()
+        try await harness.store.recordProjectActivities([PersistedProjectActivity(identity:project,lastActivityAt:Date(timeIntervalSince1970:900))],scanID:abandoned)
+        try await harness.store.endProjectActivityScan(scanID:abandoned)
+        #expect(try await harness.store.projectActivity(for:"/Developer/project/src/deep/file") == Date(timeIntervalSince1970:100))
+        #expect(try await harness.store.projectActivity(for:"/Developer/project-other/src") == nil)
+        _ = try await harness.store.recordProjectActivity(at:"/Developer/project/src",date:Date(timeIntervalSince1970:50))
+        #expect(try await harness.store.projectActivity(for:"/Developer/project") == Date(timeIntervalSince1970:100))
+    }
+
+    @Test func testLedgerMigrationRestartUnknownSizesAndCalendarIntervals() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TinyPrune-ledger-\(UUID())")
+        defer { try? FileManager.default.removeItem(at:directory) }
+        let url = directory.appendingPathComponent("state.sqlite3")
+        var calendar = Calendar(identifier:.gregorian)
+        calendar.timeZone = TimeZone(identifier:"America/Los_Angeles")!
+        let start = calendar.date(from:DateComponents(year:2026,month:3,day:8))!
+        let end = calendar.date(byAdding:.day,value:1,to:start)!
+        #expect(end.timeIntervalSince(start) == 23 * 3_600)
+        do {
+            let store = try SQLiteSafetyStore(databaseURL:url)
+            try await store.append(TrashAuditEvent(occurredAt:start,kind:.movedToTrash,bytes:40,itemCount:3))
+            try await store.append(TrashAuditEvent(occurredAt:end.addingTimeInterval(-1),kind:.movedToTrash,itemCount:2))
+            try await store.append(TrashAuditEvent(occurredAt:end,kind:.movedToTrash,bytes:60,itemCount:1))
+            let rule = try makeRule(name:"Migrated")
+            try await store.saveDeadline(makeDeadline(identity:makeIdentity(),rule:rule,at:100))
+        }
+        // Recreate the previous schema with its durable audit rows, exercising actual backfill.
+        try executeSQL(url,"""
+        DROP TRIGGER audit_reclaimed_insert;
+        DROP TRIGGER reclaimed_move_insert;
+        DROP TABLE reclaimed_moves;
+        DROP TABLE reclaimed_totals;
+        DROP TABLE staged_candidates;
+        DROP TABLE staged_deadlines;
+        DROP TABLE candidate_scans;
+        DROP TABLE staged_projects;
+        DROP INDEX project_observation_path_idx;
+        DROP INDEX project_observation_order_idx;
+        DROP INDEX deadline_disposition_due_idx;
+        DROP INDEX deadline_rule_due_idx;
+        DROP INDEX deadline_basis_path_idx;
+        ALTER TABLE deadlines DROP COLUMN disposition;
+        ALTER TABLE deadlines DROP COLUMN expiry_basis;
+        DELETE FROM schema_migrations WHERE version=10;
+        PRAGMA user_version=9;
+        """)
+        let reopened = try SQLiteSafetyStore(databaseURL:url)
+        let totals = try await reopened.reclaimedTotals()
+        #expect(totals.lifetimeItems == 6)
+        #expect(totals.lifetimeBytes == 100)
+        #expect(totals.itemsWithKnownSize == 4)
+        #expect(totals.firstMovedAt == start)
+        #expect(totals.lastMovedAt == end)
+        #expect(try await reopened.deadlineSummary(now:Date(timeIntervalSince1970:0)).active == 1)
+        #expect(try await reopened.upcomingDeadlinePage(disposition:.active).totalCount == 1)
+        let day = try await reopened.reclaimedDay(from:start,to:end)
+        #expect(day.items == 5)
+        #expect(day.bytes == 40)
+        // Aggregate queries must remain independent of retained audit payloads.
+        try executeSQL(url,"DELETE FROM audit_events")
+        #expect(try await reopened.reclaimedTotals().lifetimeItems == 6)
+        #expect(try await reopened.reclaimedDay(from:start,to:end).items == 5)
+        try await reopened.append(TrashAuditEvent(occurredAt:end.addingTimeInterval(1),kind:.movedToTrash,bytes:0,itemCount:1))
+        #expect(try await reopened.reclaimedTotals().itemsWithKnownSize == 5)
+        let autumnStart = calendar.date(from:DateComponents(year:2026,month:11,day:1))!
+        let autumnEnd = calendar.date(byAdding:.day,value:1,to:autumnStart)!
+        #expect(autumnEnd.timeIntervalSince(autumnStart) == 25 * 3_600)
+        try await reopened.append(TrashAuditEvent(occurredAt:autumnEnd.addingTimeInterval(-1),kind:.movedToTrash,bytes:7,itemCount:1))
+        try await reopened.append(TrashAuditEvent(occurredAt:autumnEnd,kind:.movedToTrash,bytes:9,itemCount:1))
+        #expect(try await reopened.reclaimedDay(from:autumnStart,to:autumnEnd).bytes == 7)
+        calendar.timeZone = TimeZone(secondsFromGMT:0)!
+        let utcStart = calendar.startOfDay(for:autumnStart)
+        let utcEnd = calendar.date(byAdding:.day,value:1,to:utcStart)!
+        #expect(try await reopened.reclaimedDay(from:utcStart,to:utcEnd).items == 0)
+    }
+
+    private func executeSQL(_ url: URL, _ sql: String) throws {
+        var database: OpaquePointer?
+        guard sqlite3_open(url.path,&database) == SQLITE_OK, let database else {
+            throw SQLiteSafetyStoreError.openFailed("Test fixture connection")
+        }
+        defer { sqlite3_close(database) }
+        guard sqlite3_exec(database,sql,nil,nil,nil) == SQLITE_OK else {
+            throw SQLiteSafetyStoreError.statementFailed(String(cString:sqlite3_errmsg(database)))
+        }
     }
 
     private func makeDeadline(identity: FilesystemIdentity, rule: LifetimeRule, at seconds: TimeInterval) -> PersistedDeadline {

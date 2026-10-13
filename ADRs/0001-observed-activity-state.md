@@ -9,7 +9,7 @@ Rules may expire items relative to when TinyPrune first observed them or when it
 
 ## Decision
 
-Persist `firstObservedAt` and `lastObservedAt` in a dedicated SQLite table keyed by stable filesystem identity. Store a path hint for subtree cleanup and update that hint during a later scan when the same identity is found at a new path. Initial scans insert missing timestamps without resetting existing observations; filesystem events update the last-observed timestamp. Create records only for candidates matched by rules using first-observed or observed-activity expiry bases. Remove records with managed-root or item-subtree removal.
+Persist `firstObservedAt` and `lastObservedAt` in a dedicated SQLite table keyed by stable filesystem identity. Read the stored path hint along with its timestamps and refresh that hint when the same identity is found at a new path, before old-subtree rename cleanup. Initial scans insert missing timestamps without resetting existing observations; live filesystem events monotonically advance last-observed activity. Historical replay reconciles modification metadata and durable activity, never its processing time. Create records for candidates matched by first-observed or observed-activity rules and for project-marker identities used to distinguish edits from project rediscovery. Remove records with managed-root or item-subtree removal.
 
 ## Consequences
 

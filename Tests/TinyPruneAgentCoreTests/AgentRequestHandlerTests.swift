@@ -49,6 +49,39 @@ import TinyPrunePersistence
         #expect(events.count == 3)
     }
 
+    @Test func overviewCountsAndFilteredPagesIncludeActiveBeyondTwoHundredPreviewRows() async throws {
+        let harness = try makeHandler()
+        defer { try? FileManager.default.removeItem(at: harness.directory) }
+        let previewRule = try makeRule()
+        let activeRule = try makeRule()
+        let volume = UUID()
+        let now = Date(timeIntervalSince1970: 1_000)
+        let handler = AgentRequestHandler(store: harness.store, clock: FixedClock(now))
+        for index in 0..<451 {
+            let preview = index < 250
+            let identity = FilesystemIdentity(volumeIdentifier: volume, resourceIdentifier: Data("\(index)".utf8), pathHint: "/Downloads/\(index).zip")
+            let candidate = RuleCandidate(identity: identity, name: "\(index).zip", kind: .file, timestamps: CandidateTimestamps(modified: now))
+            let deadline = now.addingTimeInterval(preview ? 1 : 2)
+            let explanation = CandidateExplanation(candidate: candidate, rule: preview ? previewRule : activeRule, basisDate: now, eligibleAt: deadline, scheduledAt: deadline, disposition: preview ? .preview : .active)
+            try await harness.store.saveDeadline(PersistedDeadline(identity: identity, scheduledAt: deadline, explanation: explanation))
+        }
+        guard case .overview(let overview) = try await response(from: handler, request: AgentRequest(operation: .loadOverview)).payload else { Issue.record("Missing overview"); return }
+        #expect(overview.deadlineSummary == AgentDeadlineSummary(active: 201, preview: 250, activeSoon: 201))
+        #expect(overview.upcoming.contains { $0.explanation.disposition == .active })
+        var cursor: AgentUpcomingCursor?
+        var identities: Set<FilesystemIdentity> = []
+        repeat {
+            guard case .upcomingPage(let page) = try await response(from: handler, request: AgentRequest(operation: .loadUpcoming(ruleID: activeRule.id, disposition: .active, after: cursor, limit: 73))).payload else { Issue.record("Missing page"); return }
+            #expect(page.totalCount == 201)
+            #expect(page.items.count <= 73)
+            #expect(page.items.allSatisfy { $0.explanation.disposition == .active && $0.explanation.matchedRuleID == activeRule.id })
+            #expect(page.items.allSatisfy { !identities.contains($0.id) })
+            identities.formUnion(page.items.map(\.id))
+            cursor = page.nextCursor
+        } while cursor != nil
+        #expect(identities.count == 201)
+    }
+
     @Test func testMalformedAndUnsupportedRequestsReturnStructuredFailures() async throws {
         let harness = try makeHandler()
         defer { try? FileManager.default.removeItem(at: harness.directory) }
@@ -64,6 +97,9 @@ import TinyPrunePersistence
         }
         #expect(expected == TinyPruneAgentXPC.protocolVersion)
         #expect(received == TinyPruneAgentXPC.protocolVersion + 1)
+        let oldClient = try await response(from: harness.handler, request: AgentRequest(protocolVersion: 2, operation: .setGlobalPause(true)))
+        #expect(oldClient.payload == .failure(.unsupportedProtocol(expected: 3, received: 2)))
+        #expect(try await harness.store.loadSnapshot().globallyPaused == false)
     }
 
     @Test func testInvalidPolicyMutationIsRejectedWithoutPersistence() async throws {

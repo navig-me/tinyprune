@@ -60,6 +60,58 @@ public struct PersistedDeadlinePage: Sendable {
     }
 }
 
+public struct PersistedUpcomingCursor: Codable, Equatable, Sendable {
+    public let scheduledAt: Date
+    public let identityKey: String
+    public init(scheduledAt: Date, identityKey: String) {
+        self.scheduledAt = scheduledAt
+        self.identityKey = identityKey
+    }
+}
+
+public struct PersistedUpcomingPage: Sendable {
+    public let deadlines: [PersistedDeadline]
+    public let nextCursor: PersistedUpcomingCursor?
+    public let totalCount: Int
+}
+
+public struct PersistedDeadlineSummary: Sendable {
+    public let active: Int
+    public let preview: Int
+    public let activeSoon: Int
+}
+
+public struct PersistedOverviewSnapshot: Sendable {
+    public let policy: PolicySnapshot
+    public let upcoming: [PersistedDeadline]
+    public let summary: PersistedDeadlineSummary
+    public let ruleCounts: [UUID: (matches: Int, due: Int)]
+    public let indexedItems: Int
+}
+
+public struct PersistedCandidatePage: Sendable {
+    public let candidates: [RuleCandidate]
+    public let nextCursor: String?
+}
+
+public struct PersistedReclaimedTotals: Sendable {
+    public let lifetimeItems: Int
+    public let lifetimeBytes: Int64
+    public let itemsWithKnownSize: Int
+    public let firstMovedAt: Date?
+    public let lastMovedAt: Date?
+}
+
+public struct PersistedReclaimedDay: Sendable {
+    public let items: Int
+    public let bytes: Int64
+}
+
+public struct PersistedReclaimedSnapshot: Sendable {
+    public let totals: PersistedReclaimedTotals
+    public let days: [PersistedReclaimedDay]
+}
+
 public enum SQLiteSafetyStoreError: Error, Equatable, Sendable {
     case openFailed(String)
     case statementFailed(String)
@@ -102,6 +154,7 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
         try Self.execute(database!, "DELETE FROM deadlines WHERE identity_key LIKE 'np:%'")
         try Self.execute(database!, "DELETE FROM observed_activity WHERE identity_key LIKE 'np:%'")
         try Self.execute(database!, "DELETE FROM project_activity WHERE identity_key LIKE 'np:%'")
+        try Self.execute(database!, "DELETE FROM staged_candidates; DELETE FROM staged_deadlines; DELETE FROM candidate_scans; DELETE FROM staged_projects; DELETE FROM project_activity_observations")
     }
 
     deinit {
@@ -109,6 +162,10 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
     }
 
     public func loadSnapshot() async throws -> PolicySnapshot {
+        try readPolicySnapshot()
+    }
+
+    private func readPolicySnapshot() throws -> PolicySnapshot {
         try lapseExpiredPause()
         // One read transaction: rules, overrides, roots, settings and revision are a single consistent view.
         try execute("BEGIN")
@@ -384,19 +441,6 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
         return result
     }
 
-    /// Streams only successful moves into an accumulator; unrelated audit rows and Activity limits are excluded.
-    public func reduceMovedToTrashEvents<Result: Sendable>(
-        into initial: Result,
-        _ update: @Sendable (inout Result, TrashAuditEvent) -> Void
-    ) throws -> Result {
-        let statement = try prepare("SELECT payload FROM audit_events WHERE kind = 'movedToTrash' ORDER BY occurred_at ASC, id ASC")
-        defer { sqlite3_finalize(statement) }
-        var result = initial
-        while try rowAvailable(statement) {
-            update(&result, try decode(TrashAuditEvent.self, from: columnData(statement, at: 0)))
-        }
-        return result
-    }
 
     /// Replaces the stored security-scoped bookmark of a managed root after the agent re-resolved a stale one.
     public func updateManagedRootBookmark(rootID: UUID, bookmarkData: Data, auditEvent: TrashAuditEvent?) throws {
@@ -467,27 +511,39 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
     }
 
     public func saveDeadline(_ deadline: PersistedDeadline) throws {
-        try persistDeadline(deadline)
+        let statement = try deadlineWriteStatement()
+        defer { sqlite3_finalize(statement) }
+        try persistDeadline(deadline, statement:statement)
     }
 
     public func saveDeadlines(_ deadlines: [PersistedDeadline]) throws {
         guard !deadlines.isEmpty else { return }
         try execute("BEGIN IMMEDIATE")
         do {
-            for deadline in deadlines { try persistDeadline(deadline) }
-            try execute("COMMIT")
+            let statement = try deadlineWriteStatement()
+            defer { sqlite3_finalize(statement) }
+            var changed = false
+            for deadline in deadlines {
+                sqlite3_reset(statement); sqlite3_clear_bindings(statement)
+                try persistDeadline(deadline,statement:statement)
+                changed = changed || sqlite3_changes(database) > 0
+            }
+            try execute(changed ? "COMMIT" : "ROLLBACK")
         } catch {
             try? execute("ROLLBACK")
             throw error
         }
     }
 
-    private func persistDeadline(_ deadline: PersistedDeadline) throws {
-        let statement = try prepare("""
-        INSERT INTO deadlines(identity_key, scheduled_at, path_hint, payload, rule_id) VALUES(?, ?, ?, ?, ?)
-        ON CONFLICT(identity_key) DO UPDATE SET scheduled_at=excluded.scheduled_at, path_hint=excluded.path_hint, payload=excluded.payload, rule_id=excluded.rule_id
+    private func deadlineWriteStatement() throws -> OpaquePointer {
+        try prepare("""
+        INSERT INTO deadlines(identity_key, scheduled_at, path_hint, payload, rule_id, disposition, expiry_basis) VALUES(?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(identity_key) DO UPDATE SET scheduled_at=excluded.scheduled_at, path_hint=excluded.path_hint, payload=excluded.payload, rule_id=excluded.rule_id, disposition=excluded.disposition, expiry_basis=excluded.expiry_basis
+        WHERE deadlines.payload <> excluded.payload
         """)
-        defer { sqlite3_finalize(statement) }
+    }
+
+    private func persistDeadline(_ deadline: PersistedDeadline, statement: OpaquePointer) throws {
         try bind(Self.identityKey(deadline.identity), to: statement, at: 1)
         try check(sqlite3_bind_double(statement, 2, deadline.scheduledAt.timeIntervalSince1970))
         try bind(deadline.identity.pathHint, to: statement, at: 3)
@@ -497,6 +553,8 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
         } else {
             try check(sqlite3_bind_null(statement, 5))
         }
+        try bind(deadline.explanation.disposition.rawValue, to: statement, at: 6)
+        try bind(deadline.explanation.expiryBasis.rawValue, to: statement, at: 7)
         try stepDone(statement)
     }
 
@@ -530,13 +588,49 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
         try stepDone(statement)
     }
 
+    /// Removing an ancestor root must not discard identities still managed by a nested root.
+    public func removeUnmanagedState(atOrBelow path: String, retaining rootPaths: [String]) throws {
+        let root = RuleScope.normalized(path)
+        let retained = rootPaths.compactMap { path -> String? in
+            let normalized = RuleScope.normalized(path)
+            return normalized == root || normalized.hasPrefix(root + "/") ? normalized : nil
+        }
+        let exclusions = String(repeating: " AND NOT (path_hint=? OR (path_hint>=? AND path_hint<?))", count: retained.count)
+        let prefixes = [root] + retained
+        try execute("BEGIN IMMEDIATE")
+        do {
+            for table in ["deadlines", "observed_activity", "project_activity"] {
+                let statement = try prepare("DELETE FROM \(table) WHERE (path_hint=? OR (path_hint>=? AND path_hint<?))" + exclusions)
+                defer { sqlite3_finalize(statement) }
+                for (index, prefix) in prefixes.enumerated() {
+                    let position = Int32(index * 3 + 1)
+                    try bind(prefix, to: statement, at: position)
+                    try bind(prefix + "/", to: statement, at: position + 1)
+                    try bind(prefix + "0", to: statement, at: position + 2)
+                }
+                try stepDone(statement)
+            }
+            try execute("COMMIT")
+        } catch {
+            try? execute("ROLLBACK")
+            throw error
+        }
+    }
+
     public func observedActivity(for identity: FilesystemIdentity) throws -> PersistedObservedActivity? {
-        let statement = try prepare("SELECT first_observed_at, last_observed_at FROM observed_activity WHERE identity_key = ?")
+        let statement = try prepare("SELECT first_observed_at, last_observed_at, path_hint FROM observed_activity WHERE identity_key = ?")
         defer { sqlite3_finalize(statement) }
         try bind(Self.identityKey(identity), to: statement, at: 1)
         guard try rowAvailable(statement) else { return nil }
         return PersistedObservedActivity(
-            identity: identity,
+            identity: FilesystemIdentity(
+                volumeIdentifier: identity.volumeIdentifier,
+                resourceIdentifier: identity.resourceIdentifier,
+                pathHint: String(cString: sqlite3_column_text(statement, 2)),
+                creationTime: identity.creationTime,
+                generation: identity.generation,
+                isPersistent: identity.isPersistent
+            ),
             firstObservedAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 0)),
             lastObservedAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 1))
         )
@@ -546,7 +640,7 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
     public func recordObservedActivity(identity: FilesystemIdentity, at date: Date) throws {
         let statement = try prepare("""
         INSERT INTO observed_activity(identity_key, path_hint, first_observed_at, last_observed_at) VALUES(?, ?, ?, ?)
-        ON CONFLICT(identity_key) DO UPDATE SET path_hint=excluded.path_hint, last_observed_at=excluded.last_observed_at
+        ON CONFLICT(identity_key) DO UPDATE SET path_hint=excluded.path_hint, last_observed_at=MAX(observed_activity.last_observed_at,excluded.last_observed_at)
         """)
         defer { sqlite3_finalize(statement) }
         try bind(Self.identityKey(identity), to: statement, at: 1)
@@ -641,24 +735,8 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
         try execute("PRAGMA optimize")
     }
 
-    /// Starts a scan. Observation rows of scans that are no longer running (crashed or abandoned) are dropped;
-    /// observations of scans still in flight (other roots scanning concurrently) are left alone.
+    /// Crash leftovers are cleared at connection startup; live scans remain isolated by scan ID.
     public func beginProjectActivityScan() throws -> String {
-        let listing = try prepare("SELECT DISTINCT scan_id FROM project_activity_observations")
-        var orphans: [String] = []
-        do {
-            defer { sqlite3_finalize(listing) }
-            while try rowAvailable(listing) {
-                let id = String(cString: sqlite3_column_text(listing, 0))
-                if !activeProjectScans.contains(id) { orphans.append(id) }
-            }
-        }
-        for orphan in orphans {
-            let delete = try prepare("DELETE FROM project_activity_observations WHERE scan_id = ?")
-            defer { sqlite3_finalize(delete) }
-            try bind(orphan, to: delete, at: 1)
-            try stepDone(delete)
-        }
         let scanID = UUID().uuidString
         activeProjectScans.insert(scanID)
         return scanID
@@ -667,10 +745,11 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
     /// Releases a scan that ended without `finishProjectActivityScan` (cancelled or failed).
     public func endProjectActivityScan(scanID: String) throws {
         activeProjectScans.remove(scanID)
-        let delete = try prepare("DELETE FROM project_activity_observations WHERE scan_id = ?")
-        defer { sqlite3_finalize(delete) }
-        try bind(scanID, to: delete, at: 1)
-        try stepDone(delete)
+        for table in ["project_activity_observations","staged_projects"] {
+            let delete = try prepare("DELETE FROM \(table) WHERE scan_id=?")
+            defer { sqlite3_finalize(delete) }
+            try bind(scanID,to:delete,at:1); try stepDone(delete)
+        }
     }
 
     public func recordProjectActivities(_ projects: [PersistedProjectActivity], scanID: String) throws {
@@ -678,12 +757,11 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
         try execute("BEGIN IMMEDIATE")
         do {
             let statement = try prepare("""
-            INSERT INTO project_activity(identity_key, path_hint, last_activity_at, last_scan_id)
+            INSERT INTO staged_projects(identity_key, path_hint, last_activity_at, scan_id)
             VALUES(?, ?, ?, ?)
-            ON CONFLICT(identity_key) DO UPDATE SET
+            ON CONFLICT(scan_id,identity_key) DO UPDATE SET
                 path_hint=excluded.path_hint,
-                last_activity_at=MAX(project_activity.last_activity_at, excluded.last_activity_at),
-                last_scan_id=excluded.last_scan_id
+                last_activity_at=MAX(staged_projects.last_activity_at, excluded.last_activity_at)
             """)
             defer { sqlite3_finalize(statement) }
             for project in projects {
@@ -723,116 +801,157 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
         }
     }
 
-    public func finishProjectActivityScan(scanID: String, atOrBelow path: String) throws {
+    public func finishProjectActivityScan(scanID: String, atOrBelow path: String) async throws {
         let root = RuleScope.normalized(path)
+        var projectCursor = ""
+        var maxima: [(key: String, date: Double)] = []
+        maxima.reserveCapacity(256)
+        while let project = try nextStagedProject(scanID: scanID, after: projectCursor) {
+            projectCursor = project.key
+            let children = try prepare("SELECT 1 FROM staged_projects WHERE scan_id=? AND path_hint>=? AND path_hint<? LIMIT 1")
+            let hasChildren: Bool
+            do {
+                defer { sqlite3_finalize(children) }
+                try bind(scanID,to:children,at:1); try bind(project.path + "/",to:children,at:2); try bind(project.path + "0",to:children,at:3)
+                hasChildren = try rowAvailable(children)
+            }
+            var observationPath = ""
+            var observationID: Int64 = 0
+            var latest = project.date
+            while true {
+                try Task.checkCancellation()
+                let statement = try prepare("""
+                SELECT o.path_hint,o.id,o.modified_at FROM project_activity_observations o
+                WHERE o.scan_id=? AND o.path_hint>=? AND o.path_hint<?
+                  AND (o.path_hint=? OR o.path_hint>=?)
+                  AND (o.path_hint,o.id) > (?,?)
+                ORDER BY o.path_hint,o.id LIMIT 256
+                """)
+                var count = 0
+                do {
+                    defer { sqlite3_finalize(statement) }
+                    try bind(scanID,to:statement,at:1)
+                    try bind(project.path,to:statement,at:2)
+                    try bind(project.path + "0",to:statement,at:3)
+                    try bind(project.path,to:statement,at:4)
+                    try bind(project.path + "/",to:statement,at:5)
+                    try bind(observationPath,to:statement,at:6)
+                    try check(sqlite3_bind_int64(statement,7,observationID))
+                    while try rowAvailable(statement) {
+                        observationPath = String(cString:sqlite3_column_text(statement,0))
+                        observationID = sqlite3_column_int64(statement,1)
+                        // Flat projects aggregate directly; nested projects use only indexed
+                        // ancestor equality probes, never an inverse-prefix table scan.
+                        if !hasChildren {
+                            latest = max(latest,sqlite3_column_double(statement,2))
+                        } else if try nearestStagedProjectKey(to:observationPath,scanID:scanID) == project.key {
+                            latest = max(latest,sqlite3_column_double(statement,2))
+                        }
+                        count += 1
+                    }
+                }
+                await Task.yield()
+                if count < 256 { break }
+            }
+            maxima.append((project.key, latest))
+            if maxima.count == 256 {
+                try saveProjectScanMaxima(maxima, scanID: scanID)
+                maxima.removeAll(keepingCapacity: true)
+            }
+            await Task.yield()
+        }
+        try Task.checkCancellation()
+        try saveProjectScanMaxima(maxima, scanID: scanID)
+        guard activeProjectScans.contains(scanID) else { throw SQLiteSafetyStoreError.statementFailed("Project scan was aborted") }
         try execute("BEGIN IMMEDIATE")
         do {
-            let observations = try prepare("SELECT id, path_hint, modified_at FROM project_activity_observations WHERE scan_id = ? AND id > ? ORDER BY id LIMIT 256")
-            let nearestProject = try prepare("""
-            SELECT identity_key FROM project_activity
-            WHERE path_hint = ? OR substr(?, 1, length(path_hint) + 1) = path_hint || '/'
-            ORDER BY length(path_hint) DESC LIMIT 1
+            let publish = try prepare("""
+            INSERT INTO project_activity(identity_key,path_hint,last_activity_at,last_scan_id)
+            SELECT identity_key,path_hint,last_activity_at,scan_id FROM staged_projects WHERE scan_id=?
+            ON CONFLICT(identity_key) DO UPDATE SET path_hint=excluded.path_hint,last_activity_at=MAX(project_activity.last_activity_at,excluded.last_activity_at),last_scan_id=excluded.last_scan_id
             """)
-            let updateProject = try prepare("UPDATE project_activity SET last_activity_at=MAX(last_activity_at, ?) WHERE identity_key = ?")
-            defer {
-                sqlite3_finalize(observations)
-                sqlite3_finalize(nearestProject)
-                sqlite3_finalize(updateProject)
-            }
-            var cursor: Int64 = 0
-            while true {
-                sqlite3_reset(observations)
-                sqlite3_clear_bindings(observations)
-                try bind(scanID, to: observations, at: 1)
-                try check(sqlite3_bind_int64(observations, 2, cursor))
-                var batch: [(id: Int64, path: String, date: Date)] = []
-                while try rowAvailable(observations) {
-                    let id = sqlite3_column_int64(observations, 0)
-                    batch.append((
-                        id,
-                        String(cString: sqlite3_column_text(observations, 1)),
-                        Date(timeIntervalSince1970: sqlite3_column_double(observations, 2))
-                    ))
-                }
-                guard !batch.isEmpty else { break }
-                for observation in batch {
-                    cursor = observation.id
-                    sqlite3_reset(nearestProject)
-                    sqlite3_clear_bindings(nearestProject)
-                    try bind(observation.path, to: nearestProject, at: 1)
-                    try bind(observation.path, to: nearestProject, at: 2)
-                    guard try rowAvailable(nearestProject) else { continue }
-                    let identityKey = String(cString: sqlite3_column_text(nearestProject, 0))
-                    sqlite3_reset(updateProject)
-                    sqlite3_clear_bindings(updateProject)
-                    try check(sqlite3_bind_double(updateProject, 1, observation.date.timeIntervalSince1970))
-                    try bind(identityKey, to: updateProject, at: 2)
-                    try stepDone(updateProject)
-                }
-            }
-
-            let deleteStale = try prepare("""
-            DELETE FROM project_activity
-            WHERE (path_hint = ? OR (path_hint >= ? AND path_hint < ?))
-              AND last_scan_id <> ?
-            """)
-            defer { sqlite3_finalize(deleteStale) }
-            try bind(root, to: deleteStale, at: 1)
-            try bind(root + "/", to: deleteStale, at: 2)
-            try bind(root + "0", to: deleteStale, at: 3)
-            try bind(scanID, to: deleteStale, at: 4)
-            try stepDone(deleteStale)
-
-            let clearObservations = try prepare("DELETE FROM project_activity_observations WHERE scan_id = ?")
-            defer { sqlite3_finalize(clearObservations) }
-            try bind(scanID, to: clearObservations, at: 1)
-            try stepDone(clearObservations)
+            defer { sqlite3_finalize(publish) }
+            try bind(scanID,to:publish,at:1); try stepDone(publish)
+            let delete = try prepare("DELETE FROM project_activity WHERE (path_hint=? OR (path_hint>=? AND path_hint<?)) AND last_scan_id<>?")
+            defer { sqlite3_finalize(delete) }
+            try bind(root,to:delete,at:1); try bind(root + "/",to:delete,at:2); try bind(root + "0",to:delete,at:3); try bind(scanID,to:delete,at:4)
+            try stepDone(delete)
+            try endProjectActivityScan(scanID:scanID)
             try execute("COMMIT")
-            activeProjectScans.remove(scanID)
+        } catch { try? execute("ROLLBACK"); throw error }
+    }
+
+    private func saveProjectScanMaxima(_ maxima: [(key: String, date: Double)], scanID: String) throws {
+        guard !maxima.isEmpty else { return }
+        try execute("BEGIN IMMEDIATE")
+        do {
+            let statement = try prepare("UPDATE staged_projects SET last_activity_at=? WHERE scan_id=? AND identity_key=?")
+            defer { sqlite3_finalize(statement) }
+            for maximum in maxima {
+                sqlite3_reset(statement)
+                sqlite3_clear_bindings(statement)
+                try check(sqlite3_bind_double(statement, 1, maximum.date))
+                try bind(scanID, to: statement, at: 2)
+                try bind(maximum.key, to: statement, at: 3)
+                try stepDone(statement)
+            }
+            try execute("COMMIT")
         } catch {
             try? execute("ROLLBACK")
             throw error
         }
     }
 
-    public func projectActivity(for path: String) throws -> Date? {
-        let statement = try prepare("""
-        SELECT last_activity_at FROM project_activity
-        WHERE path_hint = ? OR substr(?, 1, length(path_hint) + 1) = path_hint || '/'
-        ORDER BY length(path_hint) DESC LIMIT 1
-        """)
+    private func nearestStagedProjectKey(to path: String, scanID: String) throws -> String? {
+        let statement = try prepare("SELECT identity_key FROM staged_projects WHERE scan_id=? AND path_hint=? LIMIT 1")
         defer { sqlite3_finalize(statement) }
-        let normalizedPath = RuleScope.normalized(path)
-        try bind(normalizedPath, to: statement, at: 1)
-        try bind(normalizedPath, to: statement, at: 2)
+        var ancestor = RuleScope.normalized(path)
+        while true {
+            sqlite3_reset(statement); sqlite3_clear_bindings(statement)
+            try bind(scanID,to:statement,at:1); try bind(ancestor,to:statement,at:2)
+            if try rowAvailable(statement) { return String(cString:sqlite3_column_text(statement,0)) }
+            if ancestor == "/" { return nil }
+            ancestor = (ancestor as NSString).deletingLastPathComponent
+            if ancestor.isEmpty { ancestor = "/" }
+        }
+    }
+
+    private func nextStagedProject(scanID: String, after: String) throws -> (key: String,path: String,date: Double)? {
+        let statement = try prepare("SELECT identity_key,path_hint,last_activity_at FROM staged_projects WHERE scan_id=? AND identity_key>? ORDER BY identity_key LIMIT 1")
+        defer { sqlite3_finalize(statement) }
+        try bind(scanID,to:statement,at:1); try bind(after,to:statement,at:2)
         guard try rowAvailable(statement) else { return nil }
-        return Date(timeIntervalSince1970: sqlite3_column_double(statement, 0))
+        return (String(cString:sqlite3_column_text(statement,0)),String(cString:sqlite3_column_text(statement,1)),sqlite3_column_double(statement,2))
+    }
+
+    private func nearestProject(to path: String) throws -> (key: String,path: String,date: Date)? {
+        let statement = try prepare("SELECT identity_key,last_activity_at FROM project_activity WHERE path_hint=? LIMIT 1")
+        defer { sqlite3_finalize(statement) }
+        var ancestor = RuleScope.normalized(path)
+        while true {
+            sqlite3_reset(statement); sqlite3_clear_bindings(statement)
+            try bind(ancestor,to:statement,at:1)
+            if try rowAvailable(statement) {
+                return (String(cString:sqlite3_column_text(statement,0)),ancestor,Date(timeIntervalSince1970:sqlite3_column_double(statement,1)))
+            }
+            if ancestor == "/" { return nil }
+            ancestor = (ancestor as NSString).deletingLastPathComponent
+            if ancestor.isEmpty { ancestor = "/" }
+        }
+    }
+
+    public func projectActivity(for path: String) throws -> Date? {
+        try nearestProject(to:path)?.date
     }
 
     public func recordProjectActivity(at path: String, date: Date) throws -> String? {
-        do {
-            let statement = try prepare("""
-            SELECT identity_key, path_hint FROM project_activity
-            WHERE path_hint = ? OR substr(?, 1, length(path_hint) + 1) = path_hint || '/'
-            ORDER BY length(path_hint) DESC LIMIT 1
-            """)
-            defer { sqlite3_finalize(statement) }
-            let normalizedPath = RuleScope.normalized(path)
-            try bind(normalizedPath, to: statement, at: 1)
-            try bind(normalizedPath, to: statement, at: 2)
-            guard try rowAvailable(statement) else { return nil }
-            let identityKey = String(cString: sqlite3_column_text(statement, 0))
-            let projectPath = String(cString: sqlite3_column_text(statement, 1))
-            sqlite3_reset(statement)
-            let update = try prepare("UPDATE project_activity SET last_activity_at=MAX(last_activity_at, ?) WHERE identity_key = ?")
-            defer { sqlite3_finalize(update) }
-            try check(sqlite3_bind_double(update, 1, date.timeIntervalSince1970))
-            try bind(identityKey, to: update, at: 2)
-            try stepDone(update)
-            return projectPath
-        } catch {
-            throw SQLiteSafetyStoreError.statementFailed("record project activity for \(path): \(error)")
-        }
+        guard let project = try nearestProject(to:path) else { return nil }
+        guard date > project.date else { return project.path }
+        let update = try prepare("UPDATE project_activity SET last_activity_at=MAX(last_activity_at,?) WHERE identity_key=?")
+        defer { sqlite3_finalize(update) }
+        try check(sqlite3_bind_double(update,1,date.timeIntervalSince1970))
+        try bind(project.key,to:update,at:2); try stepDone(update)
+        return project.path
     }
 
     public func removeProjectActivity(atOrBelow path: String) throws {
@@ -858,6 +977,224 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
 
     public func nextDeadline() throws -> PersistedDeadline? {
         try upcomingDeadlines(limit: 1).first
+    }
+
+    public func beginCandidateScan(atOrBelow path: String) throws -> String {
+        let scanID = UUID().uuidString
+        let statement = try prepare("INSERT INTO candidate_scans VALUES(?,?)")
+        defer { sqlite3_finalize(statement) }
+        try bind(scanID,to:statement,at:1)
+        try bind(RuleScope.normalized(path),to:statement,at:2)
+        try stepDone(statement)
+        return scanID
+    }
+
+    public func stageCandidates(_ candidates: [RuleCandidate], scanID: String) throws {
+        guard !candidates.isEmpty else { return }
+        try execute("BEGIN IMMEDIATE")
+        do {
+            let statement = try prepare("INSERT INTO staged_candidates VALUES(?,?,?) ON CONFLICT(scan_id,identity_key) DO UPDATE SET payload=excluded.payload")
+            defer { sqlite3_finalize(statement) }
+            for candidate in candidates {
+                sqlite3_reset(statement); sqlite3_clear_bindings(statement)
+                try bind(scanID,to:statement,at:1)
+                try bind(Self.identityKey(candidate.identity),to:statement,at:2)
+                try bind(try encode(candidate),to:statement,at:3)
+                try stepDone(statement)
+            }
+            try execute("COMMIT")
+        } catch { try? execute("ROLLBACK"); throw error }
+    }
+
+    public func candidatePage(scanID: String, afterIdentityKey: String? = nil, limit: Int = 256) throws -> PersistedCandidatePage {
+        let statement = try prepare("SELECT identity_key,payload FROM staged_candidates WHERE scan_id=? AND identity_key > ? ORDER BY identity_key LIMIT ?")
+        defer { sqlite3_finalize(statement) }
+        try bind(scanID,to:statement,at:1)
+        try bind(afterIdentityKey ?? "",to:statement,at:2)
+        let bounded = min(256,max(1,limit))
+        try check(sqlite3_bind_int64(statement,3,Int64(bounded + 1)))
+        var candidates: [RuleCandidate] = []
+        var cursor: String?
+        var more = false
+        while try rowAvailable(statement) {
+            if candidates.count == bounded { more = true; break }
+            cursor = String(cString:sqlite3_column_text(statement,0))
+            candidates.append(try decode(RuleCandidate.self,from:columnData(statement,at:1)))
+        }
+        return PersistedCandidatePage(candidates:candidates,nextCursor:more ? cursor : nil)
+    }
+
+    public func stageDeadlines(_ deadlines: [PersistedDeadline], scanID: String) throws {
+        guard !deadlines.isEmpty else { return }
+        try execute("BEGIN IMMEDIATE")
+        do {
+            let statement = try prepare("INSERT INTO staged_deadlines VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(scan_id,identity_key) DO UPDATE SET scheduled_at=excluded.scheduled_at,path_hint=excluded.path_hint,payload=excluded.payload,rule_id=excluded.rule_id,disposition=excluded.disposition,expiry_basis=excluded.expiry_basis")
+            defer { sqlite3_finalize(statement) }
+            for deadline in deadlines {
+                sqlite3_reset(statement); sqlite3_clear_bindings(statement)
+                try bind(scanID,to:statement,at:1)
+                try bind(Self.identityKey(deadline.identity),to:statement,at:2)
+                try check(sqlite3_bind_double(statement,3,deadline.scheduledAt.timeIntervalSince1970))
+                try bind(deadline.identity.pathHint,to:statement,at:4)
+                try bind(try encode(deadline),to:statement,at:5)
+                if deadline.explanation.customOverrideID == nil { try bind(deadline.explanation.matchedRuleID.uuidString,to:statement,at:6) }
+                else { try check(sqlite3_bind_null(statement,6)) }
+                try bind(deadline.explanation.disposition.rawValue,to:statement,at:7)
+                try bind(deadline.explanation.expiryBasis.rawValue,to:statement,at:8)
+                try stepDone(statement)
+            }
+            try execute("COMMIT")
+        } catch { try? execute("ROLLBACK"); throw error }
+    }
+
+    public func commitCandidateScan(scanID: String) throws {
+        try Task.checkCancellation()
+        try execute("BEGIN IMMEDIATE")
+        do {
+            let select = try prepare("SELECT path_hint FROM candidate_scans WHERE scan_id=?")
+            defer { sqlite3_finalize(select) }
+            try bind(scanID,to:select,at:1)
+            guard try rowAvailable(select) else { throw SQLiteSafetyStoreError.statementFailed("Unknown candidate scan") }
+            let root = String(cString:sqlite3_column_text(select,0))
+            let delete = try prepare("DELETE FROM deadlines WHERE (path_hint=? OR (path_hint>=? AND path_hint<?)) AND identity_key NOT IN (SELECT identity_key FROM staged_deadlines WHERE scan_id=?)")
+            defer { sqlite3_finalize(delete) }
+            try bind(root,to:delete,at:1); try bind(root + "/",to:delete,at:2); try bind(root + "0",to:delete,at:3); try bind(scanID,to:delete,at:4)
+            try stepDone(delete)
+            let publish = try prepare("""
+            INSERT INTO deadlines(identity_key,scheduled_at,path_hint,payload,rule_id,disposition,expiry_basis)
+            SELECT identity_key,scheduled_at,path_hint,payload,rule_id,disposition,expiry_basis FROM staged_deadlines WHERE scan_id=?
+            ON CONFLICT(identity_key) DO UPDATE SET scheduled_at=excluded.scheduled_at,path_hint=excluded.path_hint,payload=excluded.payload,rule_id=excluded.rule_id,disposition=excluded.disposition,expiry_basis=excluded.expiry_basis WHERE deadlines.payload<>excluded.payload
+            """)
+            defer { sqlite3_finalize(publish) }
+            try bind(scanID,to:publish,at:1); try stepDone(publish)
+            try endCandidateScan(scanID:scanID)
+            try Task.checkCancellation()
+            try execute("COMMIT")
+        } catch { try? execute("ROLLBACK"); throw error }
+    }
+
+    public func endCandidateScan(scanID: String) throws {
+        for table in ["staged_candidates","staged_deadlines","candidate_scans"] {
+            let statement = try prepare("DELETE FROM \(table) WHERE scan_id=?")
+            defer { sqlite3_finalize(statement) }
+            try bind(scanID,to:statement,at:1); try stepDone(statement)
+        }
+    }
+
+    public func reclaimedTotals() throws -> PersistedReclaimedTotals {
+        let statement = try prepare("SELECT items,bytes,known_items,first_at,last_at FROM reclaimed_totals WHERE id=1")
+        defer { sqlite3_finalize(statement) }
+        guard try rowAvailable(statement) else { throw databaseError() }
+        return PersistedReclaimedTotals(
+            lifetimeItems: Int(sqlite3_column_int64(statement,0)),
+            lifetimeBytes: sqlite3_column_int64(statement,1),
+            itemsWithKnownSize: Int(sqlite3_column_int64(statement,2)),
+            firstMovedAt: sqlite3_column_type(statement,3) == SQLITE_NULL ? nil : Date(timeIntervalSince1970: sqlite3_column_double(statement,3)),
+            lastMovedAt: sqlite3_column_type(statement,4) == SQLITE_NULL ? nil : Date(timeIntervalSince1970: sqlite3_column_double(statement,4)))
+    }
+
+    public func reclaimedDay(from: Date, to: Date) throws -> PersistedReclaimedDay {
+        let statement = try prepare("SELECT COALESCE(SUM(items),0),COALESCE(SUM(bytes),0) FROM reclaimed_moves WHERE occurred_at >= ? AND occurred_at < ?")
+        defer { sqlite3_finalize(statement) }
+        try check(sqlite3_bind_double(statement,1,from.timeIntervalSince1970))
+        try check(sqlite3_bind_double(statement,2,to.timeIntervalSince1970))
+        guard try rowAvailable(statement) else { throw databaseError() }
+        return PersistedReclaimedDay(items: Int(sqlite3_column_int64(statement,0)),bytes: sqlite3_column_int64(statement,1))
+    }
+
+    public func reclaimedSnapshot(intervals: [DateInterval]) throws -> PersistedReclaimedSnapshot {
+        PersistedReclaimedSnapshot(
+            totals: try reclaimedTotals(),
+            days: try intervals.map { try reclaimedDay(from: $0.start, to: $0.end) }
+        )
+    }
+
+    /// One actor turn keeps samples, counts, and policy coherent across a scan's atomic publication.
+    public func overviewSnapshot(now: Date) throws -> PersistedOverviewSnapshot {
+        let policy = try readPolicySnapshot()
+        let active = try upcomingPage(ruleID: nil, disposition: .active, after: nil, limit: 100, dueThrough: nil, count: false)
+        let preview = try upcomingPage(ruleID: nil, disposition: .preview, after: nil, limit: 100, dueThrough: nil, count: false)
+        let summary = try deadlineSummary(now: now)
+        return PersistedOverviewSnapshot(
+            policy: policy,
+            upcoming: active.deadlines + preview.deadlines,
+            summary: summary,
+            ruleCounts: try deadlineCountsByRule(now: now),
+            indexedItems: summary.active + summary.preview
+        )
+    }
+
+    public func upcomingDeadlinePage(ruleID: UUID? = nil, disposition: ScheduledDisposition? = nil,
+        after: PersistedUpcomingCursor? = nil, limit: Int = 200, dueThrough: Date? = nil) throws -> PersistedUpcomingPage {
+        try upcomingPage(ruleID: ruleID, disposition: disposition, after: after, limit: limit, dueThrough: dueThrough, count: true)
+    }
+
+    public func dueDeadlinePage(through: Date, after: PersistedUpcomingCursor? = nil, limit: Int = 256) throws -> PersistedUpcomingPage {
+        try upcomingPage(ruleID: nil, disposition: nil, after: after, limit: limit, dueThrough: through, count: false)
+    }
+
+    private func upcomingPage(ruleID: UUID?, disposition: ScheduledDisposition?, after: PersistedUpcomingCursor?,
+        limit: Int, dueThrough: Date?, count: Bool) throws -> PersistedUpcomingPage {
+        var filters: [String] = []
+        if ruleID != nil { filters.append("rule_id = ?") }
+        if disposition != nil { filters.append("disposition = ?") }
+        if dueThrough != nil { filters.append("scheduled_at <= ?") }
+        let population = filters.isEmpty ? "" : " WHERE " + filters.joined(separator: " AND ")
+        func bindFilters(_ statement: OpaquePointer) throws -> Int32 {
+            var index: Int32 = 1
+            if let ruleID { try bind(ruleID.uuidString,to:statement,at:index); index += 1 }
+            if let disposition { try bind(disposition.rawValue,to:statement,at:index); index += 1 }
+            if let dueThrough { try check(sqlite3_bind_double(statement,index,dueThrough.timeIntervalSince1970)); index += 1 }
+            return index
+        }
+        var total = 0
+        if count {
+            let statement = try prepare("SELECT COUNT(*) FROM deadlines" + population)
+            defer { sqlite3_finalize(statement) }
+            _ = try bindFilters(statement)
+            if try rowAvailable(statement) { total = Int(sqlite3_column_int64(statement,0)) }
+        }
+        if after != nil { filters.append("(scheduled_at,identity_key) > (?,?)") }
+        let predicate = filters.isEmpty ? "" : " WHERE " + filters.joined(separator:" AND ")
+        let statement = try prepare("SELECT payload,scheduled_at,identity_key FROM deadlines" + predicate + " ORDER BY scheduled_at,identity_key LIMIT ?")
+        defer { sqlite3_finalize(statement) }
+        var index = try bindFilters(statement)
+        if let after {
+            try check(sqlite3_bind_double(statement,index,after.scheduledAt.timeIntervalSince1970)); index += 1
+            try bind(after.identityKey,to:statement,at:index); index += 1
+        }
+        let bounded = min(256,max(1,limit))
+        try check(sqlite3_bind_int64(statement,index,Int64(bounded + 1)))
+        var deadlines: [PersistedDeadline] = []
+        var cursor: PersistedUpcomingCursor?
+        var more = false
+        while try rowAvailable(statement) {
+            if deadlines.count == bounded { more = true; break }
+            deadlines.append(try decode(PersistedDeadline.self,from:columnData(statement,at:0)))
+            cursor = PersistedUpcomingCursor(scheduledAt:Date(timeIntervalSince1970:sqlite3_column_double(statement,1)),identityKey:String(cString:sqlite3_column_text(statement,2)))
+        }
+        return PersistedUpcomingPage(deadlines:deadlines,nextCursor:more ? cursor : nil,totalCount:total)
+    }
+
+    public func nextScheduledTime(after: Date) throws -> Date? {
+        let statement = try prepare("SELECT MIN(scheduled_at) FROM deadlines WHERE scheduled_at > ?")
+        defer { sqlite3_finalize(statement) }
+        try check(sqlite3_bind_double(statement,1,after.timeIntervalSince1970))
+        guard try rowAvailable(statement), sqlite3_column_type(statement,0) != SQLITE_NULL else { return nil }
+        return Date(timeIntervalSince1970:sqlite3_column_double(statement,0))
+    }
+
+    public func deadlineSummary(now: Date) throws -> PersistedDeadlineSummary {
+        let statement = try prepare("SELECT disposition,COUNT(*),SUM(CASE WHEN scheduled_at <= ? THEN 1 ELSE 0 END) FROM deadlines GROUP BY disposition")
+        defer { sqlite3_finalize(statement) }
+        try check(sqlite3_bind_double(statement,1,now.addingTimeInterval(86_400).timeIntervalSince1970))
+        var active = 0, preview = 0, soon = 0
+        while try rowAvailable(statement) {
+            if String(cString:sqlite3_column_text(statement,0)) == ScheduledDisposition.active.rawValue {
+                active = Int(sqlite3_column_int64(statement,1)); soon = Int(sqlite3_column_int64(statement,2))
+            } else { preview += Int(sqlite3_column_int64(statement,1)) }
+        }
+        return PersistedDeadlineSummary(active:active,preview:preview,activeSoon:soon)
     }
 
     /// Per-rule counts of scheduled candidates, read from the persisted deadline index only.
@@ -888,45 +1225,21 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
         return (attributes?[.size] as? NSNumber)?.int64Value ?? 0
     }
 
-    public func deadlinePage(atOrBelow path: String, afterIdentityKey cursor: String? = nil, limit: Int = 256) throws -> PersistedDeadlinePage {
+    public func deadlinePage(atOrBelow path: String, afterIdentityKey cursor: String? = nil, limit: Int = 256, expiryBasis: ExpiryBasis? = nil) throws -> PersistedDeadlinePage {
         let root = RuleScope.normalized(path)
-        let statement: OpaquePointer
-        if cursor == nil {
-            statement = try prepare("""
-            SELECT identity_key, payload FROM deadlines
-            WHERE path_hint = ? OR (path_hint >= ? AND path_hint < ?)
-            ORDER BY identity_key LIMIT ?
-            """)
-        } else {
-            statement = try prepare("""
-            SELECT identity_key, payload FROM deadlines
-            WHERE (path_hint = ? OR (path_hint >= ? AND path_hint < ?))
-              AND identity_key > ?
-            ORDER BY identity_key LIMIT ?
-            """)
-        }
+        let basisFilter = expiryBasis == nil ? "" : " AND expiry_basis=?"
+        let statement = try prepare("SELECT identity_key,payload FROM deadlines WHERE (path_hint=? OR (path_hint>=? AND path_hint<?)) AND identity_key>?" + basisFilter + " ORDER BY identity_key LIMIT ?")
         defer { sqlite3_finalize(statement) }
-        try bind(root, to: statement, at: 1)
-        try bind(root + "/", to: statement, at: 2)
-        try bind(root + "0", to: statement, at: 3)
-        let pageLimit = min(256, max(1, limit))
-        if let cursor {
-            try bind(cursor, to: statement, at: 4)
-            try check(sqlite3_bind_int64(statement, 5, Int64(pageLimit)))
-        } else {
-            try check(sqlite3_bind_int64(statement, 4, Int64(pageLimit)))
-        }
-        var rows: [(String, PersistedDeadline)] = []
+        try bind(root,to:statement,at:1); try bind(root + "/",to:statement,at:2); try bind(root + "0",to:statement,at:3)
+        try bind(cursor ?? "",to:statement,at:4)
+        if let expiryBasis { try bind(expiryBasis.rawValue,to:statement,at:5) }
+        let bounded = min(256,max(1,limit))
+        try check(sqlite3_bind_int64(statement,expiryBasis == nil ? 5 : 6,Int64(bounded)))
+        var rows: [(String,PersistedDeadline)] = []
         while try rowAvailable(statement) {
-            rows.append((
-                String(cString: sqlite3_column_text(statement, 0)),
-                try decode(PersistedDeadline.self, from: columnData(statement, at: 1))
-            ))
+            rows.append((String(cString:sqlite3_column_text(statement,0)),try decode(PersistedDeadline.self,from:columnData(statement,at:1))))
         }
-        return PersistedDeadlinePage(
-            deadlines: rows.map(\.1),
-            nextCursor: rows.count == pageLimit ? rows.last?.0 : nil
-        )
+        return PersistedDeadlinePage(deadlines:rows.map(\.1),nextCursor:rows.count == bounded ? rows.last?.0 : nil)
     }
 
     private func loadPayloads<Value: Decodable>(table: String, as type: Value.Type) throws -> [Value] {
@@ -1188,6 +1501,52 @@ public actor SQLiteSafetyStore: PolicySnapshotProviding, TrashAuditRecording {
             CREATE INDEX audit_moved_ledger_idx ON audit_events(occurred_at ASC, id ASC) WHERE kind = 'movedToTrash';
             INSERT INTO schema_migrations(version, applied_at) VALUES(9, strftime('%s', 'now'));
             PRAGMA user_version = 9;
+            COMMIT;
+            """
+            do { try Self.execute(database, migration) }
+            catch { sqlite3_exec(database, "ROLLBACK", nil, nil, nil); throw error }
+        }
+        if version < 10 {
+            let migration = """
+            BEGIN IMMEDIATE;
+            ALTER TABLE deadlines ADD COLUMN disposition TEXT NOT NULL DEFAULT 'preview';
+            ALTER TABLE deadlines ADD COLUMN expiry_basis TEXT NOT NULL DEFAULT '';
+            UPDATE deadlines SET disposition=json_extract(CAST(payload AS TEXT),'$.explanation.disposition'),
+                expiry_basis=json_extract(CAST(payload AS TEXT),'$.explanation.expiryBasis');
+            CREATE INDEX deadline_disposition_due_idx ON deadlines(disposition,scheduled_at,identity_key);
+            CREATE INDEX deadline_rule_due_idx ON deadlines(rule_id,scheduled_at,identity_key);
+            CREATE INDEX deadline_basis_path_idx ON deadlines(expiry_basis,path_hint,identity_key);
+            CREATE TABLE candidate_scans(scan_id TEXT PRIMARY KEY NOT NULL, path_hint TEXT NOT NULL);
+            CREATE TABLE staged_candidates(scan_id TEXT NOT NULL, identity_key TEXT NOT NULL, payload BLOB NOT NULL, PRIMARY KEY(scan_id,identity_key));
+            CREATE TABLE staged_deadlines(scan_id TEXT NOT NULL, identity_key TEXT NOT NULL, scheduled_at REAL NOT NULL, path_hint TEXT NOT NULL, payload BLOB NOT NULL, rule_id TEXT, disposition TEXT NOT NULL, expiry_basis TEXT NOT NULL, PRIMARY KEY(scan_id,identity_key));
+            CREATE TABLE staged_projects(scan_id TEXT NOT NULL, identity_key TEXT NOT NULL, path_hint TEXT NOT NULL, last_activity_at REAL NOT NULL, PRIMARY KEY(scan_id,identity_key));
+            CREATE INDEX staged_project_path_idx ON staged_projects(scan_id,path_hint);
+            CREATE INDEX project_observation_path_idx ON project_activity_observations(scan_id,path_hint,modified_at);
+            CREATE INDEX project_observation_order_idx ON project_activity_observations(scan_id,path_hint,id);
+            CREATE TABLE reclaimed_moves(id TEXT PRIMARY KEY NOT NULL, occurred_at REAL NOT NULL, items INTEGER NOT NULL, bytes INTEGER NOT NULL, known_items INTEGER NOT NULL);
+            CREATE INDEX reclaimed_moves_time_idx ON reclaimed_moves(occurred_at,items,bytes);
+            CREATE TABLE reclaimed_totals(id INTEGER PRIMARY KEY CHECK(id=1), items INTEGER NOT NULL, bytes INTEGER NOT NULL, known_items INTEGER NOT NULL, first_at REAL, last_at REAL);
+            INSERT INTO reclaimed_moves
+                SELECT id,occurred_at,MAX(1,COALESCE(json_extract(CAST(payload AS TEXT),'$.itemCount'),1)),
+                    MAX(0,COALESCE(json_extract(CAST(payload AS TEXT),'$.bytes'),0)),
+                    CASE WHEN json_extract(CAST(payload AS TEXT),'$.bytes') IS NOT NULL
+                        THEN MAX(1,COALESCE(json_extract(CAST(payload AS TEXT),'$.itemCount'),1)) ELSE 0 END
+                FROM audit_events WHERE kind='movedToTrash';
+            INSERT INTO reclaimed_totals SELECT 1,COALESCE(SUM(items),0),COALESCE(SUM(bytes),0),COALESCE(SUM(known_items),0),MIN(occurred_at),MAX(occurred_at) FROM reclaimed_moves;
+            CREATE TRIGGER reclaimed_move_insert AFTER INSERT ON reclaimed_moves BEGIN
+                UPDATE reclaimed_totals SET items=items+NEW.items,bytes=bytes+NEW.bytes,known_items=known_items+NEW.known_items,
+                    first_at=CASE WHEN first_at IS NULL THEN NEW.occurred_at ELSE MIN(first_at,NEW.occurred_at) END,
+                    last_at=CASE WHEN last_at IS NULL THEN NEW.occurred_at ELSE MAX(last_at,NEW.occurred_at) END WHERE id=1;
+            END;
+            INSERT INTO schema_migrations(version,applied_at) VALUES(10,strftime('%s','now'));
+            CREATE TRIGGER audit_reclaimed_insert AFTER INSERT ON audit_events WHEN NEW.kind='movedToTrash' BEGIN
+                INSERT INTO reclaimed_moves VALUES(NEW.id,NEW.occurred_at,
+                    MAX(1,COALESCE(json_extract(CAST(NEW.payload AS TEXT),'$.itemCount'),1)),
+                    MAX(0,COALESCE(json_extract(CAST(NEW.payload AS TEXT),'$.bytes'),0)),
+                    CASE WHEN json_extract(CAST(NEW.payload AS TEXT),'$.bytes') IS NOT NULL
+                        THEN MAX(1,COALESCE(json_extract(CAST(NEW.payload AS TEXT),'$.itemCount'),1)) ELSE 0 END);
+            END;
+            PRAGMA user_version=10;
             COMMIT;
             """
             do { try Self.execute(database, migration) }

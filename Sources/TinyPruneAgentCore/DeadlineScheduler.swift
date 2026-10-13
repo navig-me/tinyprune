@@ -18,6 +18,12 @@ public actor DeadlineScheduler {
     private var backoff: [BackoffKey: BackoffEntry] = [:]
     private var runInProgress = false
     private var runWaiters: [CheckedContinuation<Void, Never>] = []
+    private var rootReadiness: (@Sendable (String) async -> Bool)?
+
+    func setRootReadiness(_ readiness: @escaping @Sendable (String) async -> Bool) {
+        rootReadiness = readiness
+        signalChange()
+    }
 
     public init(store: SQLiteSafetyStore, coordinator: TrashCoordinator, clock: any SafetyClock = SystemSafetyClock()) {
         self.store = store
@@ -94,37 +100,53 @@ public actor DeadlineScheduler {
 
     private func drainDueDeadlines() async throws {
         if try await store.loadSnapshot().globallyPaused { return }
-        while !Task.isCancelled {
-            let now = clock.now()
-            pruneBackoff(now: now)
-            guard let deadline = try await nextRunnableDeadline(now: now) else { return }
-            let request = TrashRequest(
-                candidateIdentity: deadline.identity,
-                source: deadline.source,
-                scheduledAt: deadline.scheduledAt
-            )
-            let outcome: TrashExecutionOutcome
-            do {
-                outcome = try await coordinator.execute(request)
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch TrashExecutionError.movedButAuditFailed {
-                // The item is already in the Trash; the deadline is obsolete even though the audit write failed.
-                try await store.removeDeadline(for: deadline.identity, scheduledAt: deadline.scheduledAt)
-                continue
-            } catch {
-                recordFailure(for: deadline, now: clock.now(), base: Self.errorBackoffBase)
-                continue
+        let through = clock.now()
+        pruneBackoff(now: through)
+        var cursor: PersistedUpcomingCursor?
+        repeat {
+            try Task.checkCancellation()
+            if try await store.loadSnapshot().globallyPaused { return }
+            let page = try await store.dueDeadlinePage(through: through, after: cursor)
+            for deadline in page.deadlines {
+                try Task.checkCancellation()
+                guard !isBackedOff(deadline, now: clock.now()) else { continue }
+                try await execute(deadline)
             }
-            switch outcome {
-            case .movedToTrash, .skipped:
-                try await store.removeDeadline(for: deadline.identity, scheduledAt: deadline.scheduledAt)
-                backoff[BackoffKey(deadline)] = nil
-            case .previewed, .deferred:
-                recordFailure(for: deadline, now: clock.now(), base: Self.deferralBackoffBase)
-            case .notDue(let dueAt):
-                backoff[BackoffKey(deadline)] = BackoffEntry(until: max(dueAt, clock.now().addingTimeInterval(1)), failures: 0)
-            }
+            cursor = page.nextCursor
+        } while cursor != nil
+    }
+
+    private func execute(_ deadline: PersistedDeadline) async throws {
+        if let rootReadiness, !(await rootReadiness(deadline.identity.pathHint)) {
+            recordFailure(for: deadline, now: clock.now(), base: Self.deferralBackoffBase)
+            return
+        }
+        let request = TrashRequest(
+            candidateIdentity: deadline.identity,
+            source: deadline.source,
+            scheduledAt: deadline.scheduledAt
+        )
+        let outcome: TrashExecutionOutcome
+        do {
+            outcome = try await coordinator.execute(request)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch TrashExecutionError.movedButAuditFailed {
+            // The item moved, but a concurrent re-index may already have replaced its schedule.
+            try await store.removeDeadline(for: deadline.identity, scheduledAt: deadline.scheduledAt)
+            return
+        } catch {
+            recordFailure(for: deadline, now: clock.now(), base: Self.errorBackoffBase)
+            return
+        }
+        switch outcome {
+        case .movedToTrash, .skipped:
+            try await store.removeDeadline(for: deadline.identity, scheduledAt: deadline.scheduledAt)
+            backoff[BackoffKey(deadline)] = nil
+        case .previewed, .deferred:
+            recordFailure(for: deadline, now: clock.now(), base: Self.deferralBackoffBase)
+        case .notDue(let dueAt):
+            backoff[BackoffKey(deadline)] = BackoffEntry(until: max(dueAt, clock.now().addingTimeInterval(1)), failures: 0)
         }
     }
 
@@ -158,25 +180,33 @@ public actor DeadlineScheduler {
         backoff = backoff.filter { $0.value.until > now.addingTimeInterval(-Self.maximumBackoff) }
     }
 
-    /// Earliest due deadline that is not backed off. Backed-off rows sort among the others, so the page is sized to
-    /// guarantee at least one non-backed-off row whenever one exists.
-    private func nextRunnableDeadline(now: Date) async throws -> PersistedDeadline? {
-        let page = try await store.upcomingDeadlines(limit: backoff.count + 16)
-        return page.first { $0.scheduledAt <= now && !isBackedOff($0, now: now) }
-    }
 
     private func isBackedOff(_ deadline: PersistedDeadline, now: Date) -> Bool {
         guard let entry = backoff[BackoffKey(deadline)] else { return false }
         return entry.until > now
     }
 
-    /// When the loop should next act: the earliest of any row's due time or its backoff expiry.
+    /// A bounded pass over due rows finds the earliest retry without repeatedly decoding a growing prefix.
     private func nextWakeTime(now: Date) async throws -> Date? {
-        let page = try await store.upcomingDeadlines(limit: backoff.count + 16)
-        return page.map { deadline -> Date in
-            if let entry = backoff[BackoffKey(deadline)] { return max(deadline.scheduledAt, entry.until) }
-            return deadline.scheduledAt
-        }.min()
+        pruneBackoff(now: now)
+        var cursor: PersistedUpcomingCursor?
+        var earliestRetry: Date?
+        repeat {
+            try Task.checkCancellation()
+            let page = try await store.dueDeadlinePage(through: now, after: cursor)
+            for deadline in page.deadlines {
+                guard let entry = backoff[BackoffKey(deadline)], entry.until > now else { return now }
+                earliestRetry = min(earliestRetry ?? entry.until, entry.until)
+            }
+            cursor = page.nextCursor
+        } while cursor != nil
+        let future = try await store.nextScheduledTime(after: now)
+        switch (earliestRetry, future) {
+        case (.some(let retry), .some(let deadline)): return min(retry, deadline)
+        case (.some(let retry), .none): return retry
+        case (.none, .some(let deadline)): return deadline
+        case (.none, .none): return nil
+        }
     }
 
     private func runLoop() async {
@@ -238,6 +268,10 @@ public actor DeadlineScheduler {
     }
     private func deadlineReached(_ generation: UInt64) {
         guard generation == sleeperGeneration else { return }
-        signalChange()
+        // A timer wake is not a policy change: retain per-item backoff and its failure streak.
+        sleeper = nil
+        let pending = waiter
+        waiter = nil
+        pending?.resume()
     }
 }

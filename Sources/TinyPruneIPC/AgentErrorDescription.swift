@@ -15,7 +15,7 @@ public enum AgentErrorDescription {
     public static func message(for error: AgentServiceError) -> String {
         switch error {
         case .unsupportedProtocol(let expected, let received):
-            "Protocol mismatch: the agent expects version \(expected) but this tool speaks \(received). Update TinyPrune."
+            "Protocol mismatch: the agent expects version \(expected) but this tool speaks \(received). Update TinyPrune, then quit and reopen the app to load the matching background agent."
         case .invalidRequest(let message):
             "The agent rejected the request: \(message)"
         case .storageUnavailable(let message):
@@ -36,7 +36,7 @@ public enum AgentErrorDescription {
         case .invalidReply:
             "The agent sent a reply that could not be read."
         case .unsupportedProtocol(let version):
-            "The agent speaks protocol version \(version), which this tool does not support. Update TinyPrune."
+            "The agent speaks protocol version \(version), which this tool does not support. Update TinyPrune, then quit and reopen the app to load the matching background agent."
         case .timedOut:
             "The agent did not answer in time. The request may have been applied; check the current state before retrying."
         case .interrupted:

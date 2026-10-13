@@ -11,6 +11,8 @@ private final class AsyncMutex: @unchecked Sendable {
     private var locked = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
 
+    var isLocked: Bool { lock.withLock { locked } }
+
     func acquire() async {
         let shouldWait = lock.withLock {
             if locked { return true }
@@ -68,15 +70,17 @@ private final class RootRecoveryLatch: @unchecked Sendable {
 private struct RootWatchSession: Sendable {
     let root: ManagedRoot
     let access: RootAccessToken
-    let eventStream: ManagedRootEventStream
+    let eventStream: ManagedRootEventStream?
     let continuation: AsyncStream<ManagedRootEvent>.Continuation
     let consumer: Task<Void, Never>
     let recoveryLatch: RootRecoveryLatch
     let initialScan: Task<Void, Never>?
+    var replayPending: Bool
 }
 
 private struct ScanBatch: Sendable {
     var projects: [PersistedProjectActivity] = []
+    var candidates: [RuleCandidate] = []
     var sourceObservations: [ProjectActivityObservation] = []
     var deadlines: [PersistedDeadline] = []
     var observedActivity: [PersistedObservedActivity] = []
@@ -87,17 +91,19 @@ private final class ScanBatchAccumulator: @unchecked Sendable {
     private var batch = ScanBatch()
 
     func append(
+        candidate: RuleCandidate? = nil,
         project: PersistedProjectActivity? = nil,
         sourceObservation: ProjectActivityObservation? = nil,
         deadline: PersistedDeadline? = nil,
         observedActivity: PersistedObservedActivity? = nil
     ) -> ScanBatch? {
         lock.withLock {
+            if let candidate { batch.candidates.append(candidate) }
             if let project { batch.projects.append(project) }
             if let sourceObservation { batch.sourceObservations.append(sourceObservation) }
             if let deadline { batch.deadlines.append(deadline) }
             if let observedActivity { batch.observedActivity.append(observedActivity) }
-            guard batch.projects.count >= 256 ||
+            guard batch.candidates.count >= 256 || batch.projects.count >= 256 ||
                     batch.sourceObservations.count >= 256 ||
                     batch.deadlines.count >= 256 ||
                     batch.observedActivity.count >= 256 else { return nil }
@@ -139,8 +145,59 @@ public actor ManagedRootIndexer {
     private let diagnosticsRecorder = ManagedRootDiagnosticsRecorder()
     private let onDeadlinesChanged: @Sendable () -> Void
     private let bookmarkResolver: (@Sendable (ManagedRoot) throws -> URL)?
+    private let eventStreamFactory: @Sendable (String, UInt64, @escaping @Sendable (ManagedRootEvent) -> Void) throws -> ManagedRootEventStream?
     private var sessions: [UUID: RootWatchSession] = [:]
     private let operationLock = AsyncMutex()
+    private var rootLocks: [UUID: AsyncMutex] = [:]
+    private let overlappingRootLock = AsyncMutex()
+    private var overlappingRootIDs: Set<UUID> = []
+    private var configurationSnapshot: PolicySnapshot?
+    private var scanGenerations: [UUID: UInt64] = [:]
+
+    private func checkScanCancellation(rootID: UUID, generation: UInt64) throws {
+        try Task.checkCancellation()
+        guard scanGenerations[rootID, default: 0] == generation else { throw CancellationError() }
+    }
+
+    private func rootLock(for rootID: UUID) -> AsyncMutex {
+        if overlappingRootIDs.contains(rootID) { return overlappingRootLock }
+        if let lock = rootLocks[rootID] { return lock }
+        let lock = AsyncMutex()
+        rootLocks[rootID] = lock
+        return lock
+    }
+
+    private func acquireRootLock(for rootID: UUID) async -> AsyncMutex {
+        while true {
+            let lock = rootLock(for: rootID)
+            await lock.acquire()
+            if rootLock(for: rootID) === lock { return lock }
+            lock.release()
+        }
+    }
+
+    private func uniqueLocks(_ locks: [AsyncMutex]) -> [AsyncMutex] {
+        var seen: Set<ObjectIdentifier> = []
+        return locks.filter { seen.insert(ObjectIdentifier($0)).inserted }
+    }
+
+    private func overlappingIDs(in roots: [ManagedRoot]) -> Set<UUID> {
+        var result: Set<UUID> = []
+        for (index, root) in roots.enumerated() {
+            for other in roots.dropFirst(index + 1)
+                where root.path == other.path || root.path.hasPrefix(other.path + "/") || other.path.hasPrefix(root.path + "/") {
+                result.insert(root.id)
+                result.insert(other.id)
+            }
+        }
+        return result
+    }
+
+    private func acquireRootLocks() async -> [AsyncMutex] {
+        let locks = uniqueLocks(Array(rootLocks.values) + [overlappingRootLock])
+        for lock in locks { await lock.acquire() }
+        return locks
+    }
     private var recoveryRequests: Set<UUID> = []
     private var statuses: [UUID: RootStatusEntry] = [:]
     private var retryTasks: [UUID: Task<Void, Never>] = [:]
@@ -162,6 +219,9 @@ public actor ManagedRootIndexer {
         self.sleep = Self.defaultSleep
         self.onDeadlinesChanged = onDeadlinesChanged
         self.bookmarkResolver = nil
+        self.eventStreamFactory = { path, cursor, handler in
+            try ManagedRootEventStream(rootPath: path, since: cursor, handler: handler)
+        }
     }
 
     init(
@@ -169,7 +229,10 @@ public actor ManagedRootIndexer {
         resolver: @escaping @Sendable (ManagedRoot) throws -> URL,
         clock: any SafetyClock = SystemSafetyClock(),
         onDeadlinesChanged: @escaping @Sendable () -> Void = {},
-        sleep: @escaping @Sendable (TimeInterval) async throws -> Void = ManagedRootIndexer.defaultSleep
+        sleep: @escaping @Sendable (TimeInterval) async throws -> Void = ManagedRootIndexer.defaultSleep,
+        eventStreamFactory: @escaping @Sendable (String, UInt64, @escaping @Sendable (ManagedRootEvent) -> Void) throws -> ManagedRootEventStream? = { path, cursor, handler in
+            try ManagedRootEventStream(rootPath: path, since: cursor, handler: handler)
+        }
     ) {
         self.store = store
         self.fileAccess = LocalTrashFileAccess()
@@ -178,6 +241,7 @@ public actor ManagedRootIndexer {
         self.sleep = sleep
         self.onDeadlinesChanged = onDeadlinesChanged
         self.bookmarkResolver = resolver
+        self.eventStreamFactory = eventStreamFactory
     }
 
     public func diagnosticsSnapshot() -> ManagedRootDiagnosticsSnapshot {
@@ -189,6 +253,20 @@ public actor ManagedRootIndexer {
         statuses.values
             .map { AgentRootStatus(rootID: $0.root.id, path: $0.root.path, state: $0.state, detail: $0.detail) }
             .sorted { $0.path < $1.path }
+    }
+    /// Published schedules are dormant while a root is unavailable or being reconciled.
+    func canExecuteDeadline(at path: String) -> Bool {
+        let normalized = RuleScope.normalized(path)
+        var found = false
+        for status in statuses.values
+            where normalized == status.root.path || normalized.hasPrefix(status.root.path + "/") {
+            found = true
+            guard status.state == .watching,
+                  let session = sessions[status.root.id],
+                  !session.recoveryLatch.isRequired, !session.replayPending,
+                  !rootLock(for: status.root.id).isLocked else { return false }
+        }
+        return found
     }
 
     public func inspectManagedPath(_ path: String) async throws -> RuleCandidate? {
@@ -228,12 +306,14 @@ public actor ManagedRootIndexer {
             topMost.append(path)
         }
         guard !topMost.isEmpty else { return }
-        await operationLock.acquire()
-        defer { operationLock.release() }
         let snapshot = try await store.loadSnapshot()
         for path in topMost {
             try Task.checkCancellation()
             guard let session = sessions.values.first(where: { isWithinManagedRoot(path, rootPath: RuleScope.normalized($0.access.url.path)) }) else { continue }
+            let lock = await acquireRootLock(for: session.root.id)
+            defer { lock.release() }
+            guard sessions[session.root.id]?.access === session.access else { continue }
+            try Task.checkCancellation()
             guard let candidate = try await inspectIfIndexable(path) else {
                 try await store.removeDeadlines(atOrBelow: path)
                 continue
@@ -242,9 +322,15 @@ public actor ManagedRootIndexer {
                 try await scan(URL(fileURLWithPath: path, isDirectory: true), root: session.root, snapshot: snapshot, includeRoot: true)
             } else {
                 let prepared = try await scheduledDeadline(for: candidate, snapshot: snapshot)
-                try await store.removeDeadline(for: candidate.identity)
+                if prepared.deadline == nil { try await store.removeDeadline(for: candidate.identity) }
                 try await persistBatch(deadlines: prepared.deadline.map { [$0] } ?? [], activities: prepared.newActivity.map { [$0] } ?? [])
             }
+        }
+        if let previous = configurationSnapshot, snapshot.revision >= previous.revision {
+            configurationSnapshot = PolicySnapshot(
+                rules: previous.rules, overrides: snapshot.overrides, managedRoots: previous.managedRoots,
+                globallyPaused: previous.globallyPaused, pausedUntil: previous.pausedUntil,
+                settings: previous.settings, revision: snapshot.revision)
         }
         onDeadlinesChanged()
     }
@@ -257,18 +343,25 @@ public actor ManagedRootIndexer {
         cancelAllActivity()
         await operationLock.acquire()
         defer { operationLock.release() }
+        let locks = await acquireRootLocks()
+        defer { for lock in locks { lock.release() } }
         stopSessions()
         statuses.removeAll()
+        configurationSnapshot = nil
+        onDeadlinesChanged()
     }
 
-    /// Cancels in-flight scans and pending retries *before* waiting on `operationLock`, so a long scan
-    /// cannot hold up stop/reconfigure. Cancelled scans exit at their next checkpoint.
+    /// Cancellation precedes draining per-root work, so reconfiguration can interrupt
+    /// a traversal without serializing ordinary work for unrelated roots.
     private func cancelAllActivity() {
         for session in sessions.values {
             session.consumer.cancel()
             session.initialScan?.cancel()
+            scanGenerations[session.root.id, default: 0] &+= 1
+            statuses[session.root.id]?.state = .indexing
         }
         cancelRetries()
+        if !sessions.isEmpty { onDeadlinesChanged() }
     }
 
     private func cancelRetries() {
@@ -281,7 +374,7 @@ public actor ManagedRootIndexer {
         session.consumer.cancel()
         session.initialScan?.cancel()
         session.continuation.finish()
-        session.eventStream.stop()
+        session.eventStream?.stop()
     }
 
     private func stopSessions() {
@@ -291,29 +384,79 @@ public actor ManagedRootIndexer {
     }
 
     public func reconfigure() async throws {
-        cancelAllActivity()
         await operationLock.acquire()
         defer { operationLock.release() }
         let snapshot = try await store.loadSnapshot()
+        let previous = configurationSnapshot
         let retainedPaths = Set(snapshot.managedRoots.map(\.path))
         let retainedIDs = Set(snapshot.managedRoots.map(\.id))
-        let previousRoots = statuses.values.map(\.root)
-        stopSessions()
-        for root in previousRoots where !retainedIDs.contains(root.id) {
+        let removedRoots = statuses.values.map(\.root).filter { !retainedIDs.contains($0.id) }
+        let nextOverlappingIDs = overlappingIDs(in: snapshot.managedRoots)
+        let lockDomainChanges = overlappingRootIDs.symmetricDifference(nextOverlappingIDs)
+        let settingsChanged = previous.map {
+            $0.settings.defaultGracePeriodSeconds != snapshot.settings.defaultGracePeriodSeconds ||
+            $0.settings.protectHiddenFiles != snapshot.settings.protectHiddenFiles
+        } ?? true
+        let affectedRoots = snapshot.managedRoots.filter { root in
+            guard let previous,
+                  let oldRoot = previous.managedRoots.first(where: { $0.id == root.id }) else { return true }
+            if lockDomainChanges.contains(root.id) { return true }
+            if root.path != oldRoot.path || root.bookmarkData != oldRoot.bookmarkData || settingsChanged { return true }
+            let applies: (LifetimeRule) -> Bool = {
+                $0.matchMode == .template || root.path == $0.scope.path || root.path.hasPrefix($0.scope.path + "/") ||
+                $0.scope.path.hasPrefix(root.path + "/")
+            }
+            let overrideApplies: (ItemPolicyOverride) -> Bool = {
+                $0.path == root.path || $0.path.hasPrefix(root.path + "/") || root.path.hasPrefix($0.path + "/")
+            }
+            return previous.rules.filter(applies) != snapshot.rules.filter(applies) ||
+                previous.overrides.filter(overrideApplies) != snapshot.overrides.filter(overrideApplies)
+        }
+        let affectedIDs = Set(affectedRoots.map(\.id) + removedRoots.map(\.id))
+        for id in affectedIDs {
+            sessions[id]?.initialScan?.cancel()
+            scanGenerations[id, default: 0] &+= 1
+            statuses[id]?.state = .indexing
+            retryTasks.removeValue(forKey: id)?.cancel()
+        }
+        if !affectedIDs.isEmpty, !sessions.isEmpty { onDeadlinesChanged() }
+        for id in affectedIDs { _ = rootLock(for: id) }
+        let locks = lockDomainChanges.isEmpty
+            ? uniqueLocks(affectedIDs.map { rootLock(for: $0) })
+            : uniqueLocks(Array(rootLocks.values) + [overlappingRootLock])
+        for lock in locks { await lock.acquire() }
+        defer { for lock in locks { lock.release() } }
+        overlappingRootIDs = nextOverlappingIDs
+        configurationSnapshot = snapshot
+        for root in removedRoots {
+            if let session = sessions.removeValue(forKey: root.id) { tearDown(session) }
             statuses[root.id] = nil
             lastRecovery[root.id] = nil
             lastFailureAudit[root.id] = nil
+            retryAttempts[root.id] = nil
             try await store.removeEventCursor(for: root.id)
             guard !retainedPaths.contains(root.path) else { continue }
-            try await store.removeDeadlines(atOrBelow: root.path)
-            try await store.removeObservedActivity(atOrBelow: root.path)
-            try await store.removeProjectActivity(atOrBelow: root.path)
+            try await store.removeUnmanagedState(atOrBelow: root.path, retaining: snapshot.managedRoots.map(\.path))
         }
-
-        for root in snapshot.managedRoots {
-            try await store.removeDeadlines(atOrBelow: root.path)
-            do { try await startWatching(root) }
-            catch { await handleRootFailure(root, error: error) }
+        for root in affectedRoots {
+            if let session = sessions[root.id],
+               session.root.path == root.path, session.root.bookmarkData == root.bookmarkData,
+               !session.recoveryLatch.isRequired {
+                // Rule/settings changes need fresh matching metadata, not a new watcher
+                // or event cursor. A complete persisted metadata index is not retained.
+                let scan = Task<Void, Never> { [weak self] in
+                    guard let self else { return }
+                    await self.scanRoot(rootID: root.id)
+                }
+                sessions[root.id] = RootWatchSession(
+                    root: root, access: session.access, eventStream: session.eventStream,
+                    continuation: session.continuation, consumer: session.consumer,
+                    recoveryLatch: session.recoveryLatch, initialScan: scan, replayPending: session.replayPending)
+            } else {
+                if let session = sessions.removeValue(forKey: root.id) { tearDown(session) }
+                do { try await startWatching(root) }
+                catch { await handleRootFailure(root, error: error) }
+            }
         }
         onDeadlinesChanged()
     }
@@ -324,14 +467,19 @@ public actor ManagedRootIndexer {
         for session in sessions.values where selectedPaths.contains(session.root.path) {
             session.consumer.cancel()
             session.initialScan?.cancel()
+            scanGenerations[session.root.id, default: 0] &+= 1
+            statuses[session.root.id]?.state = .indexing
         }
         await operationLock.acquire()
         defer { operationLock.release() }
         let snapshot = try await store.loadSnapshot()
-        for root in snapshot.managedRoots where selectedPaths.contains(root.path) {
+        let roots = snapshot.managedRoots.filter { selectedPaths.contains($0.path) }
+        let locks = uniqueLocks(roots.map { rootLock(for: $0.id) })
+        for lock in locks { await lock.acquire() }
+        defer { for lock in locks { lock.release() } }
+        for root in roots {
             retryTasks.removeValue(forKey: root.id)?.cancel()
             if let session = sessions.removeValue(forKey: root.id) { tearDown(session) }
-            try await store.removeDeadlines(atOrBelow: root.path)
             do { try await startWatching(root) }
             catch { await handleRootFailure(root, error: error) }
         }
@@ -343,6 +491,9 @@ public actor ManagedRootIndexer {
     func resumeAfterWake() async throws {
         await operationLock.acquire()
         defer { operationLock.release() }
+        cancelAllActivity()
+        let locks = await acquireRootLocks()
+        defer { for lock in locks { lock.release() } }
         let snapshot = try await store.loadSnapshot()
         for root in snapshot.managedRoots {
             retryTasks.removeValue(forKey: root.id)?.cancel()
@@ -354,25 +505,39 @@ public actor ManagedRootIndexer {
     }
 
     public func processChanges(_ event: ManagedRootEvent, for rootID: UUID) async throws {
-        await operationLock.acquire()
-        defer { operationLock.release() }
-        guard let session = sessions[rootID], !session.recoveryLatch.isRequired else { return }
+        try await processEvent(event, for: rootID, replayThrough: nil)
+    }
+
+    func processEvent(_ event: ManagedRootEvent, for rootID: UUID, replayThrough: UInt64?, sessionAccess: RootAccessToken? = nil) async throws {
+        let lock = await acquireRootLock(for: rootID)
+        defer { lock.release() }
+        try Task.checkCancellation()
+        guard let session = sessions[rootID], !session.recoveryLatch.isRequired,
+              sessionAccess == nil || session.access === sessionAccess else { return }
         let eventCount = min(event.paths.count, event.flags.count)
+        let historyDoneFlag = UInt32(kFSEventStreamEventFlagHistoryDone)
+        let historyDone = event.flags.contains { UInt32($0) & historyDoneFlag != 0 }
         let rootChangedFlag = UInt32(kFSEventStreamEventFlagRootChanged)
         if (0..<eventCount).contains(where: { UInt32(event.flags[$0]) & rootChangedFlag != 0 }) {
             session.recoveryLatch.request()
             statuses[rootID]?.state = .recovering
-            Task { await self.recover(rootID: rootID) }
+            Task { await self.recover(rootID: rootID, sessionAccess: session.access) }
             return
         }
         let recoveryMask = UInt32(kFSEventStreamEventFlagMustScanSubDirs | kFSEventStreamEventFlagUserDropped | kFSEventStreamEventFlagKernelDropped)
         if event.requiresRecovery || (0..<eventCount).contains(where: { UInt32(event.flags[$0]) & recoveryMask != 0 }) {
+            if session.replayPending {
+                session.recoveryLatch.request()
+                statuses[rootID]?.state = .recovering
+                Task { await self.recover(rootID: rootID, sessionAccess: session.access) }
+                return
+            }
             let delay = recoveryDelay(for: rootID)
             if delay > 0 {
                 // Repeated recoveries back off instead of rescanning the tree for every flood.
                 session.recoveryLatch.request()
                 statuses[rootID]?.state = .recovering
-                Task { await self.recover(rootID: rootID, delay: delay) }
+                Task { await self.recover(rootID: rootID, delay: delay, sessionAccess: session.access) }
                 return
             }
             diagnosticsRecorder.recordRecovery()
@@ -392,6 +557,8 @@ public actor ManagedRootIndexer {
         }
         var coalesced: [String: CoalescedEvent] = [:]
         for index in 0..<eventCount {
+            // HistoryDone is a stream boundary, not a filesystem mutation (even with a root path).
+            guard UInt32(event.flags[index]) & historyDoneFlag == 0 else { continue }
             let path = RuleScope.normalized(event.paths[index])
             var change = coalesced[path] ?? CoalescedEvent(flags: 0, eventID: nil)
             change.flags |= UInt32(event.flags[index])
@@ -415,7 +582,11 @@ public actor ManagedRootIndexer {
         }
         let snapshot = try await store.loadSnapshot()
         let now = clock.now()
-        let tracksProjectActivity = snapshot.rules.contains { $0.expiryBasis == .projectActivity && $0.state != .paused }
+        let tracksProjectActivity = snapshot.rules.contains {
+            $0.expiryBasis == .projectActivity && $0.state != .paused &&
+            ($0.matchMode == .template || isWithinManagedRoot($0.scope.path, rootPath: session.root.path) ||
+             isWithinManagedRoot(session.root.path, rootPath: $0.scope.path))
+        }
         var scannedScopes: [String] = []
         var affectedProjects: Set<String> = []
         var failedPaths = 0
@@ -425,21 +596,26 @@ public actor ManagedRootIndexer {
             try Task.checkCancellation()
             guard isWithinManagedRoot(path, rootPath: session.root.path),
                   !scannedScopes.contains(where: { path == $0 || path.hasPrefix($0 + "/") }) else { continue }
-            // Ignored subtrees (.git, node_modules, ...) are skipped at event time exactly as the scan skips them.
-            if tracksProjectActivity,
-               hasIgnoredProjectComponent(in: URL(fileURLWithPath: path).deletingLastPathComponent().path) { continue }
             do {
                 let flags = coalesced[path]?.flags ?? 0
+                let historical = replayThrough.map { boundary in
+                    (coalesced[path]?.eventID ?? UInt64.max) <= boundary
+                } ?? false
+                let activityAt: Date? = historical ? nil : now
                 let exists = Self.pathExistsWithoutFollowingSymlinks(path)
                 if !exists {
-                    if isMeaningfulProjectActivity(path),
-                       let projectPath = try await store.recordProjectActivity(at: path, date: now) {
-                        affectedProjects.insert(projectPath)
+                    if tracksProjectActivity, isMeaningfulProjectActivity(path) {
+                        let date = historical
+                            ? try await survivingParentActivityDate(for: path, rootPath: session.root.path)
+                            : now
+                        if let date, let projectPath = try await recordProjectChange(at: path, date: date, historical: historical) {
+                            affectedProjects.insert(projectPath)
+                        }
                     }
                     try await store.removeDeadlines(atOrBelow: path)
                     try await store.removeObservedActivity(atOrBelow: path)
                     try await store.removeProjectActivity(atOrBelow: path)
-                    if isProjectMarker(path),
+                    if tracksProjectActivity, isProjectMarker(path),
                        let parent = existingProjectScanParent(for: path, root: session.root) {
                         try await scan(parent, root: session.root, snapshot: snapshot, includeRoot: true)
                         scannedScopes.append(parent.path)
@@ -449,15 +625,25 @@ public actor ManagedRootIndexer {
 
                 // A symlink (or an entry that vanished meanwhile) is simply not indexable.
                 guard let candidate = try await inspectIfIndexable(path) else { continue }
-                let isMarker = isProjectMarker(path)
+                let isMarker = tracksProjectActivity && isProjectMarker(path)
                 let isDirectory = candidate.kind == .directory
                 let isCreatedOrRenamed = flags & UInt32(kFSEventStreamEventFlagItemCreated | kFSEventStreamEventFlagItemRenamed) != 0
                 if isMarker {
+                    let knownMarker = try await store.observedActivity(for: candidate.identity)
+                    if knownMarker?.identity.pathHint == candidate.identity.pathHint {
+                        if isMeaningfulProjectActivity(path),
+                           let projectPath = try await recordProjectChange(
+                            at: path, date: activityAt ?? candidate.timestamps.modified ?? .distantPast, historical: historical) {
+                            affectedProjects.insert(projectPath)
+                        }
+                        try await index(candidate, snapshot: snapshot, activityAt: activityAt)
+                        continue
+                    }
                     let scanPath = URL(fileURLWithPath: path).deletingLastPathComponent()
                     try await scan(scanPath, root: session.root, snapshot: snapshot, includeRoot: true)
                     scannedScopes.append(scanPath.path)
                     if let refreshed = try await inspectIfIndexable(path) {
-                        try await index(refreshed, snapshot: snapshot, activityAt: now)
+                        try await index(refreshed, snapshot: snapshot, activityAt: activityAt)
                     }
                     continue
                 }
@@ -469,12 +655,13 @@ public actor ManagedRootIndexer {
                     continue
                 }
 
-                if isMeaningfulProjectActivity(path),
+                if tracksProjectActivity, isMeaningfulProjectActivity(path),
                    (!isDirectory || isCreatedOrRenamed),
-                   let projectPath = try await store.recordProjectActivity(at: path, date: now) {
+                   let projectPath = try await recordProjectChange(
+                    at: path, date: activityAt ?? candidate.timestamps.modified ?? .distantPast, historical: historical) {
                     affectedProjects.insert(projectPath)
                 }
-                try await index(candidate, snapshot: snapshot, activityAt: now)
+                try await index(candidate, snapshot: snapshot, activityAt: activityAt)
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
@@ -494,14 +681,47 @@ public actor ManagedRootIndexer {
             }
         }
         if let firstFailure {
+            if session.replayPending {
+                session.recoveryLatch.request()
+                statuses[rootID]?.state = .recovering
+                await recordIndexFailure(root: session.root, error: firstFailure, summary: "\(failedPaths) replayed path(s) could not be indexed")
+                Task { await self.recover(rootID: rootID, sessionAccess: session.access) }
+                onDeadlinesChanged()
+                return
+            }
             await recordIndexFailure(root: session.root, error: firstFailure, summary: "\(failedPaths) changed path(s) could not be indexed")
+            if statuses[rootID]?.state != .watching {
+                await handleRootFailure(session.root, error: firstFailure)
+            }
         } else if !session.recoveryLatch.isRequired,
            let eventID = coalesced.values.compactMap(\.eventID).max() {
             // The cursor only advances past batches that were fully processed; otherwise a restart replays them.
             do { try await store.saveEventCursor(for: rootID, eventID: eventID) }
             catch { throw SQLiteSafetyStoreError.statementFailed("save event cursor: \(error)") }
         }
+        if firstFailure == nil, historyDone, session.replayPending,
+           sessions[rootID]?.access === session.access, !session.recoveryLatch.isRequired {
+            sessions[rootID]?.replayPending = false
+            if statuses[rootID]?.state == .recovering {
+                statuses[rootID] = RootStatusEntry(root: session.root, state: .watching, detail: nil)
+            }
+            retryAttempts[rootID] = nil
+        }
         onDeadlinesChanged()
+    }
+
+    /// Deleted sources have no remaining file metadata. The nearest surviving directory
+    /// provides a conservative metadata-derived bound without inventing replay-time activity.
+    private func survivingParentActivityDate(for path: String, rootPath: String) async throws -> Date? {
+        var parent = URL(fileURLWithPath: path).deletingLastPathComponent()
+        while isWithinManagedRoot(parent.path, rootPath: rootPath) {
+            if let candidate = try await inspectIfIndexable(parent.path), candidate.kind == .directory {
+                return candidate.timestamps.modified
+            }
+            if parent.path == rootPath { break }
+            parent.deleteLastPathComponent()
+        }
+        return nil
     }
 
     private func existingProjectScanParent(for path: String, root: ManagedRoot) -> URL? {
@@ -516,8 +736,9 @@ public actor ManagedRootIndexer {
         repeat {
             try Task.checkCancellation()
             let page: PersistedDeadlinePage
-            do { page = try await store.deadlinePage(atOrBelow: path, afterIdentityKey: cursor) }
+            do { page = try await store.deadlinePage(atOrBelow: path, afterIdentityKey: cursor, expiryBasis: .projectActivity) }
             catch { throw SQLiteSafetyStoreError.statementFailed("query project deadline page: \(error)") }
+            var updates: [PersistedDeadline] = []
             for deadline in page.deadlines {
                 guard let candidate = try await inspectIfIndexable(deadline.identity.pathHint),
                       candidate.identity == deadline.identity else {
@@ -529,12 +750,15 @@ public actor ManagedRootIndexer {
                 do { refreshed = try await scheduledDeadline(for: candidate, snapshot: snapshot) }
                 catch { throw SQLiteSafetyStoreError.statementFailed("resolve project deadline: \(error)") }
                 if let updated = refreshed.deadline {
-                    do { try await store.saveDeadline(updated) }
-                    catch { throw SQLiteSafetyStoreError.statementFailed("save refreshed project deadline: \(error)") }
+                    if updated != deadline { updates.append(updated) }
                 } else {
                     do { try await store.removeDeadline(for: deadline.identity, scheduledAt: deadline.scheduledAt) }
                     catch { throw SQLiteSafetyStoreError.statementFailed("remove ineligible project deadline: \(error)") }
                 }
+            }
+            if !updates.isEmpty {
+                try await store.saveDeadlines(updates)
+                diagnosticsRecorder.recordPersistenceBatch(updates.count)
             }
             cursor = page.nextCursor
             if page.deadlines.isEmpty { break }
@@ -542,6 +766,7 @@ public actor ManagedRootIndexer {
     }
 
     private func startWatching(_ root: ManagedRoot, replayFromCursorWithoutScan: Bool = false) async throws {
+        _ = rootLock(for: root.id)
         statuses[root.id] = RootStatusEntry(root: root, state: .indexing, detail: nil)
         let resolvedURL: URL
         if let bookmarkResolver {
@@ -575,9 +800,12 @@ public actor ManagedRootIndexer {
         let diagnosticsRecorder = self.diagnosticsRecorder
         let recoveryLatch = RootRecoveryLatch()
         let savedCursor = try await store.eventCursor(for: root.id)
-        let stream = try ManagedRootEventStream(
-            rootPath: resolvedURL.path,
-            since: savedCursor ?? FSEventStreamEventId(kFSEventStreamEventIdSinceNow)
+        // Capture before stream creation: IDs at or below this boundary are historical
+        // replay, not activity occurring at the time the consumer processes them.
+        let replayBoundary = savedCursor == nil ? nil : UInt64(FSEventsGetCurrentEventId())
+        let stream = try eventStreamFactory(
+            resolvedURL.path,
+            savedCursor ?? FSEventStreamEventId(kFSEventStreamEventIdSinceNow)
         ) { [weak self] event in
             switch continuation.yield(event) {
             case .enqueued(let remainingCapacity):
@@ -585,20 +813,24 @@ public actor ManagedRootIndexer {
             case .dropped:
                 diagnosticsRecorder.recordQueueDepth(512)
                 recoveryLatch.request()
-                Task { await self?.recover(rootID: root.id) }
+                Task { await self?.recover(rootID: root.id, sessionAccess: access) }
             case .terminated:
                 break
             @unknown default:
                 recoveryLatch.request()
-                Task { await self?.recover(rootID: root.id) }
+                Task { await self?.recover(rootID: root.id, sessionAccess: access) }
             }
         }
         let consumer = Task { [weak self] in
             for await event in events {
                 guard !Task.isCancelled else { return }
-                do { try await self?.processChanges(event, for: root.id) }
-                catch is CancellationError { return }
-                catch { await self?.handleEventFailure(root: root, error: error) }
+                do { try await self?.processEvent(event, for: root.id, replayThrough: replayBoundary, sessionAccess: access) }
+                catch is CancellationError {
+                    if Task.isCancelled { return }
+                    // A cancelled replay batch must not be skipped before accepting HistoryDone.
+                    await self?.handleEventFailure(root: root, error: CancellationError(), sessionAccess: access)
+                }
+                catch { await self?.handleEventFailure(root: root, error: error, sessionAccess: access) }
             }
         }
         let scansNow = !(replayFromCursorWithoutScan && savedCursor != nil)
@@ -608,10 +840,9 @@ public actor ManagedRootIndexer {
                 await self.scanRoot(rootID: root.id)
             }
             : nil
-        sessions[root.id] = RootWatchSession(root: root, access: access, eventStream: stream, continuation: continuation, consumer: consumer, recoveryLatch: recoveryLatch, initialScan: initialScan)
+        sessions[root.id] = RootWatchSession(root: root, access: access, eventStream: stream, continuation: continuation, consumer: consumer, recoveryLatch: recoveryLatch, initialScan: initialScan, replayPending: !scansNow)
         if !scansNow {
-            statuses[root.id] = RootStatusEntry(root: root, state: .watching, detail: nil)
-            retryAttempts[root.id] = nil
+            statuses[root.id] = RootStatusEntry(root: root, state: .recovering, detail: "Replaying filesystem history.")
         }
     }
 
@@ -631,14 +862,16 @@ public actor ManagedRootIndexer {
     }
 
     private func scanRoot(rootID: UUID) async {
-        await operationLock.acquire()
-        defer { operationLock.release() }
+        let lock = await acquireRootLock(for: rootID)
+        defer { lock.release() }
         guard !Task.isCancelled, let session = sessions[rootID] else { return }
         do {
             let snapshot = try await store.loadSnapshot()
             try await scan(session.access.url, root: session.root, snapshot: snapshot, includeRoot: false)
-            statuses[rootID] = RootStatusEntry(root: session.root, state: .watching, detail: nil)
-            retryAttempts[rootID] = nil
+            if sessions[rootID]?.replayPending == false, !session.recoveryLatch.isRequired {
+                statuses[rootID] = RootStatusEntry(root: session.root, state: .watching, detail: nil)
+                retryAttempts[rootID] = nil
+            }
             onDeadlinesChanged()
         } catch {
             await handleRootFailure(session.root, error: error)
@@ -656,14 +889,15 @@ public actor ManagedRootIndexer {
         return streak == 0 ? 0 : min(60, pow(2, Double(streak)))
     }
 
-    private func recover(rootID: UUID, delay explicitDelay: TimeInterval? = nil) async {
+    private func recover(rootID: UUID, delay explicitDelay: TimeInterval? = nil, sessionAccess: RootAccessToken? = nil) async {
+        guard sessionAccess == nil || sessions[rootID]?.access === sessionAccess else { return }
         guard recoveryRequests.insert(rootID).inserted else { return }
         defer { recoveryRequests.remove(rootID) }
         let delay = explicitDelay ?? recoveryDelay(for: rootID)
         if delay > 0 { try? await sleep(delay) }
-        await operationLock.acquire()
-        defer { operationLock.release() }
-        guard let session = sessions[rootID] else { return }
+        let lock = await acquireRootLock(for: rootID)
+        defer { lock.release() }
+        guard let session = sessions[rootID], sessionAccess == nil || session.access === sessionAccess else { return }
         diagnosticsRecorder.recordRecovery()
         statuses[rootID]?.state = .recovering
         tearDown(session)
@@ -677,11 +911,13 @@ public actor ManagedRootIndexer {
     }
 
     /// A processing failure means events were consumed without being indexed; rescan via the debounced recovery path.
-    private func handleEventFailure(root: ManagedRoot, error: Error) async {
-        await recordIndexFailure(root: root, error: error)
+    private func handleEventFailure(root: ManagedRoot, error: Error, sessionAccess: RootAccessToken? = nil) async {
+        guard sessionAccess == nil || sessions[root.id]?.access === sessionAccess else { return }
         guard let session = sessions[root.id], !session.recoveryLatch.isRequired else { return }
         session.recoveryLatch.request()
-        Task { await self.recover(rootID: root.id) }
+        statuses[root.id]?.state = .recovering
+        await recordIndexFailure(root: root, error: error)
+        Task { await self.recover(rootID: root.id, sessionAccess: session.access) }
     }
 
     private func handleRootFailure(_ root: ManagedRoot, error: Error) async {
@@ -690,6 +926,7 @@ public actor ManagedRootIndexer {
         statuses[root.id] = RootStatusEntry(root: root, state: state, detail: detail)
         await recordIndexFailure(root: root, error: error)
         scheduleRetry(for: root)
+        onDeadlinesChanged()
     }
 
     /// Failed starts, scans and recoveries are retried with capped exponential backoff until the root works
@@ -707,8 +944,8 @@ public actor ManagedRootIndexer {
     }
 
     private func retryRoot(rootID: UUID, fallback: ManagedRoot) async {
-        await operationLock.acquire()
-        defer { operationLock.release() }
+        let lock = await acquireRootLock(for: rootID)
+        defer { lock.release() }
         guard !Task.isCancelled else { return }
         retryTasks[rootID] = nil
         let snapshot: PolicySnapshot
@@ -724,7 +961,6 @@ public actor ManagedRootIndexer {
         }
         if let session = sessions.removeValue(forKey: rootID) { tearDown(session) }
         do {
-            try await store.removeDeadlines(atOrBelow: root.path)
             try await startWatching(root)
         } catch {
             await handleRootFailure(root, error: error)
@@ -768,22 +1004,35 @@ public actor ManagedRootIndexer {
     }
 
     private func scan(_ url: URL, root: ManagedRoot, snapshot: PolicySnapshot, includeRoot: Bool) async throws {
-        // Fail before touching any persisted state if the directory itself cannot be read.
-        try Self.requireReadableDirectory(url.path)
         try Task.checkCancellation()
+        let generation = scanGenerations[root.id, default: 0]
         let scanStarted = ProcessInfo.processInfo.systemUptime
         let cpuStarted = processCPUSeconds()
         var indexedEntries: UInt64 = 0
-        try await store.removeDeadlines(atOrBelow: url.path)
+        statuses[root.id]?.state = .indexing
         let observationTime = clock.now()
         let projectScanID = try await store.beginProjectActivityScan()
+        let candidateScanID = try await store.beginCandidateScan(atOrBelow: url.path)
         do {
+            try Self.requireReadableDirectory(url.path)
             indexedEntries = try await scanBody(
                 url, root: root, snapshot: snapshot, includeRoot: includeRoot,
-                scanID: projectScanID, observationTime: observationTime
+                scanID: projectScanID, candidateScanID: candidateScanID,
+                generation: generation, observationTime: observationTime
             )
+            try checkScanCancellation(rootID: root.id, generation: generation)
+            try await store.commitCandidateScan(scanID: candidateScanID)
+            try checkScanCancellation(rootID: root.id, generation: generation)
+            statuses[root.id]?.state = sessions[root.id]?.replayPending == true ? .recovering : .watching
         } catch {
             try? await store.endProjectActivityScan(scanID: projectScanID)
+            try? await store.endCandidateScan(scanID: candidateScanID)
+            if !(error is CancellationError) {
+                let (state, detail) = Self.classify(error)
+                statuses[root.id]?.state = state
+                statuses[root.id]?.detail = detail
+            }
+            onDeadlinesChanged()
             throw error
         }
         let usage = processUsage()
@@ -810,10 +1059,16 @@ public actor ManagedRootIndexer {
         snapshot: PolicySnapshot,
         includeRoot: Bool,
         scanID projectScanID: String,
+        candidateScanID: String,
+        generation: UInt64,
         observationTime: Date
     ) async throws -> UInt64 {
         var indexedEntries: UInt64 = 0
-        let tracksProjectActivity = snapshot.rules.contains { $0.expiryBasis == .projectActivity && $0.state != .paused }
+        let tracksProjectActivity = snapshot.rules.contains {
+            $0.expiryBasis == .projectActivity && $0.state != .paused &&
+            ($0.matchMode == .template || isWithinManagedRoot($0.scope.path, rootPath: root.path) ||
+             isWithinManagedRoot(root.path, rootPath: $0.scope.path))
+        }
         let batches = ScanBatchAccumulator()
 
         if includeRoot, let candidate = try await inspectIfIndexable(url.path) {
@@ -823,40 +1078,46 @@ public actor ManagedRootIndexer {
                 root: root,
                 snapshot: snapshot,
                 scanID: projectScanID,
+                candidateScanID: candidateScanID,
                 observationTime: observationTime,
                 tracksProjectActivity: tracksProjectActivity,
                 batches: batches
             )
         }
 
-        // Unreadable subdirectories and entries that vanish mid-scan are skipped and reported once;
-        // they never abort indexing of the rest of the tree.
-        var unreadableEntries = 0
+        // Preserve known schedules below unreadable locations while indexing accessible items.
+        // Project inactivity requires a complete activity view and therefore fails closed.
         var firstUnreadable: Error?
+        var unreadablePaths: Set<String> = []
+        var unreadableOverflow = false
+        func recordUnreadable(_ path: String, error: Error) -> Bool {
+            if firstUnreadable == nil { firstUnreadable = error }
+            if unreadablePaths.contains(path) { return true }
+            guard unreadablePaths.count < 256 else {
+                unreadableOverflow = true
+                return false
+            }
+            unreadablePaths.insert(path)
+            return true
+        }
         guard let enumerator = fileManager.enumerator(
             at: url,
-            includingPropertiesForKeys: [.isSymbolicLinkKey],
+            includingPropertiesForKeys: [],
             options: [],
-            errorHandler: { _, error in
-                unreadableEntries += 1
-                if firstUnreadable == nil { firstUnreadable = error }
-                return true
+            errorHandler: { failedURL, error in
+                recordUnreadable(failedURL.standardizedFileURL.path, error: error)
             }
         ) else {
             throw CocoaError(.fileReadUnknown)
         }
 
         while let childURL = enumerator.nextObject() as? URL {
-            try Task.checkCancellation()
-            if let values = try? childURL.resourceValues(forKeys: [.isSymbolicLinkKey]), values.isSymbolicLink == true {
-                continue
-            }
+            try checkScanCancellation(rootID: root.id, generation: generation)
             let inspected: RuleCandidate?
             do { inspected = try await inspectIfIndexable(childURL.path) }
             catch is CancellationError { throw CancellationError() }
             catch {
-                unreadableEntries += 1
-                if firstUnreadable == nil { firstUnreadable = error }
+                guard recordUnreadable(childURL.standardizedFileURL.path, error: error) else { throw error }
                 continue
             }
             guard let candidate = inspected else { continue }
@@ -866,29 +1127,57 @@ public actor ManagedRootIndexer {
                 root: root,
                 snapshot: snapshot,
                 scanID: projectScanID,
+                candidateScanID: candidateScanID,
                 observationTime: observationTime,
                 tracksProjectActivity: tracksProjectActivity,
                 batches: batches
             )
-            if tracksProjectActivity,
-               candidate.kind == .directory,
-               hasIgnoredProjectComponent(in: candidate.identity.pathHint) {
-                enumerator.skipDescendants()
-            }
         }
 
-        try await persistProjectScanBatch(batches.take(), scanID: projectScanID)
-        try await store.finishProjectActivityScan(scanID: projectScanID, atOrBelow: url.path)
-        if tracksProjectActivity {
-            try await scanDeadlines(url, snapshot: snapshot, includeRoot: includeRoot, initialObservationAt: observationTime)
+        try checkScanCancellation(rootID: root.id, generation: generation)
+        if let firstUnreadable, tracksProjectActivity || unreadableOverflow { throw firstUnreadable }
+        try await persistProjectScanBatch(batches.take(), scanID: projectScanID, candidateScanID: candidateScanID)
+        for path in unreadablePaths {
+            var cursor: String?
+            repeat {
+                try checkScanCancellation(rootID: root.id, generation: generation)
+                let page = try await store.deadlinePage(atOrBelow: path, afterIdentityKey: cursor)
+                if !page.deadlines.isEmpty {
+                    try await store.stageDeadlines(page.deadlines, scanID: candidateScanID)
+                    diagnosticsRecorder.recordPersistenceBatch(page.deadlines.count)
+                }
+                cursor = page.nextCursor
+            } while cursor != nil
         }
         if let firstUnreadable {
             await recordIndexFailure(
-                root: root,
-                error: firstUnreadable,
-                summary: "\(unreadableEntries) unreadable entr\(unreadableEntries == 1 ? "y was" : "ies were") skipped while indexing"
+                root: root, error: firstUnreadable,
+                summary: "Unreadable locations were skipped; their prior schedules were retained"
             )
         }
+        if tracksProjectActivity {
+            try await store.finishProjectActivityScan(scanID: projectScanID, atOrBelow: url.path)
+        } else {
+            try await store.endProjectActivityScan(scanID: projectScanID)
+            return indexedEntries
+        }
+        var cursor: String?
+        repeat {
+            try checkScanCancellation(rootID: root.id, generation: generation)
+            let page = try await store.candidatePage(scanID: candidateScanID, afterIdentityKey: cursor)
+            var deadlines: [PersistedDeadline] = []
+            var activities: [PersistedObservedActivity] = []
+            for candidate in page.candidates {
+                try checkScanCancellation(rootID: root.id, generation: generation)
+                let prepared = try await scheduledDeadline(for: candidate, snapshot: snapshot, initialObservationAt: observationTime)
+                if let deadline = prepared.deadline { deadlines.append(deadline) }
+                if let activity = prepared.newActivity { activities.append(activity) }
+            }
+            if !activities.isEmpty { try await store.recordInitialObservations(activities) }
+            if !deadlines.isEmpty { try await store.stageDeadlines(deadlines, scanID: candidateScanID) }
+            diagnosticsRecorder.recordPersistenceBatch(max(deadlines.count, activities.count))
+            cursor = page.nextCursor
+        } while cursor != nil
         return indexedEntries
     }
 
@@ -897,11 +1186,14 @@ public actor ManagedRootIndexer {
         root: ManagedRoot,
         snapshot: PolicySnapshot,
         scanID: String,
+        candidateScanID: String,
         observationTime: Date,
         tracksProjectActivity: Bool,
         batches: ScanBatchAccumulator
     ) async throws {
-        let project = try await projectRoot(for: candidate, managedRoot: root, at: observationTime)
+        let project = tracksProjectActivity
+            ? try await projectRoot(for: candidate, managedRoot: root, at: observationTime)
+            : nil
         let sourceObservation: ProjectActivityObservation?
         if tracksProjectActivity,
            candidate.kind == .file,
@@ -911,20 +1203,36 @@ public actor ManagedRootIndexer {
         } else {
             sourceObservation = nil
         }
+        let markerActivity: PersistedObservedActivity?
+        if tracksProjectActivity && isProjectMarker(candidate.identity.pathHint) {
+            let existing = try await store.observedActivity(for: candidate.identity)
+            markerActivity = PersistedObservedActivity(
+                identity: candidate.identity,
+                firstObservedAt: existing?.firstObservedAt ?? observationTime,
+                lastObservedAt: existing?.lastObservedAt ?? observationTime
+            )
+        } else {
+            markerActivity = nil
+        }
         let prepared = tracksProjectActivity
             ? nil
             : try await scheduledDeadline(for: candidate, snapshot: snapshot, initialObservationAt: observationTime)
         if let batch = batches.append(
+            candidate: tracksProjectActivity ? candidate : nil,
             project: project,
             sourceObservation: sourceObservation,
             deadline: prepared?.deadline,
-            observedActivity: prepared?.newActivity
+            observedActivity: prepared?.newActivity ?? markerActivity
         ) {
-            try await persistProjectScanBatch(batch, scanID: scanID)
+            try await persistProjectScanBatch(batch, scanID: scanID, candidateScanID: candidateScanID)
         }
     }
 
-    private func persistProjectScanBatch(_ batch: ScanBatch, scanID: String) async throws {
+    private func persistProjectScanBatch(_ batch: ScanBatch, scanID: String, candidateScanID: String) async throws {
+        if !batch.candidates.isEmpty {
+            try await store.stageCandidates(batch.candidates, scanID: candidateScanID)
+            diagnosticsRecorder.recordPersistenceBatch(batch.candidates.count)
+        }
         if !batch.projects.isEmpty {
             try await store.recordProjectActivities(batch.projects, scanID: scanID)
             diagnosticsRecorder.recordPersistenceBatch(batch.projects.count)
@@ -933,54 +1241,16 @@ public actor ManagedRootIndexer {
             try await store.recordProjectObservations(batch.sourceObservations, scanID: scanID)
             diagnosticsRecorder.recordPersistenceBatch(batch.sourceObservations.count)
         }
-        try await persistBatch(deadlines: batch.deadlines, activities: batch.observedActivity)
+        if !batch.observedActivity.isEmpty {
+            try await store.recordInitialObservations(batch.observedActivity)
+            diagnosticsRecorder.recordPersistenceBatch(batch.observedActivity.count)
+        }
+        if !batch.deadlines.isEmpty {
+            try await store.stageDeadlines(batch.deadlines, scanID: candidateScanID)
+            diagnosticsRecorder.recordPersistenceBatch(batch.deadlines.count)
+        }
     }
 
-    private func scanDeadlines(
-        _ url: URL,
-        snapshot: PolicySnapshot,
-        includeRoot: Bool,
-        initialObservationAt: Date
-    ) async throws {
-        let batches = ScanBatchAccumulator()
-        if includeRoot, let candidate = try await inspectIfIndexable(url.path) {
-            try await collectDeadline(candidate, snapshot: snapshot, initialObservationAt: initialObservationAt, batches: batches)
-        }
-        guard let enumerator = fileManager.enumerator(
-            at: url,
-            includingPropertiesForKeys: [.isSymbolicLinkKey],
-            options: [],
-            errorHandler: { _, _ in true }
-        ) else {
-            throw CocoaError(.fileReadUnknown)
-        }
-        while let childURL = enumerator.nextObject() as? URL {
-            try Task.checkCancellation()
-            if let values = try? childURL.resourceValues(forKeys: [.isSymbolicLinkKey]), values.isSymbolicLink == true {
-                continue
-            }
-            let inspected: RuleCandidate?
-            do { inspected = try await inspectIfIndexable(childURL.path) }
-            catch is CancellationError { throw CancellationError() }
-            catch { continue }
-            guard let candidate = inspected else { continue }
-            try await collectDeadline(candidate, snapshot: snapshot, initialObservationAt: initialObservationAt, batches: batches)
-        }
-        let batch = batches.take()
-        try await persistBatch(deadlines: batch.deadlines, activities: batch.observedActivity)
-    }
-
-    private func collectDeadline(
-        _ candidate: RuleCandidate,
-        snapshot: PolicySnapshot,
-        initialObservationAt: Date,
-        batches: ScanBatchAccumulator
-    ) async throws {
-        let prepared = try await scheduledDeadline(for: candidate, snapshot: snapshot, initialObservationAt: initialObservationAt)
-        if let batch = batches.append(deadline: prepared.deadline, observedActivity: prepared.newActivity) {
-            try await persistBatch(deadlines: batch.deadlines, activities: batch.observedActivity)
-        }
-    }
 
 
     private func projectRoot(
@@ -996,9 +1266,18 @@ public actor ManagedRootIndexer {
         guard isWithinManagedRoot(path, rootPath: managedRoot.path),
               let rootCandidate = try await inspectIfIndexable(path),
               rootCandidate.kind == .directory else { return nil }
+        let basis: Date
+        if isMeaningfulProjectActivity(candidate.identity.pathHint) {
+            basis = candidate.timestamps.modified ?? fallbackActivity
+        } else if let created = candidate.timestamps.created {
+            // A noisy marker's directory mtime changes for Git's own bookkeeping.
+            basis = created
+        } else {
+            basis = try await store.observedActivity(for: candidate.identity)?.firstObservedAt ?? fallbackActivity
+        }
         return PersistedProjectActivity(
             identity: rootCandidate.identity,
-            lastActivityAt: candidate.timestamps.modified ?? fallbackActivity
+            lastActivityAt: basis
         )
     }
 
@@ -1015,11 +1294,21 @@ public actor ManagedRootIndexer {
     }
 
     private func hasIgnoredProjectComponent(in path: String) -> Bool {
-        let components = RuleScope.normalized(path).split(separator: "/").map(String.init)
-        let ignored: Set<String> = [".git", "node_modules", ".venv", "venv", "__pycache__", ".pytest_cache", ".cache", "dist", "build", "target"]
-        guard !components.contains(where: ignored.contains) else { return true }
+        let normalized = RuleScope.normalized(path)
+        var managedPath: String?
+        for session in sessions.values
+            where normalized == session.root.path || normalized.hasPrefix(session.root.path + "/") {
+            if managedPath == nil || session.root.path.count > managedPath!.count { managedPath = session.root.path }
+        }
+        let relative = normalized.dropFirst(managedPath?.count ?? 0)
+        let components = relative.split(separator: "/")
+        guard !components.contains(where: { Self.ignoredProjectComponents.contains($0) }) else { return true }
         return zip(components, components.dropFirst()).contains { $0 == ".next" && $1 == "cache" }
     }
+    private static let ignoredProjectComponents: Set<Substring> = [
+        ".git", "node_modules", ".venv", "venv", "__pycache__", ".pytest_cache",
+        ".cache", "dist", "build", "target"
+    ]
 
     private static let projectMarkers: Set<String> = [
         ".git", "package.json", "pyproject.toml", "requirements.txt", "Cargo.toml",
@@ -1037,8 +1326,28 @@ public actor ManagedRootIndexer {
         }
 
     }
-    private func index(_ candidate: RuleCandidate, snapshot: PolicySnapshot, activityAt date: Date) async throws {
+    private func recordProjectChange(at path: String, date: Date, historical: Bool) async throws -> String? {
+        if historical {
+            let durableActivity = try await store.projectActivity(for: path) ?? .distantPast
+            guard date > durableActivity else { return nil }
+        }
+        return try await store.recordProjectActivity(at: path, date: date)
+    }
+
+    private func index(_ candidate: RuleCandidate, snapshot: PolicySnapshot, activityAt date: Date?) async throws {
         let prepared = try await scheduledDeadline(for: candidate, snapshot: snapshot, activityAt: date)
+        if let activity = prepared.newActivity {
+            try await store.recordInitialObservations([activity])
+        }
+        if isProjectMarker(candidate.identity.pathHint), prepared.newActivity == nil {
+            let existing = try await store.observedActivity(for: candidate.identity)
+            let date = date ?? candidate.timestamps.modified ?? clock.now()
+            try await store.recordInitialObservations([
+                PersistedObservedActivity(identity: candidate.identity,
+                    firstObservedAt: existing?.firstObservedAt ?? date,
+                    lastObservedAt: existing?.lastObservedAt ?? date)
+            ])
+        }
         if let deadline = prepared.deadline {
             try await store.saveDeadline(deadline)
         } else {
@@ -1071,8 +1380,14 @@ public actor ManagedRootIndexer {
                         lastObservedAt: modifiedAt
                     )
                 } else {
-                    activity = existing
+                    activity = PersistedObservedActivity(
+                        identity: candidate.identity,
+                        firstObservedAt: existing.firstObservedAt,
+                        lastObservedAt: existing.lastObservedAt
+                    )
                 }
+                // Refresh mutable hints before old-path rename cleanup, preserving dates.
+                if existing.identity.pathHint != candidate.identity.pathHint { newActivity = activity }
             } else {
                 let now = initialObservationAt ?? clock.now()
                 activity = PersistedObservedActivity(identity: candidate.identity, firstObservedAt: now, lastObservedAt: now)
@@ -1117,7 +1432,7 @@ public actor ManagedRootIndexer {
         try? await store.append(TrashAuditEvent(
             occurredAt: now,
             kind: .safetySkipped,
-            detail: "Indexing root \(root.path) stopped safely: \(reason)"
+            detail: "Indexing root \(root.path): \(reason)"
         ))
     }
 

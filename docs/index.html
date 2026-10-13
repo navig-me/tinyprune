@@ -125,9 +125,11 @@
         <section id="preview">
           <h2>Check the matches before cleanup</h2>
           <p>A rule saved in Preview runs matching and scheduling without moving anything to Trash. Upcoming shows indexed candidates and their explanations.</p>
+          <p>Overview totals count all published Active and Preview schedules, not just the visible sample. Upcoming filters by rule and mode before paging; use <strong>Load more</strong> to review the remaining items. Size estimates remain bounded metadata samples rather than exact totals for every scheduled folder.</p>
           <ol><li>Choose a managed folder and create a rule.</li><li>Use <strong>Preview matches</strong> in the rule editor for a read-only dry run. It is bounded and cancellable, and does not save changes or trash items.</li><li>Review the matches, deadlines, and explanations. Add Keep or expiry overrides where needed.</li><li>Enable the rule only when the result matches what you want.</li></ol>
           <p>Preview counts only what cleanup would actually act on: items that would be skipped (a protected descendant, an unsupported folder action, or an item nested inside an already matched folder) are excluded, and only the top-most match is listed.</p>
-          <p>The Rules screen also shows scheduled matches and how many are already eligible. These counts come from the index, so a newly saved rule needs time to be indexed.</p>
+          <p>The Rules screen also shows scheduled matches and how many are already eligible. A newly saved rule needs time to be indexed. While indexing or when a folder is unavailable, counts can reflect the last published schedules; successful reconciliation replaces them together. Cleanup waits for available folders and completed wake-event replay, then rechecks each candidate before moving it.</p>
+          <p>First-observed lifetimes survive renames and restarts for the same filesystem identity. Inactivity deadlines can still change after genuine meaningful activity or rule edits; replaying an old event does not restart the timer at replay time. Git bookkeeping and generated dependency changes do not count as meaningful project activity.</p>
         </section>
         <section id="templates">
           <h2>Start with a template</h2>

@@ -11,7 +11,7 @@ import TinyPruneDomain
     }
 
     @Test func testProtocolVersionIsExplicit() {
-        #expect(TinyPruneAgentXPC.protocolVersion == 2)
+        #expect(TinyPruneAgentXPC.protocolVersion == 3)
         #expect(TinyPruneAgentXPC.machServiceName == "com.navig-me.tinyprune.agent")
     }
 
@@ -35,6 +35,7 @@ import TinyPruneDomain
         let legacy = Data(#"{"policy":{"rules":[],"overrides":[],"globallyPaused":false},"upcoming":[]}"#.utf8)
         #expect(try JSONDecoder().decode(AgentOverviewSnapshot.self, from: legacy).rootStatuses.isEmpty)
         #expect(try JSONDecoder().decode(AgentOverviewSnapshot.self, from: legacy).reclaimed == nil)
+        #expect(try JSONDecoder().decode(AgentOverviewSnapshot.self, from: legacy).deadlineSummary == nil)
     }
 
     @Test func reclaimedDTOsAndActivitySizesRoundTrip() throws {
@@ -59,6 +60,7 @@ import TinyPruneDomain
             ]),
             .loadRoots,
             .cancelPreview,
+            .loadUpcoming(ruleID: UUID(), disposition: .active, after: AgentUpcomingCursor(scheduledAt: Date(timeIntervalSince1970: 100), identityKey: "stable-id"), limit: 73),
         ]
         for operation in operations {
             let request = AgentRequest(operation: operation)
@@ -66,6 +68,7 @@ import TinyPruneDomain
         }
         let payloads: [AgentResponsePayload] = [
             .roots([root]),
+            .upcomingPage(AgentUpcomingPage(items: [], nextCursor: AgentUpcomingCursor(scheduledAt: Date(timeIntervalSince1970: 100), identityKey: "stable-id"), totalCount: 451)),
             .failure(.policyConflict),
             .failure(.rootUnavailable("/Volumes/Disk: offline")),
         ]

@@ -45,7 +45,7 @@ public actor AgentRequestHandler {
         case .replacePolicy, .setItemOverride, .clearItemOverride, .setGlobalPause, .pauseUntil,
              .updateSettings, .deleteRule, .rebuildIndex, .saveRule, .setItemOverrides:
             true
-        case .health, .loadPolicy, .loadOverview, .loadActivity, .explainItem, .loadSettings,
+        case .health, .loadPolicy, .loadOverview, .loadUpcoming, .loadActivity, .explainItem, .loadSettings,
              .itemSize, .previewRule, .loadRoots, .cancelPreview:
             false
         }
@@ -77,19 +77,29 @@ public actor AgentRequestHandler {
                 let snapshot = try await store.loadSnapshot()
                 return encode(AgentResponse(payload: .policy(agentPolicy(from: snapshot))))
             case .loadOverview:
-                let snapshot = try await store.loadSnapshot()
-                let upcoming = try await store.upcomingDeadlines(limit: 200).map { AgentUpcomingItem(explanation: $0.explanation) }
-                let stats = try await store.deadlineCountsByRule(now: clock.now()).map { AgentRuleStats(ruleID: $0.key, matches: $0.value.matches, due: $0.value.due) }
+                let loaded = try await store.overviewSnapshot(now: clock.now())
+                let upcoming = loaded.upcoming.map { AgentUpcomingItem(explanation: $0.explanation) }
+                let summary = loaded.summary
+                let stats = loaded.ruleCounts.map { AgentRuleStats(ruleID: $0.key, matches: $0.value.matches, due: $0.value.due) }
                 let statuses = await runtime?.rootStatuses() ?? []
                 let reclaimed = try await reclaimedSummary(now: clock.now())
                 return encode(AgentResponse(payload: .overview(AgentOverviewSnapshot(
-                    policy: agentPolicy(from: snapshot),
+                    policy: agentPolicy(from: loaded.policy),
                     upcoming: upcoming,
                     ruleStats: stats,
-                    indexedItems: try await store.indexedDeadlineCount(),
+                    indexedItems: loaded.indexedItems,
                     databaseBytes: await store.databaseSizeBytes(),
                     rootStatuses: statuses,
-                    reclaimed: reclaimed
+                    reclaimed: reclaimed,
+                    deadlineSummary: AgentDeadlineSummary(active: summary.active, preview: summary.preview, activeSoon: summary.activeSoon)
+                ))))
+            case .loadUpcoming(let ruleID, let disposition, let after, let limit):
+                let cursor = after.map { PersistedUpcomingCursor(scheduledAt: $0.scheduledAt, identityKey: $0.identityKey) }
+                let page = try await store.upcomingDeadlinePage(ruleID: ruleID, disposition: disposition, after: cursor, limit: limit)
+                return encode(AgentResponse(payload: .upcomingPage(AgentUpcomingPage(
+                    items: page.deadlines.map { AgentUpcomingItem(explanation: $0.explanation) },
+                    nextCursor: page.nextCursor.map { AgentUpcomingCursor(scheduledAt: $0.scheduledAt, identityKey: $0.identityKey) },
+                    totalCount: page.totalCount
                 ))))
             case .loadRoots:
                 let snapshot = try await store.loadSnapshot()
@@ -256,39 +266,20 @@ public actor AgentRequestHandler {
         }
     }
 
-    private struct ReclaimedTally: Sendable {
-        var lifetimeItems = 0
-        var lifetimeBytes: Int64 = 0
-        var itemsWithKnownSize = 0
-        var firstMovedAt: Date?
-        var lastMovedAt: Date?
-        var dayItems: [Int]
-        var dayBytes: [Int64]
-    }
 
     private func reclaimedSummary(now: Date) async throws -> AgentReclaimedSummary {
         let calendar = self.calendar
         let today = calendar.startOfDay(for: now)
         let dates = (-13...0).compactMap { calendar.date(byAdding: .day, value: $0, to: today) }
-        let indexes = Dictionary(uniqueKeysWithValues: dates.enumerated().map { ($0.element, $0.offset) })
-        let initial = ReclaimedTally(
-            dayItems: Array(repeating: 0, count: dates.count),
-            dayBytes: Array(repeating: 0, count: dates.count)
-        )
-        let tally = try await store.reduceMovedToTrashEvents(into: initial) { tally, event in
-            let items = event.itemCount ?? 1
-            let bytes = event.bytes ?? 0
-            tally.lifetimeItems += items
-            tally.lifetimeBytes += bytes
-            if event.bytes != nil { tally.itemsWithKnownSize += items }
-            tally.firstMovedAt = min(tally.firstMovedAt ?? event.occurredAt, event.occurredAt)
-            tally.lastMovedAt = max(tally.lastMovedAt ?? event.occurredAt, event.occurredAt)
-            if let index = indexes[calendar.startOfDay(for: event.occurredAt)] {
-                tally.dayItems[index] += items
-                tally.dayBytes[index] += bytes
-            }
+        let intervals = dates.compactMap { date -> DateInterval? in
+            guard let end = calendar.date(byAdding: .day, value: 1, to: date) else { return nil }
+            return DateInterval(start: date, end: end)
         }
-        let days = dates.indices.map { AgentReclaimedDay(day: dates[$0], items: tally.dayItems[$0], bytes: tally.dayBytes[$0]) }
+        let loaded = try await store.reclaimedSnapshot(intervals: intervals)
+        let tally = loaded.totals
+        let days = zip(intervals, loaded.days).map { interval, day in
+            AgentReclaimedDay(day: interval.start, items: day.items, bytes: day.bytes)
+        }
         return AgentReclaimedSummary(
             lifetimeItems: tally.lifetimeItems, lifetimeBytes: tally.lifetimeBytes, itemsWithKnownSize: tally.itemsWithKnownSize,
             firstMovedAt: tally.firstMovedAt, lastMovedAt: tally.lastMovedAt, days: days,

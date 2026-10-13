@@ -12,6 +12,34 @@ private func relativeDay(_ date: Date, now: Date = Date()) -> String {
     return date.formatted(.dateTime.weekday(.wide))
 }
 
+private struct ScheduleReadinessNotice: View {
+    @EnvironmentObject private var model: AgentViewModel
+    var body: some View {
+        if let note = model.scheduleReadinessNote {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(note).font(.subheadline).foregroundStyle(PrunePalette.caution)
+                ForEach(model.unreadyRoots) { root in
+                    Text("\(root.path): \(root.detail ?? statusLabel(root.state))")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    private func statusLabel(_ state: AgentRootState) -> String {
+        switch state {
+        case .watching: "Ready"
+        case .indexing: "Indexing"
+        case .recovering: "Recovering"
+        case .offline: "Offline"
+        case .bookmarkStale: "Folder access needs renewal"
+        case .permissionDenied: "Folder access denied"
+        case .error: "Folder scan failed"
+        }
+    }
+}
+
 // MARK: - Overview
 
 struct OverviewPage: View {
@@ -38,14 +66,15 @@ struct OverviewPage: View {
             VStack(alignment: .leading, spacing: 32) {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 7) {
-                        Image(systemName: needsAttention || overview.policy.globallyPaused || model.pruningHaltedReason != nil ? "pause.circle" : "checkmark.circle")
-                            .foregroundStyle(needsAttention || overview.policy.globallyPaused || model.pruningHaltedReason != nil ? PrunePalette.caution : PrunePalette.safe)
+                        Image(systemName: needsAttention || overview.policy.globallyPaused || model.pruningHaltedReason != nil || !model.unreadyRoots.isEmpty ? "pause.circle" : "checkmark.circle")
+                            .foregroundStyle(needsAttention || overview.policy.globallyPaused || model.pruningHaltedReason != nil || !model.unreadyRoots.isEmpty ? PrunePalette.caution : PrunePalette.safe)
                         Text("On this Mac").font(.caption).foregroundStyle(.secondary)
                     }
                     Text(headline)
                         .font(Typography.headline)
                         .accessibilityAddTraits(.isHeader)
                     Text(subline).foregroundStyle(.secondary)
+                    ScheduleReadinessNotice()
                     if needsAttention && model.pruningHaltedReason == nil {
                         Button("See Activity") {
                             model.acknowledgeAttention()
@@ -117,12 +146,12 @@ struct OverviewPage: View {
                         .pruneHover()
                         .accessibilityElement(children: .combine)
                     }
-                    if nextItems.count > 3 {
-                        Button("See all \(nextItems.count) in Upcoming") { router.selection = .upcoming }
+                    if (nextIsPreviewOnly ? model.previewCount : model.activeCount) > 3 {
+                        Button("See all \(nextIsPreviewOnly ? model.previewCount : model.activeCount) in Upcoming") { router.selection = .upcoming }
                             .buttonStyle(PruneLinkStyle())
                     }
-                    if !nextIsPreviewOnly && !model.previewUpcoming.isEmpty {
-                        Text("\(model.previewUpcoming.count) more match\(model.previewUpcoming.count == 1 ? "" : "es") from Preview rules will not move.")
+                    if !nextIsPreviewOnly && model.previewCount > 0 {
+                        Text("\(model.previewCount) more match\(model.previewCount == 1 ? "" : "es") from Preview rules will not move.")
                             .font(.subheadline).foregroundStyle(.secondary)
                     }
                 }
@@ -140,6 +169,8 @@ struct OverviewPage: View {
         if needsAttention { return "Something needs a look." }
         if overview.policy.globallyPaused { return "TinyPrune is paused." }
         if places.isEmpty { return "Nothing is managed yet." }
+        if model.agentIsWorking { return "Updating schedules." }
+        if !model.unreadyRoots.isEmpty { return "Some folders need attention." }
         if !overview.policy.rules.contains(where: { $0.state == .active }) && overview.policy.rules.contains(where: { $0.state == .preview }) {
             return "Only previewing."
         }
@@ -199,6 +230,14 @@ struct UpcomingPage: View {
     @EnvironmentObject private var router: AppRouter
     let overview: AgentOverviewSnapshot
     @State private var sizes: [String: AgentViewModel.ItemSize] = [:]
+    @State private var pageItems: [AgentUpcomingItem] = []
+    @State private var cursor: AgentUpcomingCursor?
+    @State private var totalCount = 0
+    @State private var mode: ScheduledDisposition?
+    @State private var loading = false
+    @State private var pageFailure: String?
+    @State private var pageGeneration = UUID()
+    @State private var loadedFilter: String?
     @EnvironmentObject private var model: AgentViewModel
 
     private var customPaths: Set<String> {
@@ -217,10 +256,8 @@ struct UpcomingPage: View {
         router.upcomingRuleFilter.flatMap { id in overview.policy.rules.first { $0.id == id } }
     }
 
-    private var items: [AgentUpcomingItem] {
-        guard let id = router.upcomingRuleFilter else { return overview.upcoming }
-        return overview.upcoming.filter { $0.explanation.matchedRuleID == id }
-    }
+    private var filterKey: String { "\(router.upcomingRuleFilter?.uuidString ?? "all")/\(mode?.rawValue ?? "all")" }
+    private var items: [AgentUpcomingItem] { loadedFilter == filterKey ? pageItems : [] }
 
     private var selectedItem: AgentUpcomingItem? { items.first { $0.id == router.inspectedItemID } }
 
@@ -234,11 +271,19 @@ struct UpcomingPage: View {
                         Button("Show all") { router.upcomingRuleFilter = nil }.buttonStyle(PruneLinkStyle())
                     }
                 }
+                Picker("Mode", selection: $mode) {
+                    Text("All modes").tag(Optional<ScheduledDisposition>.none)
+                    Text("Active").tag(Optional(ScheduledDisposition.active))
+                    Text("Preview").tag(Optional(ScheduledDisposition.preview))
+                }.pickerStyle(.segmented)
+                Text("\((loadedFilter == filterKey ? totalCount : 0).formatted()) scheduled items").font(.subheadline).foregroundStyle(.secondary)
+                if let pageFailure { Text(pageFailure).foregroundStyle(PrunePalette.caution) }
+                ScheduleReadinessNotice()
                 if items.isEmpty {
                     PruneEmptyState(
-                        title: model.agentIsWorking ? "Looking through your folders" : "Nothing scheduled",
-                        message: model.agentIsWorking
-                            ? "Matches appear here as TinyPrune finishes indexing. This page updates on its own."
+                        title: !model.unreadyRoots.isEmpty ? "No published schedules to show" : "Nothing scheduled",
+                        message: !model.unreadyRoots.isEmpty
+                            ? "A complete schedule is published after a successful scan. Unavailable folders are not treated as empty; this page updates when they are ready."
                             : "Matches appear here once a rule finds items. Preview rules list them without touching your files.",
                         symbol: "clock")
                 }
@@ -268,6 +313,11 @@ struct UpcomingPage: View {
                             }
                         }
                     }
+                }
+                if loadedFilter == filterKey, cursor != nil {
+                    Button(loading ? "Loading…" : "Load more (\(items.count) of \(totalCount))") {
+                        Task { await loadPage(reset: false) }
+                    }.disabled(loading)
                 }
                 if router.upcomingRuleFilter == nil && !protectedOverrides.isEmpty {
                     VStack(alignment: .leading, spacing: 0) {
@@ -313,6 +363,39 @@ struct UpcomingPage: View {
             }
         }
         .pruneAnimation(value: router.inspectedItemID)
+        .task(id: "\(filterKey)/\(model.refreshedAt?.timeIntervalSinceReferenceDate ?? 0)") {
+            await loadPage(reset: true)
+        }
+    }
+
+    @MainActor private func loadPage(reset: Bool) async {
+        if !reset && loading { return }
+        if reset {
+            pageGeneration = UUID()
+        }
+        let generation = pageGeneration
+        let requestedFilter = filterKey
+        let requestedRefresh = model.refreshedAt
+        loading = true
+        pageFailure = nil
+        defer { if generation == pageGeneration { loading = false } }
+        do {
+            let page = try await model.upcomingPage(ruleID: router.upcomingRuleFilter, disposition: mode, after: reset ? nil : cursor)
+            guard !Task.isCancelled, generation == pageGeneration,
+                  requestedFilter == filterKey, requestedRefresh == model.refreshedAt else { return }
+            if reset { pageItems = page.items }
+            else {
+                var existing = Set(pageItems.map(\.id))
+                pageItems.append(contentsOf: page.items.filter { existing.insert($0.id).inserted })
+            }
+            loadedFilter = requestedFilter
+            cursor = page.nextCursor
+            totalCount = page.totalCount
+        } catch {
+            guard !Task.isCancelled, generation == pageGeneration,
+                  requestedFilter == filterKey, requestedRefresh == model.refreshedAt else { return }
+            pageFailure = error.localizedDescription
+        }
     }
 }
 
@@ -366,6 +449,32 @@ private struct UpcomingRow: View {
 }
 
 // MARK: - Why inspector
+@MainActor
+package final class InspectorExplanationState: ObservableObject {
+    @Published package private(set) var explanation: AgentItemExplanation?
+    @Published package private(set) var failure: String?
+    package private(set) var key: String?
+    private var generation = UUID()
+
+    package init() {}
+
+    package func load(item: AgentUpcomingItem, key: String, explain: (String) async throws -> AgentItemExplanation) async {
+        self.key = key
+        generation = UUID()
+        let requestGeneration = generation
+        explanation = nil
+        failure = nil
+        do {
+            let loaded = try await explain(item.id.pathHint)
+            guard !Task.isCancelled, generation == requestGeneration, loaded.identity == item.id else { return }
+            explanation = loaded
+        } catch {
+            guard !Task.isCancelled, generation == requestGeneration else { return }
+            failure = error.localizedDescription
+        }
+    }
+}
+
 
 package struct WhyInspectorContent: View {
     @EnvironmentObject private var model: AgentViewModel
@@ -380,13 +489,18 @@ package struct WhyInspectorContent: View {
         self.onSize = onSize
     }
 
-    @State private var explanation: AgentItemExplanation?
+    @StateObject private var inspector = InspectorExplanationState()
     @State private var failure: String?
     @State private var size: AgentViewModel.ItemSize?
     @State private var isMeasuring = false
     @State private var isWorking = false
     @State private var confirmsKeep = false
     @State private var confirmsStopProtecting = false
+    @State private var loadGeneration = UUID()
+
+    private var refreshIdentity: String {
+        "\(item.id)/\(item.explanation)/\(model.overview?.policy.revision ?? 0)/\(model.refreshedAt?.timeIntervalSinceReferenceDate ?? 0)"
+    }
 
     private var path: String { item.explanation.candidateIdentity.pathHint }
 
@@ -404,13 +518,13 @@ package struct WhyInspectorContent: View {
                 }
                 PathText(path: path)
 
-                if let explanation { details(explanation) }
-                else if let failure { Text(failure).foregroundStyle(PrunePalette.caution) }
+                if inspector.key == refreshIdentity, let explanation = inspector.explanation { details(explanation) }
+                else if let failure = inspector.failure { Text(failure).foregroundStyle(PrunePalette.caution) }
                 else { ProgressView("Loading explanation") }
         }
         .padding(20)
-        .task(id: path) { await load() }
-        .pruneAnimation(value: explanation)
+        .task(id: refreshIdentity) { await load() }
+        .pruneAnimation(value: inspector.explanation)
         .sensoryFeedback(.success, trigger: isWorking) { old, new in old && !new && failure == nil }
     }
 
@@ -452,8 +566,16 @@ package struct WhyInspectorContent: View {
                     isMeasuring = true
                     Task {
                         defer { isMeasuring = false }
-                        do { let measured = try await model.size(of: path); size = measured; onSize(measured) }
-                        catch { failure = error.localizedDescription }
+                        let requestedPath = path
+                        let generation = loadGeneration
+                        do {
+                            let measured = try await model.size(of: requestedPath)
+                            guard !Task.isCancelled, generation == loadGeneration else { return }
+                            size = measured
+                            onSize(measured)
+                        } catch {
+                            if generation == loadGeneration { failure = error.localizedDescription }
+                        }
                     }
                 }
                 .buttonStyle(PruneLinkStyle())
@@ -552,20 +674,27 @@ package struct WhyInspectorContent: View {
     }
 
     private func run(_ action: @escaping () async throws -> Void) {
-        guard !isWorking else { return }
+        guard !isWorking, inspector.key == refreshIdentity, inspector.explanation != nil else { return }
         isWorking = true
+        let key = refreshIdentity
         Task {
             defer { isWorking = false }
             var actionFailure: String?
             do { try await action() } catch { actionFailure = error.localizedDescription }
+            guard inspector.key == key else { return }
             await load()
             if let actionFailure { failure = actionFailure }
         }
     }
 
     private func load() async {
-        do { explanation = try await model.explain(path: path); failure = nil }
-        catch { failure = error.localizedDescription }
+        loadGeneration = UUID()
+        failure = nil
+        size = nil
+        isMeasuring = false
+        confirmsKeep = false
+        confirmsStopProtecting = false
+        await inspector.load(item: item, key: refreshIdentity) { try await model.explain(path: $0) }
     }
 }
 

@@ -15,6 +15,16 @@ Persist the last successfully reconciled FSEvents ID per managed root. Collapse 
 
 Subscribe to workspace mount, unmount, and wake notifications. Reconfigure watches and reconcile roots on relevant lifecycle changes. Run passive WAL checkpointing and SQLite optimization at agent start and clean stop.
 
+Scans enumerate filesystem metadata once. Roots with applicable project-inactivity rules stage candidate metadata in SQLite; other roots stage evaluated deadlines directly. All staging and evaluation pages are bounded to 256 rows. Project aggregation yields between bounded pages without holding a transaction across suspension, uses indexed ancestor equality lookups for nested ownership, and batches project maxima. A successful scan atomically replaces the published deadline set. Cancellation, root failure, or an incomplete project-activity view preserves prior schedules. Non-project scans can publish readable matches while retaining known schedules below unreadable locations; more than 256 distinct unreadable locations fails closed.
+
+Ordinary edits to known project-marker identities update activity rather than rediscovering the project. Marker creation, removal, replacement or relocation reconciles the affected subtree. Generated-tree exclusion applies to activity, not to other applicable cleanup matches. Noisy directory markers use stable creation metadata (or their durable first observation when creation metadata is absent), not bookkeeping modification dates. Source events refresh only project-activity deadlines and batch changed rows. Per-root ordering and scan generations allow unrelated roots to progress independently; pause and retention changes do not trigger traversal.
+
+Overlapping managed roots share a conservative reconciliation gate so ancestor and descendant scans cannot concurrently prune the same project or deadline state. Lock-domain changes drain existing work before regrouping, and cleanup readiness excludes roots with in-flight reconciliation. Removing an ancestor root preserves identity observations and schedules still covered by a retained nested root.
+
+Watch streams capture a historical event-ID boundary before starting. Wake replay remains non-executable until its FIFO consumer successfully processes preceding batches and `HistoryDone`; the control marker never counts as file activity. Historical source deletions use surviving parent-directory modification metadata as a conservative bound. Available, reconciled roots can execute scheduled work, but current identity, policy, protection, permissions, deadline and update interlock still require final preflight. This barrier does not eliminate normal FSEvents delivery latency.
+
+The due scheduler drains bounded keyset pages and retains per-item backoff across timer wakes. Overview reads policy, samples and complete counts in one store actor turn; detail pagination filters before limiting rows. Successful Trash audit writes maintain lifetime scalar totals and indexed move metadata transactionally. Local calendar intervals produce coherent daily summaries without decoding lifetime audit payloads.
+
 ## Consequences
 
 - Project inactivity is based on filesystem metadata, not source parsing; unsupported project markers are not recognized until added deliberately.

@@ -74,6 +74,10 @@ public actor ManagedRootAgentRuntime {
         }
         self.lifecycle = lifecycle
         await lifecycle.start()
+        let indexer = self.indexer
+        await scheduler.setRootReadiness { [weak indexer] path in
+            await indexer?.canExecuteDeadline(at: path) ?? false
+        }
         do { try await indexer.start() }
         catch { await auditStartupFailure("Indexer start", error) }
         do { try await scheduler.start() }

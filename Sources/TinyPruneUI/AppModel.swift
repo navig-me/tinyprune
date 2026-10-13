@@ -132,10 +132,10 @@ extension TinyPruneAgentClient: AgentTransport {}
 package protocol AgentSystemServices: AnyObject {
     var agentStatus: SMAppService.Status { get }
     func registerAgent() throws
-    func restartAgent() throws
-    /// Restarts the launchd job without re-registering it. Returns whether launchd accepted the request.
-    func kickstartAgent() -> Bool
-    func reconcileAgentAfterUpdate() throws -> Bool
+    func restartAgent() async throws
+    /// Restarts the launchd job with a bounded timeout, without blocking the main actor.
+    func kickstartAgent() async -> Bool
+    func reconcileAgentAfterUpdate() async throws -> Bool
     func openLoginItems()
     var launchesAtLogin: Bool { get }
     func setLaunchAtLogin(_ enabled: Bool) throws
@@ -149,38 +149,56 @@ package final class SMAppSystemServices: AgentSystemServices {
 
     package var agentStatus: SMAppService.Status { launchAgent.status }
     package func registerAgent() throws { try launchAgent.register() }
-    package func restartAgent() throws {
-        try? launchAgent.unregister()
+    package func restartAgent() async throws {
+        try? await launchAgent.unregister()
         try launchAgent.register()
         // Registration alone can leave launchd's job throttled after repeated spawn failures; start it now.
-        _ = kickstartAgent()
+        _ = await kickstartAgent()
     }
 
     /// `launchctl kickstart -k` restarts the job and clears launchd's crash back-off. The app is not sandboxed.
-    package func kickstartAgent() -> Bool {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        process.arguments = ["kickstart", "-k", "gui/\(getuid())/com.navig-me.tinyprune.agent"]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        do {
-            try process.run()
-            process.waitUntilExit()
-            return process.terminationStatus == 0
-        } catch { return false }
+    package func kickstartAgent() async -> Bool {
+        await Task.detached(priority: .userInitiated) {
+            await withCheckedContinuation { continuation in
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+                process.arguments = ["kickstart", "-k", "gui/\(getuid())/com.navig-me.tinyprune.agent"]
+                process.standardOutput = FileHandle.nullDevice
+                process.standardError = FileHandle.nullDevice
+                let timeout = Task<Void, Never> { [weak process] in
+                    do { try await Task.sleep(for: .seconds(5)) }
+                    catch { return }
+                    guard let process, process.isRunning else { return }
+                    process.terminate()
+                    if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+                }
+                process.terminationHandler = { [process] terminated in
+                    timeout.cancel()
+                    process.terminationHandler = nil
+                    continuation.resume(returning: terminated.terminationStatus == 0)
+                }
+                do {
+                    try process.run()
+                } catch {
+                    process.terminationHandler = nil
+                    timeout.cancel()
+                    continuation.resume(returning: false)
+                }
+            }
+        }.value
     }
 
     /// `brew upgrade` and direct replacement leave macOS listing the agent as enabled while launchd has lost or
     /// cannot spawn the job, and the first request then hangs. Re-register once whenever the installed app build
     /// differs from the one that last registered, before anything talks to the agent. Returns true if it did.
-    package func reconcileAgentAfterUpdate() throws -> Bool {
+    package func reconcileAgentAfterUpdate() async throws -> Bool {
         let info = Bundle.main.infoDictionary
         let build = "\(info?["CFBundleShortVersionString"] as? String ?? "?") (\(info?["CFBundleVersion"] as? String ?? "?"))"
         let key = "agentRegisteredByBuild"
         let defaults = UserDefaults.standard
         guard launchAgent.status == .enabled else { return false }
         if defaults.string(forKey: key) == build { return false }
-        try restartAgent()
+        try await restartAgent()
         defaults.set(build, forKey: key)
         return true
     }
@@ -196,6 +214,10 @@ package final class AgentViewModel: ObservableObject {
     @Published package private(set) var overview: AgentOverviewSnapshot?
     @Published package private(set) var activity: [AgentActivityItem] = []
     @Published package private(set) var settings = AgentSettings.default
+    @Published package private(set) var hasLoadedSettings = false
+    @Published package private(set) var isLoadingSettings = false
+    @Published package private(set) var settingsIssue: String?
+    @Published package private(set) var isSavingSettings = false
     @Published package private(set) var isLoading = false
     /// Why the last refresh failed. The previous good `overview` is kept while this is set.
     @Published package private(set) var connectionIssue: String?
@@ -227,6 +249,10 @@ package final class AgentViewModel: ObservableObject {
     private var isRefreshing = false
     private var refreshPending = false
     private var refreshWaiters: [CheckedContinuation<Void, Never>] = []
+    private var secondaryGeneration = 0
+    private var settingsGeneration = 0
+    private var settingsTask: Task<Void, Never>?
+    private var activityTask: Task<Void, Never>?
     private var backgroundTask: Task<Void, Never>?
 
     private static let onboardingKey = "onboardingCompleted"
@@ -256,8 +282,8 @@ package final class AgentViewModel: ObservableObject {
     /// `health` with a short timeout. A stale launchd registration after an upgrade makes a normal request hang for the
     /// full client timeout; probing quickly lets the app repair the registration in seconds instead.
     private func agentAnswers() async -> Bool {
-        guard case .health? = try? await (probeTransport ?? transport).request(AgentRequest(operation: .health)).payload else { return false }
-        return true
+        guard case .health(let health)? = try? await (probeTransport ?? transport).request(AgentRequest(operation: .health)).payload else { return false }
+        return health.protocolVersion == TinyPruneAgentXPC.protocolVersion
     }
 
     private var lastAgentRepair: Date?
@@ -285,13 +311,13 @@ package final class AgentViewModel: ObservableObject {
         repairedAgentThisSession = true
         defer { startupNote = nil }
         startupNote = "Starting the background agent after the update…"
-        _ = services.kickstartAgent()
+        _ = await services.kickstartAgent()
         if await agentAnswers(within: 6) { return }
         startupNote = "Registering the background agent again…"
-        _ = try? services.restartAgent()
+        _ = try? await services.restartAgent()
         if await agentAnswers(within: 10) { return }
         startupNote = "Still starting. Restarting the background agent…"
-        _ = services.kickstartAgent()
+        _ = await services.kickstartAgent()
         _ = await agentAnswers(within: 10)
     }
 
@@ -315,7 +341,7 @@ package final class AgentViewModel: ObservableObject {
         guard backgroundTask == nil else { return }
         backgroundTask = Task { [weak self] in
             while !Task.isCancelled {
-                // While the agent indexes or recovers a folder, matches keep arriving; poll quickly until it settles.
+                // Poll status and the atomic schedule cutover quickly while a folder is indexing or recovering.
                 let busy = await self?.agentIsWorking ?? false
                 try? await Task.sleep(for: busy ? busyInterval : interval)
                 guard !Task.isCancelled, let self else { return }
@@ -332,6 +358,15 @@ package final class AgentViewModel: ObservableObject {
     /// True while any managed folder is still being indexed or recovered.
     package var agentIsWorking: Bool {
         overview?.rootStatuses.contains { $0.state == .indexing || $0.state == .recovering } ?? false
+    }
+
+    package var unreadyRoots: [AgentRootStatus] {
+        overview?.rootStatuses.filter { $0.state != .watching } ?? []
+    }
+
+    package var scheduleReadinessNote: String? {
+        guard !unreadyRoots.isEmpty else { return nil }
+        return "Schedules shown are the last successfully published results. Cleanup waits until each affected folder is ready."
     }
 
     // MARK: Agent registration
@@ -354,7 +389,7 @@ package final class AgentViewModel: ObservableObject {
     /// Re-registers an agent macOS lists as enabled but launchd is not running (for example after `brew upgrade`).
     package func restartAgent() async {
         do {
-            try services.restartAgent()
+            try await services.restartAgent()
             refreshRegistrationStatus()
             await refresh()
         } catch {
@@ -374,6 +409,8 @@ package final class AgentViewModel: ObservableObject {
         } catch let error as AgentClientError where mutating && (error == .timedOut || error == .interrupted) {
             await refresh()
             throw PolicyMutationError.outcomeUnknown
+        } catch AgentClientError.unsupportedProtocol {
+            throw PolicyMutationError.agentRejected("The app and background agent use different protocol versions. Quit and reopen TinyPrune to load the matching agent.")
         }
         if case .failure(let error) = response.payload {
             switch error {
@@ -399,6 +436,7 @@ package final class AgentViewModel: ObservableObject {
             case .unavailable: return "The local TinyPrune agent is unavailable."
             case .timedOut: return "The local TinyPrune agent did not answer in time."
             case .interrupted: return "The connection to the local TinyPrune agent was interrupted."
+            case .unsupportedProtocol: return "The app and background agent use different protocol versions. Quit and reopen TinyPrune to load the matching agent."
             default: return "The local TinyPrune agent returned an unreadable reply."
             }
         }
@@ -412,30 +450,33 @@ package final class AgentViewModel: ObservableObject {
     /// more load and returns when it has finished, so callers always observe state at least as new as their call.
     /// A failed load keeps the last good overview and sets `connectionIssue`.
     package func refresh() async {
-        registrationStatus = services.agentStatus
-        if !reconciledAgentThisSession {
-            reconciledAgentThisSession = true
-            if (try? services.reconcileAgentAfterUpdate()) == true { registrationStatus = services.agentStatus }
-        }
-        if isRefreshing {
+        await withCheckedContinuation { continuation in
+            refreshWaiters.append(continuation)
             refreshPending = true
-            await withCheckedContinuation { refreshWaiters.append($0) }
-            return
+            guard !isRefreshing else { return }
+            isRefreshing = true
+            isLoading = overview == nil
+            Task {
+                registrationStatus = services.agentStatus
+                if !reconciledAgentThisSession {
+                    reconciledAgentThisSession = true
+                    if (try? await services.reconcileAgentAfterUpdate()) == true {
+                        registrationStatus = services.agentStatus
+                    }
+                }
+                repeat {
+                    refreshPending = false
+                    let waiters = refreshWaiters
+                    refreshWaiters = []
+                    await waitUntilAgentAnswers()
+                    await loadState()
+                    scheduleSecondaryLoads()
+                    for waiter in waiters { waiter.resume() }
+                } while refreshPending
+                isLoading = false
+                isRefreshing = false
+            }
         }
-        isRefreshing = true
-        // Only the very first load is "loading". Later refreshes (timer, page change, activation) are silent, so the
-        // header and icons do not flicker every few seconds.
-        isLoading = overview == nil
-        repeat {
-            refreshPending = false
-            await waitUntilAgentAnswers()
-            await loadState()
-        } while refreshPending
-        isLoading = false
-        isRefreshing = false
-        let waiters = refreshWaiters
-        refreshWaiters = []
-        for waiter in waiters { waiter.resume() }
     }
 
     private func loadState(allowRepair: Bool = true) async {
@@ -461,7 +502,7 @@ package final class AgentViewModel: ObservableObject {
             // upgrade and macOS keeps the stale registration. Re-register once per session and try again.
             if allowRepair, overview == nil, !repairedAgentThisSession, registrationStatus == .enabled {
                 repairedAgentThisSession = true
-                if (try? services.restartAgent()) != nil {
+                if (try? await services.restartAgent()) != nil {
                     await loadState(allowRepair: false)
                     return
                 }
@@ -469,12 +510,67 @@ package final class AgentViewModel: ObservableObject {
             connectionIssue = Self.describe(error)
             return
         }
-        // Secondary loads never discard the overview that just loaded.
-        if case .settings(let loaded)? = try? await send(.loadSettings) { settings = loaded }
-        if case .activity(let items)? = try? await send(.loadActivity(limit: 200)) {
-            activity = items
-            await notifyAboutFailures(items)
+    }
+
+    private func scheduleSecondaryLoads() {
+        secondaryGeneration += 1
+        let generation = secondaryGeneration
+        scheduleSettingsLoad()
+        activityTask?.cancel()
+        activityTask = Task { [weak self] in
+            guard let self else { return }
+            if case .activity(let items)? = try? await send(.loadActivity(limit: 200)),
+               !Task.isCancelled, generation == secondaryGeneration {
+                let knownMoves = Set(activity.lazy.filter { $0.kind == .movedToTrash }.map(\.id))
+                let hasNewMove = items.contains { $0.kind == .movedToTrash && !knownMoves.contains($0.id) }
+                activity = items
+                if hasNewMove { await refresh() }
+                guard !Task.isCancelled else { return }
+                await notifyAboutFailures(items)
+            }
         }
+    }
+
+    private func invalidateSettingsLoad() {
+        settingsGeneration += 1
+        settingsTask?.cancel()
+        isLoadingSettings = false
+    }
+
+    private func scheduleSettingsLoad() {
+        guard !isSavingSettings else { return }
+        invalidateSettingsLoad()
+        let generation = settingsGeneration
+        isLoadingSettings = true
+        settingsIssue = nil
+        settingsTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                guard case .settings(let loaded) = try await send(.loadSettings) else {
+                    throw PolicyMutationError.unexpectedResponse
+                }
+                guard !Task.isCancelled, generation == settingsGeneration else { return }
+                settings = loaded
+                hasLoadedSettings = true
+                isLoadingSettings = false
+            } catch {
+                guard !Task.isCancelled, generation == settingsGeneration else { return }
+                settingsIssue = Self.describe(error)
+                isLoadingSettings = false
+            }
+        }
+    }
+
+    package func retrySettings() async {
+        scheduleSettingsLoad()
+        await settingsTask?.value
+    }
+
+    package func upcomingPage(ruleID: UUID?, disposition: ScheduledDisposition?, after: AgentUpcomingCursor? = nil) async throws -> AgentUpcomingPage {
+        guard case .upcomingPage(let page) = try await send(.loadUpcoming(ruleID: ruleID, disposition: disposition, after: after, limit: 200)) else {
+            throw PolicyMutationError.unexpectedResponse
+        }
+        return page
     }
 
     /// Runs a quick action, remembering its failure for the surface that offered it.
@@ -590,9 +686,35 @@ package final class AgentViewModel: ObservableObject {
     package func setGlobalPause(_ paused: Bool) async throws { try await mutate(.setGlobalPause(paused)) }
     package func pause(until date: Date) async throws { try await mutate(.pauseUntil(date)) }
 
+    /// Deliberately replaces all fields after verifying that authoritative settings are available.
     package func updateSettings(_ updated: AgentSettings) async throws {
-        guard case .settings(let saved) = try await send(.updateSettings(updated), mutating: true) else { throw PolicyMutationError.unexpectedResponse }
-        settings = saved
+        try await editSettings { $0 = updated }
+    }
+
+    /// Reads the agent's current settings, never the initial defaults or a cached secondary response.
+    package func editSettings(_ change: (inout AgentSettings) -> Void) async throws {
+        guard !isSavingSettings else {
+            throw PolicyMutationError.agentRejected("A settings save is already in progress. Try again when it finishes.")
+        }
+        isSavingSettings = true
+        invalidateSettingsLoad()
+        defer { isSavingSettings = false }
+        do {
+            guard case .settings(var updated) = try await send(.loadSettings) else {
+                throw PolicyMutationError.unexpectedResponse
+            }
+            change(&updated)
+            guard case .settings(let saved) = try await send(.updateSettings(updated), mutating: true) else {
+                throw PolicyMutationError.unexpectedResponse
+            }
+            invalidateSettingsLoad()
+            settings = saved
+            hasLoadedSettings = true
+            settingsIssue = nil
+        } catch {
+            settingsIssue = Self.describe(error)
+            throw error
+        }
         await refresh()
     }
 
@@ -728,6 +850,11 @@ package final class AgentViewModel: ObservableObject {
     package var activeUpcoming: [AgentUpcomingItem] { overview?.upcoming.filter { $0.explanation.disposition == .active } ?? [] }
     /// Matches from Preview rules, which never touch files.
     package var previewUpcoming: [AgentUpcomingItem] { overview?.upcoming.filter { $0.explanation.disposition == .preview } ?? [] }
+    package var activeCount: Int { overview?.deadlineSummary?.active ?? activeUpcoming.count }
+    package var previewCount: Int { overview?.deadlineSummary?.preview ?? previewUpcoming.count }
+    package var activeSoonCount: Int {
+        overview?.deadlineSummary?.activeSoon ?? activeUpcoming.filter { $0.explanation.scheduledAt <= currentDate.addingTimeInterval(86_400) }.count
+    }
 
     /// Trash failures from the last 24 hours that the user has not seen in Activity and that were not later resolved.
     package var attentionItems: [AgentActivityItem] {

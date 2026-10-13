@@ -165,6 +165,7 @@ do {
     let scheduledCount = model.overview?.upcoming.count ?? 0
     print("  scheduled items: \(scheduledCount)")
     Check.expect(scheduledCount >= 8, "indexer scheduled matches from the fixture tree")
+    await waitFor("secondary rule creation Activity load") { model.activity.contains { $0.kind == .ruleCreated } }
     Check.expect(model.activity.contains { $0.kind == .ruleCreated }, "rule creation was audited")
 
     router.selection = .overview
@@ -279,6 +280,88 @@ do {
                 scheduledAt: now.addingTimeInterval(Double(index) + 3_600), disposition: .active
             ))
         }
+        let previewRule = try source.policy.rules.first { $0.state == .preview }.unwrap("mixed-mode preview rule")
+        let mixedItems = (0..<451).map { index in
+            let preview = index < 250
+            let identity = FilesystemIdentity(volumeIdentifier: activeExample.id.volumeIdentifier, resourceIdentifier: Data("mixed-\(index)".utf8), pathHint: tree.scratch.appendingPathComponent("mixed-\(index).tmp").path)
+            let candidate = RuleCandidate(identity: identity, name: "mixed-\(index).tmp", kind: .file, timestamps: CandidateTimestamps(modified: now))
+            let deadline = now.addingTimeInterval(preview ? 60 : 120)
+            return AgentUpcomingItem(explanation: CandidateExplanation(candidate: candidate, rule: preview ? previewRule : activeRule, basisDate: now, eligibleAt: deadline, scheduledAt: deadline, disposition: preview ? .preview : .active))
+        }
+        agent.transport.setOverviewFixture(AgentOverviewSnapshot(
+            policy: source.policy,
+            upcoming: Array(mixedItems.filter { $0.explanation.disposition == .active }.prefix(100)) + Array(mixedItems.prefix(100)),
+            deadlineSummary: AgentDeadlineSummary(active: 201, preview: 250, activeSoon: 201)
+        ))
+        let mixedModel = agent.model(services: services)
+        await mixedModel.refresh()
+        Check.expect(mixedModel.activeCount == 201 && mixedModel.previewCount == 250 && mixedModel.activeSoonCount == 201, "overview uses full mixed-mode aggregates rather than its 200-row sample")
+        await shoot("40a-mixed-mode-aggregate-overview", .overview, model: mixedModel, router: router, size: CGSize(width: 1100, height: 1200))
+        let readinessRoot = try source.policy.managedRoots.first.unwrap("published schedule readiness root")
+        for state in [AgentRootState.indexing, .offline] {
+            agent.transport.setOverviewFixture(AgentOverviewSnapshot(
+                policy: source.policy, upcoming: Array(mixedItems.filter { $0.explanation.disposition == .active }.prefix(100)) + Array(mixedItems.prefix(100)),
+                rootStatuses: [AgentRootStatus(rootID: readinessRoot.id, path: readinessRoot.path, state: state, detail: state == .indexing ? "Building the next complete schedule" : "The managed volume is disconnected")],
+                deadlineSummary: AgentDeadlineSummary(active: 201, preview: 250, activeSoon: 201)
+            ))
+            await mixedModel.refresh()
+            Check.expect(mixedModel.activeCount == 201 && mixedModel.scheduleReadinessNote != nil, "\(state.rawValue) retains published schedule totals with an explicit readiness notice")
+            await shoot("40a-published-schedules-\(state.rawValue)", .overview, model: mixedModel, router: router, size: CGSize(width: 1100, height: 1200))
+        }
+        agent.transport.setOverviewFixture(AgentOverviewSnapshot(policy: source.policy, upcoming: mixedItems, deadlineSummary: AgentDeadlineSummary(active: 201, preview: 250, activeSoon: 201)))
+        await mixedModel.refresh()
+        let activePage = try await mixedModel.upcomingPage(ruleID: activeRule.id, disposition: .active)
+        let activeTail = try await mixedModel.upcomingPage(ruleID: activeRule.id, disposition: .active, after: activePage.nextCursor)
+        Check.expect(activePage.totalCount == 201 && activePage.items.count == 200 && activeTail.items.count == 1 && activeTail.nextCursor == nil, "filtered Upcoming discovers all Active items even after 250 earlier Preview matches")
+        Check.expect(Set((activePage.items + activeTail.items).map(\.id)).count == 201, "keyset load-more does not duplicate equal-time schedules")
+        router.upcomingRuleFilter = activeRule.id
+        await shoot("40a-mixed-mode-filtered-upcoming", .upcoming, model: mixedModel, router: router, size: CGSize(width: 1180, height: 780))
+        router.upcomingRuleFilter = nil
+        agent.transport.setOverviewFixture(nil)
+        agent.transport.setSecondaryDelay(.seconds(10))
+        var completedAction = false
+        let responsiveAction = Task {
+            await model.perform { try await model.setGlobalPause(true) }
+            completedAction = true
+        }
+        let completedWithoutSecondary = await waitUntil(timeout: 2) { completedAction }
+        Check.expect(completedWithoutSecondary && model.policy?.globallyPaused == true, "mutation completes with authoritative policy while settings and Activity are delayed")
+        agent.transport.setSecondaryDelay(.zero)
+        await responsiveAction.value
+        try await model.setGlobalPause(false)
+
+        let inspectorState = InspectorExplanationState()
+        let firstItem = mixedItems[250]
+        let nextItem = mixedItems[251]
+        let firstExplanation = AgentItemExplanation(path: firstItem.id.pathHint, identity: firstItem.id, resolution: .scheduled(firstItem.explanation), overrides: [], globallyPaused: false)
+        let nextExplanation = AgentItemExplanation(path: nextItem.id.pathHint, identity: nextItem.id, resolution: .scheduled(nextItem.explanation), overrides: [], globallyPaused: false)
+        var delayedExplanation: CheckedContinuation<AgentItemExplanation, Never>?
+        let oldSelection = Task {
+            await inspectorState.load(item: firstItem, key: "first/revision1") { _ in
+                await withCheckedContinuation { delayedExplanation = $0 }
+            }
+        }
+        await waitFor("delayed inspector request") { delayedExplanation != nil }
+        Check.expect(inspectorState.explanation == nil, "inspector clears old actions while a selection explanation loads")
+        await inspectorState.load(item: nextItem, key: "next/revision1") { _ in nextExplanation }
+        delayedExplanation?.resume(returning: firstExplanation)
+        await oldSelection.value
+        Check.expect(inspectorState.explanation == nextExplanation, "late explanation for the prior selection cannot replace the current item")
+        let revisedCandidate = RuleCandidate(identity: nextItem.id, name: "mixed-251.tmp", kind: .file, timestamps: CandidateTimestamps(modified: now))
+        let revisedDeadline = now.addingTimeInterval(86_400)
+        let revisedItem = AgentUpcomingItem(explanation: CandidateExplanation(candidate: revisedCandidate, rule: activeRule, basisDate: now, eligibleAt: revisedDeadline, scheduledAt: revisedDeadline, disposition: .active))
+        let changedExplanation = AgentItemExplanation(path: nextItem.id.pathHint, identity: nextItem.id, resolution: .scheduled(revisedItem.explanation), overrides: [], globallyPaused: false)
+        var revisedExplanation: CheckedContinuation<AgentItemExplanation, Never>?
+        let revisionLoad = Task {
+            await inspectorState.load(item: revisedItem, key: "next/revision2/schedule2") { _ in
+                await withCheckedContinuation { revisedExplanation = $0 }
+            }
+        }
+        await waitFor("same-path revised inspector request") { revisedExplanation != nil }
+        Check.expect(inspectorState.explanation == nil, "same-path policy/schedule refresh clears the previous expiry actions")
+        revisedExplanation?.resume(returning: changedExplanation)
+        await revisionLoad.value
+        Check.expect(inspectorState.explanation == changedExplanation, "same-path revised schedule replaces the old inspector result")
         agent.transport.setOverviewFixture(AgentOverviewSnapshot(
             policy: source.policy, upcoming: boundedItems + source.upcoming.filter { $0.explanation.disposition == .preview },
             rootStatuses: source.rootStatuses, reclaimed: history
@@ -468,6 +551,43 @@ do {
     )
 
     // MARK: - Settings
+
+    phase("settings load/save races")
+    let protectedSettings = AgentSettings(defaultGracePeriodSeconds: 7_200, protectHiddenFiles: true, activityRetentionDays: 0)
+    try await model.updateSettings(protectedSettings)
+    let settingsTransport = ScriptedTransport(base: InProcessTransport(handler: agent.handler))
+    settingsTransport.holdNextSettingsResponse()
+    let delayedSettingsModel = AgentViewModel(transport: settingsTransport, services: services, postsNotifications: false)
+    await delayedSettingsModel.refresh()
+    await waitFor("captured initial settings response") { settingsTransport.hasHeldSettingsResponse }
+    Check.expect(delayedSettingsModel.overview != nil && !delayedSettingsModel.hasLoadedSettings, "overview completion does not wait for initial settings")
+    await shoot("59a-settings-loading", .settings, model: delayedSettingsModel, router: router, size: CGSize(width: 1100, height: 1100))
+    try await delayedSettingsModel.editSettings { $0.activityRetentionDays = 90 }
+    let retentionOnlySettings = AgentSettings(defaultGracePeriodSeconds: 7_200, protectHiddenFiles: true, activityRetentionDays: 90)
+    Check.expect(delayedSettingsModel.settings == retentionOnlySettings, "retention edit before the initial load preserves authoritative grace and hidden-file protection")
+    let persistedRetentionSettings = try await agent.store.loadSettings()
+    Check.expect(persistedRetentionSettings == retentionOnlySettings, "retention-only edit persists unrelated safety fields unchanged")
+    settingsTransport.releaseSettingsResponse()
+    await waitFor("late captured settings response returned") { settingsTransport.hasReturnedHeldSettingsResponse }
+    await shoot("59b-settings-confirmed-save", .settings, model: delayedSettingsModel, router: router, size: CGSize(width: 1100, height: 1100))
+    Check.expect(delayedSettingsModel.settings == retentionOnlySettings, "late pre-mutation settings response cannot replace an acknowledged save")
+
+    settingsTransport.setSettingsFailing(true)
+    let failedSettingsModel = AgentViewModel(transport: settingsTransport, services: services, postsNotifications: false)
+    await failedSettingsModel.refresh()
+    await waitFor("settings failure state") { failedSettingsModel.settingsIssue != nil }
+    Check.expect(failedSettingsModel.overview != nil && !failedSettingsModel.hasLoadedSettings, "settings failure leaves overview usable and initial settings unverified")
+    await shoot("59c-settings-failure-retry", .settings, model: failedSettingsModel, router: router, size: CGSize(width: 1100, height: 1100))
+    let settingsWritesBeforeFailure = settingsTransport.requests { if case .updateSettings = $0 { return true }; return false }
+    do {
+        try await failedSettingsModel.editSettings { $0.activityRetentionDays = 30 }
+        Check.expect(false, "field edits require a successful authoritative settings read")
+    } catch {
+        Check.expect(settingsTransport.requests { if case .updateSettings = $0 { return true }; return false } == settingsWritesBeforeFailure, "failed authoritative read does not send a replacement settings write")
+    }
+    settingsTransport.setSettingsFailing(false)
+    await failedSettingsModel.retrySettings()
+    Check.expect(failedSettingsModel.hasLoadedSettings && failedSettingsModel.settingsIssue == nil && failedSettingsModel.settings == retentionOnlySettings, "explicit settings retry recovers the persisted safety settings")
 
     phase("update settings")
     try await model.updateSettings(AgentSettings(defaultGracePeriodSeconds: 3_600, protectHiddenFiles: true, activityRetentionDays: 30))
@@ -781,6 +901,7 @@ do {
     await waitFor("active cleanup and Activity outcome") {
         await cleanupModel.refresh()
         return cleanupModel.activity.contains { $0.kind == .movedToTrash && $0.identity?.pathHint == expiredFile.path }
+            && cleanupModel.overview?.reclaimed?.lifetimeItems == 1
     }
     fixtureTrashPaths = cleanupModel.activity.filter { $0.kind == .movedToTrash }.compactMap(\.detail)
     Check.expect(!FileManager.default.fileExists(atPath: expiredFile.path), "active rule removed the due item from its original location")

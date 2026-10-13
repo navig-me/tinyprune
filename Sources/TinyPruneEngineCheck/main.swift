@@ -11,6 +11,7 @@ struct TinyPruneEngineCheck {
     static func main() async throws {
         try verifyFSEvents()
         try await verifyObservedActivity()
+        try await verifyFolderRenameDeadlineRetention()
         try await verifyProjectActivity()
         try await verifyRecoveryAndRestartKeep()
         try await verifyAgentMutations()
@@ -1034,6 +1035,76 @@ struct TinyPruneEngineCheck {
             state: state
         )
     }
+    private static func verifyFolderRenameDeadlineRetention() async throws {
+        let manager = FileManager.default
+        let base = manager.homeDirectoryForCurrentUser.appendingPathComponent("TinyPrune-RenameSmoke-\(UUID())").standardizedFileURL
+        let rootURL = base.appendingPathComponent("managed")
+        let originalFolder = rootURL.appendingPathComponent("original")
+        try manager.createDirectory(at: originalFolder, withIntermediateDirectories: true)
+        defer {
+            try? manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: rootURL.path)
+            try? manager.removeItem(at: base)
+        }
+        let originalFile = originalFolder.appendingPathComponent("item.tmp")
+        try Data("disposable rename fixture".utf8).write(to: originalFile)
+        try manager.setAttributes([.modificationDate: Date(timeIntervalSince1970: 10)], ofItemAtPath: originalFile.path)
+        let bookmark = try rootURL.bookmarkData(options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil)
+        let root = try ManagedRoot(displayName: "Rename smoke", path: rootURL.path, bookmarkData: bookmark)
+        let rule = try LifetimeRule(
+            name: "First observed", scope: RuleScope(path: root.path, recursive: true),
+            matcher: ItemMatcher(itemKind: .file, exactNames: [], globPatterns: ["*.tmp"]),
+            expiryBasis: .firstObserved, lifetime: RuleDuration(seconds: 60), action: .trashItem, state: .preview
+        )
+        let store = try SQLiteSafetyStore(databaseURL: base.appendingPathComponent("state.sqlite3"))
+        try await store.replaceSnapshot(PolicySnapshot(rules: [rule], overrides: [], managedRoots: [root], globallyPaused: false))
+        let clock = MutableSmokeClock(Date(timeIntervalSince1970: 1_000))
+        let indexer = ManagedRootIndexer(store: store, clock: clock, onDeadlinesChanged: {})
+        func awaitReady(_ indexer: ManagedRootIndexer) async throws {
+            let until = ProcessInfo.processInfo.systemUptime + 10
+            while !(await indexer.rootStatuses()).contains(where: { $0.state == .watching }) {
+                guard ProcessInfo.processInfo.systemUptime < until else { throw SmokeFailure.auditRegression("scan did not finish") }
+                await Task.yield()
+            }
+        }
+        do {
+            try await indexer.start()
+            try await awaitReady(indexer)
+            guard let initial = try await store.nextDeadline() else { throw SmokeFailure.auditRegression("missing original schedule") }
+            let renamedFolder = rootURL.appendingPathComponent("renamed")
+            clock.set(Date(timeIntervalSince1970: 2_000))
+            try manager.moveItem(at: originalFolder, to: renamedFolder)
+            try await indexer.processChanges(
+                ManagedRootEvent(paths: [renamedFolder.path, originalFolder.path], flags: [UInt32(kFSEventStreamEventFlagItemRenamed), UInt32(kFSEventStreamEventFlagItemRenamed)], eventIDs: [1, 2]),
+                for: root.id
+            )
+            guard let renamed = try await store.nextDeadline(),
+                  renamed.identity == initial.identity,
+                  renamed.identity.pathHint == renamedFolder.appendingPathComponent("item.tmp").path,
+                  renamed.scheduledAt == initial.scheduledAt,
+                  try await store.observedActivity(for: renamed.identity)?.firstObservedAt == Date(timeIntervalSince1970: 1_000) else {
+                throw SmokeFailure.auditRegression("folder rename lost the original observation")
+            }
+            await indexer.stop()
+            clock.set(Date(timeIntervalSince1970: 3_000))
+            try await indexer.start()
+            try await awaitReady(indexer)
+            guard try await store.nextDeadline()?.scheduledAt == initial.scheduledAt else {
+                throw SmokeFailure.auditRegression("restart reset the renamed item's deadline")
+            }
+            await indexer.stop()
+            try manager.setAttributes([.posixPermissions: 0], ofItemAtPath: rootURL.path)
+            try await indexer.start()
+            guard try await store.indexedDeadlineCount() == 1 else {
+                throw SmokeFailure.auditRegression("unavailable root erased its published schedule")
+            }
+            await indexer.stop()
+            print("Deadline stability smoke passed: parent rename and restart preserved identity/first-observed expiry; denied root retained its published schedule")
+        } catch {
+            await indexer.stop()
+            throw error
+        }
+    }
+
     private static func makeFolderRule(scope: String) throws -> LifetimeRule {
         try LifetimeRule(
             name: "Build folders",
@@ -1072,6 +1143,7 @@ private enum SmokeFailure: Error {
     case meaningfulProjectActivityDidNotReset
     case recoveryDidNotRebuild
     case keepDidNotSurviveRestart
+    case auditRegression(String)
 }
 private final class FSEventLatch: @unchecked Sendable {
     let semaphore = DispatchSemaphore(value: 0)

@@ -171,6 +171,79 @@ import TinyPruneIPC
         #expect(try await fixture.store.nextDeadline() == fresh)
     }
 
+    @Test func unavailableRootRetainsScheduleUntilAccessRecovers() async throws {
+        let fixture = try await SchedulerFixture(state: .active)
+        defer { fixture.cleanUp() }
+        let item = fixture.candidate(named: "a.tmp", modified: 1_000)
+        let deadline = fixture.deadline(for: item, scheduledAt: 1_010)
+        try await fixture.store.saveDeadline(deadline)
+        fixture.clock.set(Date(timeIntervalSince1970: 1_100))
+        await fixture.scheduler.setRootReadiness { _ in false }
+        try await fixture.scheduler.runDueNow()
+        #expect(try await fixture.store.nextDeadline() == deadline)
+        #expect(await fixture.access.inspectCount(for: item.identity.pathHint) == 0)
+        #expect(await fixture.access.moveCount(for: item.identity.pathHint) == 0)
+        await fixture.scheduler.setRootReadiness { _ in true }
+        try await fixture.scheduler.runDueNow()
+        #expect(try await fixture.store.nextDeadline() == nil)
+        #expect(await fixture.access.moveCount(for: item.identity.pathHint) == 1)
+    }
+
+    @Test func duePreviewPagesNeverHideActiveWorkAndRetainBackoff() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TinyPrune-PagedScheduler-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try SQLiteSafetyStore(databaseURL: directory.appendingPathComponent("state.sqlite3"))
+        let volume = UUID()
+        func candidate(_ name: String, modified: TimeInterval = 1_000) -> RuleCandidate {
+            RuleCandidate(
+                identity: FilesystemIdentity(volumeIdentifier: volume, resourceIdentifier: Data(name.utf8), pathHint: "/Developer/\(name)"),
+                name: name, kind: .file, timestamps: CandidateTimestamps(modified: Date(timeIntervalSince1970: modified))
+            )
+        }
+        let previewRule = try LifetimeRule(
+            name: "Preview", scope: RuleScope(path: "/Developer", recursive: true),
+            matcher: ItemMatcher(itemKind: .file, exactNames: [], globPatterns: ["preview*.tmp"]),
+            expiryBasis: .modified, lifetime: RuleDuration(seconds: 10), action: .trashItem, state: .preview
+        )
+        let activeRule = try LifetimeRule(
+            name: "Active", scope: RuleScope(path: "/Developer", recursive: true),
+            matcher: ItemMatcher(itemKind: .file, exactNames: ["healthy.tmp", "future.tmp"]),
+            expiryBasis: .modified, lifetime: RuleDuration(seconds: 11), action: .trashItem, state: .active
+        )
+        let previews = (0..<513).map { candidate("preview-\($0).tmp") }
+        let healthy = candidate("healthy.tmp")
+        let future = candidate("future.tmp", modified: 9_000)
+        let all = previews + [healthy, future]
+        try await store.replaceSnapshot(PolicySnapshot(rules: [previewRule, activeRule], overrides: [], managedRoots: [Self.developerRoot()], globallyPaused: false))
+        let deadlines = all.map { item in
+            let preview = item.name.hasPrefix("preview")
+            let rule = preview ? previewRule : activeRule
+            let basis = item.timestamps.modified!
+            let due = basis.addingTimeInterval(rule.lifetime.seconds)
+            let explanation = CandidateExplanation(candidate: item, rule: rule, basisDate: basis, eligibleAt: due, scheduledAt: due, disposition: preview ? .preview : .active)
+            return PersistedDeadline(identity: item.identity, scheduledAt: due, explanation: explanation)
+        }
+        try await store.saveDeadlines(deadlines)
+        let clock = MutableSchedulerClock(Date(timeIntervalSince1970: 1_100))
+        let access = SchedulerTrashFileAccess(candidates: all)
+        let coordinator = TrashCoordinator(policyStore: store, fileAccess: access, audit: store, clock: clock)
+        let scheduler = DeadlineScheduler(store: store, coordinator: coordinator, clock: clock)
+        try await scheduler.runDueNow()
+        try await scheduler.runDueNow()
+        #expect(await access.moveCount(for: healthy.identity.pathHint) == 1)
+        #expect(await access.inspectCount(for: future.identity.pathHint) == 0)
+        #expect(try await store.indexedDeadlineCount() == previews.count + 1)
+        for item in previews {
+            #expect(await access.inspectCount(for: item.identity.pathHint) == 1)
+            #expect(await access.moveCount(for: item.identity.pathHint) == 0)
+        }
+        clock.set(Date(timeIntervalSince1970: 1_401))
+        try await scheduler.runDueNow()
+        #expect(await access.moveCount(for: healthy.identity.pathHint) == 1)
+        for item in previews { #expect(await access.inspectCount(for: item.identity.pathHint) == 2) }
+    }
+
     static func developerRoot() -> ManagedRoot {
         try! ManagedRoot(displayName: "Developer", path: "/Developer", bookmarkData: Data([1]))
     }

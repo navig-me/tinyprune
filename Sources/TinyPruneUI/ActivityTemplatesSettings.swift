@@ -363,6 +363,10 @@ struct SettingsPage: View {
         (seconds / 3_600).formatted(.number.precision(.fractionLength(0...4)).grouping(.never))
     }
 
+    private var settingsEditorsDisabled: Bool {
+        !model.hasLoadedSettings || model.settingsIssue != nil || model.isSavingSettings
+    }
+
     private var graceSelection: Double {
         let current = model.settings.defaultGracePeriodSeconds
         if customGraceActive || !Self.gracePresets.contains(current) { return Self.customGraceTag }
@@ -413,6 +417,23 @@ struct SettingsPage: View {
                     .foregroundStyle(.secondary)
                 LabeledContent("Background agent", value: agentStatus)
             }
+            if let issue = model.settingsIssue {
+                Section("Agent settings unavailable") {
+                    Text(issue).foregroundStyle(.secondary)
+                    Button("Retry settings") { Task { await model.retrySettings() } }
+                        .disabled(model.isLoadingSettings || model.isSavingSettings)
+                    Text("Grace, hidden-file protection, and history settings cannot be edited until settings are loaded.")
+                        .font(.manropeCaption).foregroundStyle(.secondary)
+                }
+            } else if !model.hasLoadedSettings {
+                Section {
+                    ProgressView("Loading safety and history settings…")
+                }
+            } else if model.isSavingSettings {
+                Section {
+                    ProgressView("Saving settings…")
+                }
+            }
             Section("Safety") {
                 Toggle("Pause all rules", isOn: Binding(
                     get: { overview.policy.globallyPaused },
@@ -429,6 +450,7 @@ struct SettingsPage: View {
                     Text("1 day").tag(86_400.0)
                     Text("Custom…").tag(Self.customGraceTag)
                 }
+                .disabled(settingsEditorsDisabled)
                 if graceSelection == Self.customGraceTag {
                     HStack {
                         TextField("Hours", text: $customGraceHours)
@@ -438,11 +460,13 @@ struct SettingsPage: View {
                         Text("hours")
                         Button("Set", action: applyCustomGrace)
                     }
+                    .disabled(settingsEditorsDisabled)
                 }
                 Toggle("Protect hidden files", isOn: Binding(
                     get: { model.settings.protectHiddenFiles },
                     set: { value in updateSettings { $0.protectHiddenFiles = value } }
                 ))
+                .disabled(settingsEditorsDisabled)
                 Text("Hidden items are skipped unless a rule names a dot-folder such as .venv. Grace applies to rules that set none of their own.")
                     .font(.manropeCaption).foregroundStyle(.secondary)
                 Text("Everything TinyPrune removes goes to the macOS Trash, where it stays until you or macOS empty it. Keep always takes precedence.")
@@ -463,6 +487,7 @@ struct SettingsPage: View {
                         Text("\(model.settings.activityRetentionDays) days").tag(model.settings.activityRetentionDays)
                     }
                 }
+                .disabled(settingsEditorsDisabled)
                 HStack {
                     Button("Rebuild index") { confirmsRebuild = true }
                         .disabled(isRebuilding)
@@ -515,6 +540,9 @@ struct SettingsPage: View {
         .onAppear {
             launchesAtLogin = model.services.launchesAtLogin
             customGraceHours = Self.formatHours(model.settings.defaultGracePeriodSeconds)
+        }
+        .onChange(of: model.settings.defaultGracePeriodSeconds) { _, seconds in
+            if !customGraceActive { customGraceHours = Self.formatHours(seconds) }
         }
         .scrollContentBackground(.hidden)
         .alert("Settings", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
@@ -573,9 +601,7 @@ struct SettingsPage: View {
     }
 
     private func updateSettings(_ change: @escaping (inout AgentSettings) -> Void) {
-        var updated = model.settings
-        change(&updated)
-        run { try await model.updateSettings(updated) }
+        run { try await model.editSettings(change) }
     }
 
     private func exportConfig() {

@@ -2,7 +2,7 @@ import Foundation
 import TinyPruneDomain
 
 public enum TinyPruneAgentXPC {
-    public static let protocolVersion = 2
+    public static let protocolVersion = 3
     public static let machServiceName = "com.navig-me.tinyprune.agent"
 }
 
@@ -53,6 +53,37 @@ public struct AgentUpcomingItem: Codable, Equatable, Sendable, Identifiable {
 
     public init(explanation: CandidateExplanation) {
         self.explanation = explanation
+    }
+}
+
+public struct AgentUpcomingCursor: Codable, Equatable, Sendable {
+    public let scheduledAt: Date
+    public let identityKey: String
+    public init(scheduledAt: Date, identityKey: String) {
+        self.scheduledAt = scheduledAt
+        self.identityKey = identityKey
+    }
+}
+
+public struct AgentUpcomingPage: Codable, Equatable, Sendable {
+    public let items: [AgentUpcomingItem]
+    public let nextCursor: AgentUpcomingCursor?
+    public let totalCount: Int
+    public init(items: [AgentUpcomingItem], nextCursor: AgentUpcomingCursor?, totalCount: Int) {
+        self.items = items
+        self.nextCursor = nextCursor
+        self.totalCount = totalCount
+    }
+}
+
+public struct AgentDeadlineSummary: Codable, Equatable, Sendable {
+    public let active: Int
+    public let preview: Int
+    public let activeSoon: Int
+    public init(active: Int, preview: Int, activeSoon: Int) {
+        self.active = active
+        self.preview = preview
+        self.activeSoon = activeSoon
     }
 }
 
@@ -119,8 +150,9 @@ public struct AgentOverviewSnapshot: Codable, Equatable, Sendable {
     public let databaseBytes: Int64
     public let rootStatuses: [AgentRootStatus]
     public let reclaimed: AgentReclaimedSummary?
+    public let deadlineSummary: AgentDeadlineSummary?
 
-    public init(policy: AgentPolicySnapshot, upcoming: [AgentUpcomingItem], ruleStats: [AgentRuleStats] = [], indexedItems: Int = 0, databaseBytes: Int64 = 0, rootStatuses: [AgentRootStatus] = [], reclaimed: AgentReclaimedSummary? = nil) {
+    public init(policy: AgentPolicySnapshot, upcoming: [AgentUpcomingItem], ruleStats: [AgentRuleStats] = [], indexedItems: Int = 0, databaseBytes: Int64 = 0, rootStatuses: [AgentRootStatus] = [], reclaimed: AgentReclaimedSummary? = nil, deadlineSummary: AgentDeadlineSummary? = nil) {
         self.policy = policy
         self.upcoming = upcoming
         self.ruleStats = ruleStats
@@ -128,6 +160,7 @@ public struct AgentOverviewSnapshot: Codable, Equatable, Sendable {
         self.databaseBytes = databaseBytes
         self.rootStatuses = rootStatuses
         self.reclaimed = reclaimed
+        self.deadlineSummary = deadlineSummary
     }
 
     public init(from decoder: any Decoder) throws {
@@ -139,6 +172,7 @@ public struct AgentOverviewSnapshot: Codable, Equatable, Sendable {
         databaseBytes = try container.decodeIfPresent(Int64.self, forKey: .databaseBytes) ?? 0
         rootStatuses = try container.decodeIfPresent([AgentRootStatus].self, forKey: .rootStatuses) ?? []
         reclaimed = try container.decodeIfPresent(AgentReclaimedSummary.self, forKey: .reclaimed)
+        deadlineSummary = try container.decodeIfPresent(AgentDeadlineSummary.self, forKey: .deadlineSummary)
     }
 }
 
@@ -273,6 +307,7 @@ public enum AgentOperation: Codable, Equatable, Sendable {
     case health
     case loadPolicy
     case loadOverview
+    case loadUpcoming(ruleID: UUID?, disposition: ScheduledDisposition?, after: AgentUpcomingCursor?, limit: Int)
     case loadActivity(limit: Int)
     case explainItem(path: String)
     case replacePolicy(AgentPolicySnapshot)
@@ -323,6 +358,7 @@ public enum AgentResponsePayload: Codable, Equatable, Sendable {
     case health(AgentHealth)
     case policy(AgentPolicySnapshot)
     case overview(AgentOverviewSnapshot)
+    case upcomingPage(AgentUpcomingPage)
     case activity([AgentActivityItem])
     case itemExplanation(AgentItemExplanation)
     case settings(AgentSettings)

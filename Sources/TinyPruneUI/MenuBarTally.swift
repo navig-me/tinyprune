@@ -6,6 +6,7 @@ import TinyPruneIPC
 /// refresh that adds work is visible without being loud. Reduce Motion sets the value instantly.
 struct PopoverTally: View {
     let active: [AgentUpcomingItem]
+    let activeCount: Int
     let previewCount: Int
     let now: Date
     let open: () -> Void
@@ -15,7 +16,7 @@ struct PopoverTally: View {
     @State private var hovered = false
 
     private var countLabel: String {
-        active.count == 1 ? "item will move to Trash" : "items will move to Trash"
+        activeCount == 1 ? "item will move to Trash" : "items will move to Trash"
     }
 
     var body: some View {
@@ -71,8 +72,8 @@ struct PopoverTally: View {
         .buttonStyle(.plain)
         .onHover { hovered = $0 }
         .animation(PruneDesign.motion(reduced), value: hovered)
-        .onAppear { setShown(Double(active.count)) }
-        .onChange(of: active.count) { _, new in setShown(Double(new)) }
+        .onAppear { setShown(Double(activeCount)) }
+        .onChange(of: activeCount) { _, new in setShown(Double(new)) }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilitySummary)
         .accessibilityHint("Opens Upcoming")
@@ -90,7 +91,7 @@ struct PopoverTally: View {
     }
 
     private var accessibilitySummary: String {
-        var parts = ["\(active.count) \(countLabel)"]
+        var parts = ["\(activeCount) \(countLabel)"]
         if let next = active.first {
             let name = URL(fileURLWithPath: next.explanation.candidateIdentity.pathHint).lastPathComponent
             parts.append("Next: \(name), \(relative(next.explanation.scheduledAt))")

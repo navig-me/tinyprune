@@ -138,6 +138,11 @@ final class ScriptedTransport: AgentTransport, @unchecked Sendable {
     private var sizeMode = SizeMode.passthrough
     private var activeCannedSizes = 0
     private var peakCannedSizes = 0
+    private var secondaryDelay: Duration = .zero
+    private var holdsNextSettings = false
+    private var settingsContinuation: CheckedContinuation<Void, Never>?
+    private var heldSettingsReturned = false
+    private var settingsFails = false
 
     init(base: any AgentTransport) { self.base = base }
 
@@ -152,6 +157,24 @@ final class ScriptedTransport: AgentTransport, @unchecked Sendable {
     /// Overrides only the loaded overview; mutations still reach the real agent.
     func setOverviewFixture(_ fixture: AgentOverviewSnapshot?) { lock.withLock { overviewFixture = fixture } }
     func setSizeMode(_ newMode: SizeMode) { lock.withLock { sizeMode = newMode } }
+    func setSecondaryDelay(_ delay: Duration) { lock.withLock { secondaryDelay = delay } }
+    func holdNextSettingsResponse() {
+        lock.withLock {
+            holdsNextSettings = true
+            heldSettingsReturned = false
+        }
+    }
+    var hasHeldSettingsResponse: Bool { lock.withLock { settingsContinuation != nil } }
+    var hasReturnedHeldSettingsResponse: Bool { lock.withLock { heldSettingsReturned } }
+    func releaseSettingsResponse() {
+        let continuation = lock.withLock {
+            let held = settingsContinuation
+            settingsContinuation = nil
+            return held
+        }
+        continuation?.resume()
+    }
+    func setSettingsFailing(_ failing: Bool) { lock.withLock { settingsFails = failing } }
     var maximumConcurrentCannedSizes: Int { lock.withLock { peakCannedSizes } }
     /// The next mutating request throws `AgentClientError.interrupted` after it has been applied by the real agent.
     func interruptNextMutationAfterApplying() { lock.withLock { interruptsNextMutation = true } }
@@ -172,6 +195,48 @@ final class ScriptedTransport: AgentTransport, @unchecked Sendable {
         case .loadOverview:
             if lock.withLock({ overviewFails }) { throw AgentClientError.unavailable }
             if let fixture = lock.withLock({ overviewFixture }) { return AgentResponse(payload: .overview(fixture)) }
+        case .loadUpcoming(let ruleID, let disposition, let after, let limit):
+            if let fixture = lock.withLock({ overviewFixture }) {
+                let sorted = fixture.upcoming.filter {
+                    (ruleID == nil || $0.explanation.matchedRuleID == ruleID) &&
+                    (disposition == nil || $0.explanation.disposition == disposition)
+                }.sorted {
+                    if $0.explanation.scheduledAt != $1.explanation.scheduledAt {
+                        return $0.explanation.scheduledAt < $1.explanation.scheduledAt
+                    }
+                    return $0.id.pathHint < $1.id.pathHint
+                }
+                let remaining = sorted.filter {
+                    guard let after else { return true }
+                    return $0.explanation.scheduledAt > after.scheduledAt ||
+                        ($0.explanation.scheduledAt == after.scheduledAt && $0.id.pathHint > after.identityKey)
+                }
+                let items = Array(remaining.prefix(min(256, max(1, limit))))
+                let next = remaining.count > items.count ? items.last.map {
+                    AgentUpcomingCursor(scheduledAt: $0.explanation.scheduledAt, identityKey: $0.id.pathHint)
+                } : nil
+                return AgentResponse(payload: .upcomingPage(AgentUpcomingPage(items: items, nextCursor: next, totalCount: sorted.count)))
+            }
+        case .loadSettings:
+            if lock.withLock({ settingsFails }) { throw AgentClientError.unavailable }
+            let hold = lock.withLock {
+                let value = holdsNextSettings
+                holdsNextSettings = false
+                return value
+            }
+            if hold {
+                // Capture real persisted settings before waiting. Cancellation deliberately does not
+                // discard the reply, as an already-delivered XPC response can race a settings save.
+                let captured = try await base.request(request)
+                await withCheckedContinuation { continuation in
+                    lock.withLock { settingsContinuation = continuation }
+                }
+                lock.withLock { heldSettingsReturned = true }
+                return captured
+            }
+            try await Task.sleep(for: lock.withLock { secondaryDelay })
+        case .loadActivity:
+            try await Task.sleep(for: lock.withLock { secondaryDelay })
         case .itemSize(let path):
             switch lock.withLock({ sizeMode }) {
             case .passthrough: break
@@ -229,9 +294,9 @@ final class StubServices: AgentSystemServices {
 
     func registerAgent() throws { registerCalls += 1 }
     private(set) var restartCalls = 0
-    func restartAgent() throws { restartCalls += 1 }
-    func reconcileAgentAfterUpdate() throws -> Bool { false }
-    func kickstartAgent() -> Bool { true }
+    func restartAgent() async throws { restartCalls += 1 }
+    func reconcileAgentAfterUpdate() async throws -> Bool { false }
+    func kickstartAgent() async -> Bool { true }
     func openLoginItems() {}
     func setLaunchAtLogin(_ enabled: Bool) throws { launchesAtLogin = enabled }
 }

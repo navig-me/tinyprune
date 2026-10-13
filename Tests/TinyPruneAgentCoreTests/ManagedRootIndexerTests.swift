@@ -358,6 +358,424 @@ import TinyPrunePersistence
         await indexer.stop()
     }
 
+    @Test func testDirectoryRenamePreservesDescendantObservationsAcrossRestart() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let oldDirectory = fixture.root.appendingPathComponent("before", isDirectory: true)
+        let newDirectory = fixture.root.appendingPathComponent("after", isDirectory: true)
+        try FileManager.default.createDirectory(at: oldDirectory, withIntermediateDirectories: true)
+        let file = oldDirectory.appendingPathComponent("idle.tmp")
+        try Data("metadata".utf8).write(to: file)
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 10)], ofItemAtPath: file.path)
+        let store = try SQLiteSafetyStore(databaseURL: fixture.databaseURL)
+        let root = try makeRoot(fixture.root)
+        let rule = try makeRule(scope: root.path, state: .preview, basis: .observedActivity, recursive: true)
+        try await store.replaceSnapshot(PolicySnapshot(rules: [rule], overrides: [], managedRoots: [root], globallyPaused: false))
+        let clock = MutableClock(Date(timeIntervalSince1970: 1_000))
+        let indexer = ManagedRootIndexer(store: store, resolver: { _ in fixture.root }, clock: clock)
+        try await indexer.start()
+        try await waitForWatching(indexer, rootID: root.id)
+        let before = try #require(try await store.nextDeadline())
+        try FileManager.default.moveItem(at: oldDirectory, to: newDirectory)
+        clock.set(Date(timeIntervalSince1970: 2_000))
+        try await indexer.processChanges(ManagedRootEvent(
+            paths: [oldDirectory.path, newDirectory.path],
+            flags: [UInt32(kFSEventStreamEventFlagItemRemoved), UInt32(kFSEventStreamEventFlagItemRenamed)],
+            eventIDs: [1, 2]), for: root.id)
+        let renamedFile = newDirectory.appendingPathComponent("idle.tmp")
+        let activity = try #require(try await store.observedActivity(for: before.identity))
+        #expect(activity.identity.pathHint == renamedFile.path)
+        #expect(activity.firstObservedAt == Date(timeIntervalSince1970: 1_000))
+        await indexer.stop()
+        let saved = try #require(try await store.nextDeadline())
+        clock.set(Date(timeIntervalSince1970: 4_000))
+        let restarted = ManagedRootIndexer(store: store, resolver: { _ in fixture.root }, clock: clock)
+        try await restarted.start()
+        try await waitForWatching(restarted, rootID: root.id)
+        let restored = try #require(try await store.nextDeadline())
+        let restoredActivity = try #require(try await store.observedActivity(for: before.identity))
+        #expect(restored.identity == before.identity)
+        #expect(restored.scheduledAt == saved.scheduledAt)
+        #expect(restoredActivity.firstObservedAt == activity.firstObservedAt)
+        #expect(restoredActivity.lastObservedAt == activity.lastObservedAt)
+        await restarted.stop()
+    }
+
+    @Test func testHistoricalReplayDoesNotInventObservedOrProjectActivity() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let project = fixture.root.appendingPathComponent("sample", isDirectory: true)
+        let generated = project.appendingPathComponent("node_modules", isDirectory: true)
+        try FileManager.default.createDirectory(at: generated, withIntermediateDirectories: true)
+        let marker = project.appendingPathComponent("package.json")
+        let source = project.appendingPathComponent("source.tmp")
+        try Data("{}".utf8).write(to: marker)
+        try Data("source".utf8).write(to: source)
+        for url in [marker, source] {
+            try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 100)], ofItemAtPath: url.path)
+        }
+        let store = try SQLiteSafetyStore(databaseURL: fixture.databaseURL)
+        let root = try makeRoot(fixture.root)
+        let observed = try makeRule(scope: root.path, state: .preview, basis: .observedActivity, recursive: true)
+        let projectRule = try makeRule(scope: root.path, state: .preview, basis: .projectActivity,
+                                      itemKind: .directory, exactNames: ["node_modules"], globPatterns: [], recursive: true)
+        try await store.replaceSnapshot(PolicySnapshot(rules: [observed, projectRule], overrides: [], managedRoots: [root], globallyPaused: false))
+        let clock = MutableClock(Date(timeIntervalSince1970: 1_000))
+        let indexer = ManagedRootIndexer(store: store, resolver: { _ in fixture.root }, clock: clock)
+        try await indexer.start()
+        try await waitForWatching(indexer, rootID: root.id)
+        let before = try await store.upcomingDeadlines()
+        let projectBefore = try await store.projectActivity(for: generated.path)
+        clock.set(Date(timeIntervalSince1970: 4_000))
+        try await indexer.processEvent(ManagedRootEvent(paths: [source.path, marker.path],
+            flags: [UInt32(kFSEventStreamEventFlagItemModified), UInt32(kFSEventStreamEventFlagItemModified)],
+            eventIDs: [10, 11]), for: root.id, replayThrough: 20)
+        #expect(try await store.upcomingDeadlines() == before)
+        #expect(try await store.projectActivity(for: generated.path) == projectBefore)
+        try await indexer.processChanges(ManagedRootEvent(paths: [source.path],
+            flags: [UInt32(kFSEventStreamEventFlagItemModified)], eventIDs: [12]), for: root.id)
+        let live = try await store.upcomingDeadlines()
+        #expect(live.first(where: { $0.identity.pathHint == source.path })?.explanation.basisDate == clock.now())
+        #expect(try await store.projectActivity(for: generated.path) == clock.now())
+        await indexer.stop()
+    }
+
+    @Test(arguments: [false, true])
+    func testWakeReplayRefreshesProjectActivityBeforeReadiness(deletedSource: Bool) async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let project = fixture.root.appendingPathComponent("sample", isDirectory: true)
+        let generated = project.appendingPathComponent("node_modules", isDirectory: true)
+        try FileManager.default.createDirectory(at: generated, withIntermediateDirectories: true)
+        let marker = project.appendingPathComponent("package.json")
+        let source = project.appendingPathComponent("source.swift")
+        try Data("{}".utf8).write(to: marker)
+        try Data("source".utf8).write(to: source)
+        for url in [marker, source, generated, project] {
+            try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 100)], ofItemAtPath: url.path)
+        }
+        let store = try SQLiteSafetyStore(databaseURL: fixture.databaseURL)
+        let root = try makeRoot(fixture.root)
+        // A truly global template must track projects outside its nominal scope.
+        let rule = try makeRule(scope: "/Templates", state: .preview, basis: .projectActivity,
+                                itemKind: .directory, exactNames: ["node_modules"], globPatterns: [],
+                                recursive: true, matchMode: .template)
+        try await store.replaceSnapshot(PolicySnapshot(rules: [rule], overrides: [], managedRoots: [root], globallyPaused: false))
+        let clock = MutableClock(Date(timeIntervalSince1970: 1_000))
+        let indexer = ManagedRootIndexer(store: store, resolver: { _ in fixture.root }, clock: clock,
+                                        eventStreamFactory: { _, _, _ in nil })
+        try await indexer.start()
+        try await waitForWatching(indexer, rootID: root.id)
+        #expect(try await store.projectActivity(for: generated.path) == Date(timeIntervalSince1970: 100))
+        let due = try #require(try await store.upcomingDeadlines().first)
+        #expect(due.scheduledAt < clock.now())
+        try await store.saveEventCursor(for: root.id, eventID: 1)
+        let activityDate = Date(timeIntervalSince1970: 3_980)
+        if deletedSource {
+            try FileManager.default.removeItem(at: source)
+            try FileManager.default.setAttributes([.modificationDate: activityDate], ofItemAtPath: project.path)
+        } else {
+            try Data("edited".utf8).write(to: source)
+            try FileManager.default.setAttributes([.modificationDate: activityDate], ofItemAtPath: source.path)
+        }
+        clock.set(Date(timeIntervalSince1970: 4_000))
+        try await indexer.resumeAfterWake()
+        #expect(!(await indexer.canExecuteDeadline(at: generated.path)))
+        try await indexer.processEvent(ManagedRootEvent(paths: [source.path],
+            flags: [UInt32(deletedSource ? kFSEventStreamEventFlagItemRemoved : kFSEventStreamEventFlagItemModified)],
+            eventIDs: [2]), for: root.id, replayThrough: 10)
+        #expect(!(await indexer.canExecuteDeadline(at: generated.path)))
+        #expect(try await store.projectActivity(for: generated.path) == activityDate)
+        let refreshed = try #require(try await store.upcomingDeadlines().first)
+        #expect(refreshed.explanation.basisDate == activityDate)
+        #expect(refreshed.scheduledAt > clock.now())
+        try await indexer.processEvent(ManagedRootEvent(paths: [root.path],
+            flags: [UInt32(kFSEventStreamEventFlagHistoryDone)], eventIDs: [10]),
+            for: root.id, replayThrough: 10)
+        #expect(await indexer.canExecuteDeadline(at: generated.path))
+        #expect(try await store.projectActivity(for: generated.path) == activityDate)
+        await indexer.stop()
+    }
+
+    @Test func testEmptyWakeReplayBecomesReadyOnlyAtHistoryDoneWithoutRootActivity() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let file = fixture.root.appendingPathComponent("idle.tmp")
+        try Data("idle".utf8).write(to: file)
+        let store = try SQLiteSafetyStore(databaseURL: fixture.databaseURL)
+        let root = try makeRoot(fixture.root)
+        let rule = try makeRule(scope: root.path, state: .preview, basis: .observedActivity)
+        try await store.replaceSnapshot(PolicySnapshot(rules: [rule], overrides: [], managedRoots: [root], globallyPaused: false))
+        let clock = MutableClock(Date(timeIntervalSince1970: 1_000))
+        let indexer = ManagedRootIndexer(store: store, resolver: { _ in fixture.root }, clock: clock,
+                                        eventStreamFactory: { _, _, _ in nil })
+        try await indexer.start()
+        try await waitForWatching(indexer, rootID: root.id)
+        let before = try await store.upcomingDeadlines()
+        let indexedEntries = await indexer.diagnosticsSnapshot().indexedEntries
+        try await store.saveEventCursor(for: root.id, eventID: 1)
+        clock.set(Date(timeIntervalSince1970: 4_000))
+        try await indexer.resumeAfterWake()
+        #expect(!(await indexer.canExecuteDeadline(at: file.path)))
+        try await indexer.processEvent(ManagedRootEvent(paths: [], flags: [], eventIDs: []),
+                                       for: root.id, replayThrough: 10)
+        #expect(!(await indexer.canExecuteDeadline(at: file.path)))
+        try await indexer.processEvent(ManagedRootEvent(paths: [root.path],
+            flags: [UInt32(kFSEventStreamEventFlagHistoryDone)], eventIDs: [10]),
+            for: root.id, replayThrough: 10)
+        #expect(await indexer.canExecuteDeadline(at: file.path))
+        #expect(try await store.upcomingDeadlines() == before)
+        #expect(await indexer.diagnosticsSnapshot().indexedEntries == indexedEntries)
+        await indexer.stop()
+    }
+
+    @Test func testGlobalTemplateChangeInvalidatesUnrelatedManagedRoot() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let file = fixture.root.appendingPathComponent("idle.tmp")
+        try Data("idle".utf8).write(to: file)
+        let store = try SQLiteSafetyStore(databaseURL: fixture.databaseURL)
+        let root = try makeRoot(fixture.root)
+        let rule = try makeRule(scope: "/Templates", state: .preview, matchMode: .template)
+        try await store.replaceSnapshot(PolicySnapshot(rules: [rule], overrides: [], managedRoots: [root], globallyPaused: false))
+        let indexer = ManagedRootIndexer(store: store, resolver: { _ in fixture.root },
+                                        eventStreamFactory: { _, _, _ in nil })
+        try await indexer.start()
+        try await waitForWatching(indexer, rootID: root.id)
+        let scans = await indexer.diagnosticsSnapshot().fullTreeScans
+        let changed = try makeRule(scope: "/Templates", state: .preview, basis: .created, matchMode: .template)
+        try await store.replaceSnapshot(PolicySnapshot(rules: [changed], overrides: [], managedRoots: [root], globallyPaused: false))
+        try await indexer.reconfigure()
+        try await waitForWatching(indexer, rootID: root.id)
+        #expect(await indexer.diagnosticsSnapshot().fullTreeScans == scans + 1)
+        let deadline = try #require(try await store.upcomingDeadlines().first)
+        #expect(deadline.explanation.matchedRuleID == changed.id)
+        await indexer.stop()
+    }
+
+    @Test func testOfflineReconfigurationRetainsPublishedDeadlines() async throws {
+        let fixture = try makeFixture()
+        let offline = fixture.root.appendingPathExtension("offline")
+        defer {
+            try? FileManager.default.removeItem(at: fixture.root)
+            try? FileManager.default.removeItem(at: offline)
+        }
+        let file = fixture.root.appendingPathComponent("idle.tmp")
+        try Data("retain".utf8).write(to: file)
+        let store = try SQLiteSafetyStore(databaseURL: fixture.databaseURL)
+        let root = try makeRoot(fixture.root)
+        let rule = try makeRule(scope: root.path, state: .preview)
+        try await store.replaceSnapshot(PolicySnapshot(rules: [rule], overrides: [], managedRoots: [root], globallyPaused: false))
+        let indexer = ManagedRootIndexer(store: store, resolver: { _ in fixture.root })
+        try await indexer.start()
+        try await waitForWatching(indexer, rootID: root.id)
+        let before = try await store.upcomingDeadlines()
+        #expect(!before.isEmpty)
+        try FileManager.default.moveItem(at: fixture.root, to: offline)
+        try await indexer.reconcileManagedRoots(at: [root.path])
+        #expect(try await store.upcomingDeadlines() == before)
+        #expect(!(await indexer.canExecuteDeadline(at: file.path)))
+        await indexer.stop()
+    }
+
+    @Test func testMarkerEditsAreIncrementalAndGeneratedChildrenKeepMatchingOtherRules() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let project = fixture.root.appendingPathComponent("sample", isDirectory: true)
+        let generated = project.appendingPathComponent("node_modules", isDirectory: true)
+        try FileManager.default.createDirectory(at: generated, withIntermediateDirectories: true)
+        let marker = project.appendingPathComponent("package.json")
+        let child = generated.appendingPathComponent("cache.tmp")
+        try Data("{}".utf8).write(to: marker)
+        try Data("generated".utf8).write(to: child)
+        for url in [marker, child] {
+            try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 100)], ofItemAtPath: url.path)
+        }
+        let store = try SQLiteSafetyStore(databaseURL: fixture.databaseURL)
+        let root = try makeRoot(fixture.root)
+        let childRule = try makeRule(scope: root.path, state: .preview, recursive: true)
+        let projectRule = try makeRule(scope: root.path, state: .preview, basis: .projectActivity,
+                                      itemKind: .directory, exactNames: ["node_modules"], globPatterns: [], recursive: true)
+        try await store.replaceSnapshot(PolicySnapshot(rules: [childRule, projectRule], overrides: [], managedRoots: [root], globallyPaused: false))
+        let clock = MutableClock(Date(timeIntervalSince1970: 1_000))
+        let indexer = ManagedRootIndexer(store: store, resolver: { _ in fixture.root }, clock: clock)
+        try await indexer.start()
+        try await waitForWatching(indexer, rootID: root.id)
+        #expect(try await store.upcomingDeadlines().contains(where: { $0.identity.pathHint == child.path }))
+        let diagnostics = await indexer.diagnosticsSnapshot()
+        clock.set(Date(timeIntervalSince1970: 2_000))
+        try await indexer.processChanges(ManagedRootEvent(paths: [marker.path],
+            flags: [UInt32(kFSEventStreamEventFlagItemModified)], eventIDs: [1]), for: root.id)
+        let afterDiagnostics = await indexer.diagnosticsSnapshot()
+        #expect(afterDiagnostics.indexedEntries == diagnostics.indexedEntries)
+        #expect(afterDiagnostics.fullTreeScans == diagnostics.fullTreeScans)
+        let afterMarker = try await store.upcomingDeadlines()
+        #expect(afterMarker.first(where: { $0.identity.pathHint == generated.path })?.explanation.basisDate == clock.now())
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 300)], ofItemAtPath: child.path)
+        try await indexer.processChanges(ManagedRootEvent(paths: [child.path],
+            flags: [UInt32(kFSEventStreamEventFlagItemModified)], eventIDs: [2]), for: root.id)
+        let afterChild = try await store.upcomingDeadlines()
+        #expect(afterChild.first(where: { $0.identity.pathHint == child.path })?.explanation.basisDate == Date(timeIntervalSince1970: 300))
+        #expect(afterChild.first(where: { $0.identity.pathHint == generated.path })?.explanation.basisDate == clock.now())
+        await indexer.stop()
+    }
+
+    @Test func overlappingRootsRetainNestedIdentityDatesThroughRecoveryAndRemoval() async throws {
+        let fixture = try makeFixture()
+        let database = FileManager.default.temporaryDirectory.appendingPathComponent("TinyPrune-Overlap-\(UUID()).sqlite3")
+        defer {
+            try? FileManager.default.removeItem(at: fixture.root)
+            for suffix in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: database.path + suffix) }
+        }
+        let child = fixture.root.appendingPathComponent("child")
+        try FileManager.default.createDirectory(at: child, withIntermediateDirectories: true)
+        let file = child.appendingPathComponent("retained.tmp")
+        try Data("retained identity".utf8).write(to: file)
+        let parentRoot = try makeRoot(fixture.root)
+        let childRoot = try makeRoot(child)
+        let rule = try makeRule(scope: child.path, state: .preview, basis: .firstObserved, recursive: true)
+        let store = try SQLiteSafetyStore(databaseURL: database)
+        try await store.replaceSnapshot(PolicySnapshot(rules: [rule], overrides: [], managedRoots: [parentRoot, childRoot], globallyPaused: false))
+        let clock = MutableClock(Date(timeIntervalSince1970: 1_000))
+        let indexer = ManagedRootIndexer(store: store, resolver: { root in URL(fileURLWithPath: root.path) }, clock: clock)
+        try await indexer.start()
+        try await waitForWatching(indexer, rootID: parentRoot.id)
+        try await waitForWatching(indexer, rootID: childRoot.id)
+        let before = try #require(try await store.nextDeadline())
+        #expect(before.scheduledAt == Date(timeIntervalSince1970: 1_060))
+        async let parentRecovery: Void = indexer.processChanges(ManagedRootEvent(paths: [], flags: [], eventIDs: [50], requiresRecovery: true), for: parentRoot.id)
+        async let childRecovery: Void = indexer.processChanges(ManagedRootEvent(paths: [], flags: [], eventIDs: [51], requiresRecovery: true), for: childRoot.id)
+        _ = try await (parentRecovery, childRecovery)
+        #expect(try await store.indexedDeadlineCount() == 1)
+        #expect(try await store.nextDeadline()?.scheduledAt == before.scheduledAt)
+        clock.set(Date(timeIntervalSince1970: 2_000))
+        try await store.replaceSnapshot(PolicySnapshot(rules: [rule], overrides: [], managedRoots: [childRoot], globallyPaused: false))
+        try await indexer.reconfigure()
+        try await waitForWatching(indexer, rootID: childRoot.id)
+        let after = try #require(try await store.nextDeadline())
+        #expect(after.identity == before.identity)
+        #expect(after.scheduledAt == before.scheduledAt)
+        #expect(try await store.observedActivity(for: after.identity)?.firstObservedAt == Date(timeIntervalSince1970: 1_000))
+        await indexer.stop()
+    }
+
+    @Test func gitBookkeepingDoesNotAdvanceProjectExpiryAcrossRestart() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let project = fixture.root.appendingPathComponent("project")
+        let git = project.appendingPathComponent(".git")
+        let generated = project.appendingPathComponent("node_modules")
+        try FileManager.default.createDirectory(at: git, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: generated, withIntermediateDirectories: true)
+        let source = project.appendingPathComponent("source.swift")
+        try Data("source".utf8).write(to: source)
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 200)], ofItemAtPath: source.path)
+        try FileManager.default.setAttributes([
+            .creationDate: Date(timeIntervalSince1970: 100),
+            .modificationDate: Date(timeIntervalSince1970: 9_000)
+        ], ofItemAtPath: git.path)
+        let store = try SQLiteSafetyStore(databaseURL: fixture.databaseURL)
+        let root = try makeRoot(fixture.root)
+        let rule = try LifetimeRule(
+            name: "Project cleanup", scope: RuleScope(path: root.path, recursive: true),
+            matcher: ItemMatcher(itemKind: .directory, exactNames: ["node_modules"]),
+            expiryBasis: .projectActivity, lifetime: RuleDuration(seconds: 60),
+            action: .trashItem, state: .preview
+        )
+        try await store.replaceSnapshot(PolicySnapshot(rules: [rule], overrides: [], managedRoots: [root], globallyPaused: false))
+        let indexer = ManagedRootIndexer(store: store, resolver: { _ in fixture.root }, clock: FixedClock(Date(timeIntervalSince1970: 1_000)))
+        try await indexer.start()
+        try await waitForWatching(indexer, rootID: root.id)
+        let before = try #require(try await store.nextDeadline())
+        #expect(before.scheduledAt == Date(timeIntervalSince1970: 260))
+        await indexer.stop()
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 19_000)], ofItemAtPath: git.path)
+        try await indexer.start()
+        try await waitForWatching(indexer, rootID: root.id)
+        #expect(try await store.nextDeadline()?.scheduledAt == before.scheduledAt)
+        #expect(try await store.projectActivity(for: generated.path) == Date(timeIntervalSince1970: 200))
+        await indexer.stop()
+    }
+
+    @Test func testUnreadableRecoveryRetainsUnavailableSchedulesAndIndexesReadableItems() async throws {
+        let fixture = try makeFixture()
+        let directory = fixture.root.appendingPathComponent("private", isDirectory: true)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+            try? FileManager.default.removeItem(at: fixture.root)
+        }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appendingPathComponent("idle.tmp")
+        try Data("retain".utf8).write(to: file)
+        let store = try SQLiteSafetyStore(databaseURL: fixture.databaseURL)
+        let root = try makeRoot(fixture.root)
+        let rule = try makeRule(scope: root.path, state: .preview, recursive: true)
+        try await store.replaceSnapshot(PolicySnapshot(rules: [rule], overrides: [], managedRoots: [root], globallyPaused: false))
+        let indexer = ManagedRootIndexer(store: store, resolver: { _ in fixture.root })
+        try await indexer.start()
+        try await waitForWatching(indexer, rootID: root.id)
+        let before = try await store.upcomingDeadlines()
+        #expect(before.contains(where: { $0.identity.pathHint == file.path }))
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: directory.path)
+        let readable = fixture.root.appendingPathComponent("readable.tmp")
+        try Data("accessible".utf8).write(to: readable)
+        try await indexer.processChanges(ManagedRootEvent(paths: [], flags: [], eventIDs: [50], requiresRecovery: true), for: root.id)
+        let after = try await store.upcomingDeadlines()
+        #expect(after.filter { $0.identity == before.first?.identity } == before)
+        #expect(Set(after.map(\.identity.pathHint)) == Set([file.path, readable.path]))
+        await indexer.stop()
+    }
+
+    @Test func testPolicyReconfigurationLeavesUnchangedRootsAndPauseSettingsUnscanned() async throws {
+        let firstFixture = try makeFixture()
+        let secondFixture = try makeFixture()
+        defer {
+            try? FileManager.default.removeItem(at: firstFixture.root)
+            try? FileManager.default.removeItem(at: secondFixture.root)
+        }
+        let firstFile = firstFixture.root.appendingPathComponent("one.tmp")
+        let secondFile = secondFixture.root.appendingPathComponent("two.tmp")
+        try Data("first".utf8).write(to: firstFile)
+        try Data("second".utf8).write(to: secondFile)
+        let store = try SQLiteSafetyStore(databaseURL: firstFixture.databaseURL)
+        let firstRoot = try makeRoot(firstFixture.root)
+        let secondRoot = try makeRoot(secondFixture.root)
+        let firstRule = try makeRule(scope: firstRoot.path, state: .preview)
+        let secondRule = try makeRule(scope: secondRoot.path, state: .preview)
+        let roots = [firstRoot, secondRoot]
+        try await store.replaceSnapshot(PolicySnapshot(rules: [firstRule, secondRule], overrides: [], managedRoots: roots, globallyPaused: false))
+        let indexer = ManagedRootIndexer(store: store, resolver: { root in URL(fileURLWithPath: root.path) })
+        try await indexer.start()
+        try await waitForWatching(indexer, rootID: firstRoot.id)
+        try await waitForWatching(indexer, rootID: secondRoot.id)
+        let original = await indexer.diagnosticsSnapshot()
+        try await store.replaceSnapshot(PolicySnapshot(rules: [firstRule, secondRule], overrides: [], managedRoots: roots,
+            globallyPaused: true, settings: AgentSettings(activityRetentionDays: 30)))
+        try await indexer.reconfigure()
+        #expect(await indexer.diagnosticsSnapshot().fullTreeScans == original.fullTreeScans)
+        let before = try await store.upcomingDeadlines()
+        let secondDeadline = try #require(before.first(where: { $0.identity.pathHint == secondFile.path }))
+        let changedFirstRule = try makeRule(scope: firstRoot.path, state: .preview, basis: .created)
+        try await store.replaceSnapshot(PolicySnapshot(rules: [changedFirstRule, secondRule], overrides: [], managedRoots: roots,
+            globallyPaused: true, settings: AgentSettings(activityRetentionDays: 30)))
+        try await indexer.reconfigure()
+        try await waitForWatching(indexer, rootID: firstRoot.id)
+        #expect(await indexer.diagnosticsSnapshot().fullTreeScans == original.fullTreeScans + 1)
+        #expect(await indexer.canExecuteDeadline(at: secondFile.path))
+        let after = try await store.upcomingDeadlines()
+        #expect(after.first(where: { $0.identity.pathHint == secondFile.path }) == secondDeadline)
+        await indexer.stop()
+    }
+
+    private func waitForWatching(_ indexer: ManagedRootIndexer, rootID: UUID) async throws {
+        for _ in 0..<500 {
+            if await indexer.rootStatuses().contains(where: { $0.rootID == rootID && $0.state == .watching }) { return }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        throw NSError(domain: "ManagedRootIndexerTests", code: 1,
+                      userInfo: [NSLocalizedDescriptionKey: "Root never completed indexing"])
+    }
+
     private func makeFixture() throws -> (root: URL, databaseURL: URL) {
         let root = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("TinyPrune-Indexer-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -378,7 +796,8 @@ import TinyPrunePersistence
         itemKind: ItemKind = .file,
         exactNames: Set<String> = [],
         globPatterns: Set<String> = ["*.tmp"],
-        recursive: Bool = false
+        recursive: Bool = false,
+        matchMode: RuleMatchMode = .scoped
     ) throws -> LifetimeRule {
         try LifetimeRule(
             name: "Temporary files",
@@ -387,7 +806,8 @@ import TinyPrunePersistence
             expiryBasis: basis,
             lifetime: RuleDuration(seconds: 60),
             action: .trashItem,
-            state: state
+            state: state,
+            matchMode: matchMode
         )
     }
 }

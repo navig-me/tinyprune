@@ -145,8 +145,8 @@ struct ReclaimLedger: View {
 
     private var soonCell: some View {
         VStack(alignment: .leading, spacing: 7) {
-            Text("Moving soon").font(Typography.body(size: 13, weight: .semibold))
-            LedgerNumber(value: Int64(soonEstimate.items), isSize: false)
+            Text(model.unreadyRoots.isEmpty ? "Moving soon" : "Scheduled soon").font(Typography.body(size: 13, weight: .semibold))
+            LedgerNumber(value: Int64(model.activeSoonCount), isSize: false)
             Text("items in the next 24 hours").font(.subheadline).foregroundStyle(.secondary)
             sizeLine(soonEstimate)
             if moving {
@@ -164,9 +164,11 @@ struct ReclaimLedger: View {
     private var scheduledCell: some View {
         VStack(alignment: .leading, spacing: 7) {
             Text("Scheduled").font(Typography.body(size: 13, weight: .semibold))
-            LedgerNumber(value: Int64(scheduled.items), isSize: false)
+            LedgerNumber(value: Int64(model.activeCount), isSize: false)
             Text("items under Active rules").font(.subheadline).foregroundStyle(.secondary)
             sizeLine(scheduled)
+            Text("Size estimate covers up to 100 sampled Active items, not the full schedule.")
+                .font(.caption).foregroundStyle(.secondary)
             if let next = active.first {
                 Text("Next: \(displayName(next.explanation.candidateIdentity.pathHint))")
                     .font(.caption).lineLimit(2)
