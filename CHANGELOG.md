@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.13 - 2026-10-13
 
 - Preserve first-observed deadlines through parent-folder renames and restarts. Replayed filesystem hints reconcile durable timestamps and metadata rather than restarting inactivity timers at replay time.
 - Keep published schedules visible while indexing or when a managed folder is unavailable. Successful scans publish a coherent replacement; unreadable locations retain known schedules. Cleanup waits for available roots and completed wake-event replay, with the existing final safety preflight unchanged.
