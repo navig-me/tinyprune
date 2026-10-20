@@ -119,7 +119,8 @@ if ((Tp status) -notmatch 'available') { Fail 'status output' }
 
 (Tp roots add smoke-root $Root Fixture) | Out-Null
 if ($global:TpExit -ne 0) { Fail 'roots add' }
-if ((Tp roots list) -notmatch [regex]::Escape("$name/root")) { Fail 'managed root not listed' }
+$rootsText = ((Tp roots list) -join "`n").Replace('\', '/')
+if ($rootsText -notmatch [regex]::Escape($Root.Replace('\', '/').TrimStart('/'))) { Write-Host "roots list output: $rootsText"; Fail 'managed root not listed' }
 Ok 'managed root added'
 
 (Tp keep (Join-Path $Root 'keep.txt')) | Out-Null; if ($global:TpExit -ne 0) { Fail 'keep file' }
@@ -206,7 +207,7 @@ Ok "activity: $moved movedToTrash events, each with an explanation"
 StopAgent
 StartAgent
 if ((Tp rules) -notmatch "$Rule.*active") { Fail 'Active rule not persisted' }
-if ((Tp roots list) -notmatch [regex]::Escape("$name/root")) { Fail 'root not persisted' }
+if ((((Tp roots list) -join "`n").Replace('\', '/')) -notmatch [regex]::Escape($Root.Replace('\', '/').TrimStart('/'))) { Fail 'root not persisted' }
 if ((Tp explain (Join-Path $Root 'keep.txt')) -notmatch 'Suppression: "protected"') { Fail 'Keep not persisted' }
 if ((MovedCount) -ne $moved) { Fail 'audit history changed across restart' }
 Ok 'rule, root, Keep and audit history persisted across restart'
