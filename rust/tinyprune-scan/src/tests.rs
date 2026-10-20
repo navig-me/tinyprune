@@ -225,9 +225,14 @@ fn hidden_and_noise_are_retained_for_shared_policy_and_protection() {
         assert!(names.contains(&name.to_str().unwrap()));
     }
     let git_index = tree.0.join(".git/index");
-    assert!(!tinyprune_core::scheduler::meaningful_activity(
+    #[cfg(windows)]
+    let flavor = tinyprune_core::path::PathFlavor::Windows;
+    #[cfg(not(windows))]
+    let flavor = tinyprune_core::path::PathFlavor::Posix;
+    assert!(!tinyprune_core::scheduler::meaningful_activity_with_flavor(
         git_index.to_str().unwrap(),
-        tree.0.to_str().unwrap()
+        tree.0.to_str().unwrap(),
+        flavor
     ));
 }
 #[test]
