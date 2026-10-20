@@ -35,8 +35,14 @@ fn hex(resource: &[u8]) -> String {
 fn key(i: &FilesystemIdentity) -> String {
     format!("{}:{}", i.volume, hex(&i.resource))
 }
+fn same_path(a: &str, b: &str, flavor: PathFlavor) -> bool {
+    match flavor {
+        PathFlavor::Posix => flavor.equal(a, b),
+        PathFlavor::Windows => flavor.equal(&flavor.normalize(a), &flavor.normalize(b)),
+    }
+}
 fn within(path: &str, root: &str, flavor: PathFlavor) -> bool {
-    flavor.equal(path, root) || flavor.is_descendant(path, root)
+    same_path(path, root, flavor) || flavor.is_descendant(path, root)
 }
 fn count(n: i64) -> Result<u64> {
     u64::try_from(n).map_err(|_| "Invalid persisted count".into())
@@ -55,6 +61,7 @@ pub struct Store {
     writer: Arc<Mutex<Connection>>,
     reader: Arc<Mutex<Connection>>,
     projects: Vec<Project>,
+    path_flavor: PathFlavor,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct DeadlineCursor {
@@ -134,6 +141,9 @@ fn decision_count_sql(rule: bool, preview: bool) -> String {
 }
 impl Store {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_with_flavor(path, PathFlavor::Posix)
+    }
+    pub fn open_with_flavor(path: impl AsRef<Path>, path_flavor: PathFlavor) -> Result<Self> {
         let path = path.as_ref();
         let writer = Self::prepare_writer(sql(Connection::open(path))?)?;
         let reader = sql(Connection::open_with_flags(
@@ -141,15 +151,26 @@ impl Store {
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         ))?;
         sql(reader.busy_timeout(std::time::Duration::from_secs(5)))?;
-        Self::finish(Arc::new(Mutex::new(writer)), Arc::new(Mutex::new(reader)))
+        Self::finish(
+            Arc::new(Mutex::new(writer)),
+            Arc::new(Mutex::new(reader)),
+            path_flavor,
+        )
     }
     pub fn memory() -> Result<Self> {
-        Self::from_connection(sql(Connection::open_in_memory())?)
+        Self::memory_with_flavor(PathFlavor::Posix)
+    }
+    pub fn memory_with_flavor(path_flavor: PathFlavor) -> Result<Self> {
+        Self::from_connection_with_flavor(sql(Connection::open_in_memory())?, path_flavor)
     }
     /// Single shared connection for both roles (in-memory databases cannot be opened twice).
+    #[cfg(test)]
     fn from_connection(c: Connection) -> Result<Self> {
+        Self::from_connection_with_flavor(c, PathFlavor::Posix)
+    }
+    fn from_connection_with_flavor(c: Connection, path_flavor: PathFlavor) -> Result<Self> {
         let shared = Arc::new(Mutex::new(Self::prepare_writer(c)?));
-        Self::finish(shared.clone(), shared)
+        Self::finish(shared.clone(), shared, path_flavor)
     }
     fn prepare_writer(mut c: Connection) -> Result<Connection> {
         sql(c.busy_timeout(std::time::Duration::from_secs(5)))?;
@@ -172,11 +193,16 @@ impl Store {
         ))?;
         Ok(c)
     }
-    fn finish(writer: Arc<Mutex<Connection>>, reader: Arc<Mutex<Connection>>) -> Result<Self> {
+    fn finish(
+        writer: Arc<Mutex<Connection>>,
+        reader: Arc<Mutex<Connection>>,
+        path_flavor: PathFlavor,
+    ) -> Result<Self> {
         let mut store = Self {
             writer,
             reader,
             projects: vec![],
+            path_flavor,
         };
         store.refresh_projects()?;
         Ok(store)
@@ -259,10 +285,7 @@ impl Store {
             if revision!=expected { return Err("Policy revision conflict".into()); }
             let next=revision.checked_add(1).ok_or("Policy revision overflow")?;
             sql(tx.execute_batch("DELETE FROM rules; DELETE FROM overrides;"))?;
-            for root in strings(tx,"SELECT path FROM roots",[])? {
-                if !policy.managed_roots.contains(&root) { sql(tx.execute("DELETE FROM roots WHERE path=?",[root]))?; }
-            }
-            for (n,root) in policy.managed_roots.iter().enumerate() { sql(tx.execute("INSERT INTO roots VALUES(?1,?2) ON CONFLICT(path) DO UPDATE SET position=excluded.position",params![root,n as i64]))?; }
+            replace_roots(tx, &policy.managed_roots, self.path_flavor)?;
             let rules=policy.rules.iter().map(Rule::from).collect::<Vec<_>>();
             let overrides=policy.overrides.iter().map(Override::from).collect::<Vec<_>>();
             for (n,(rule,payload)) in policy.rules.iter().zip(&rules).enumerate() { sql(tx.execute("INSERT INTO rules VALUES(?1,?2,?3)",params![rule.id.to_string(),n as i64,encode(payload)?]))?; }
@@ -315,11 +338,10 @@ impl Store {
     /// Root validation/canonical resolution is the platform caller's responsibility.
     pub fn replace_roots(&self, roots: &[String], at: f64) -> Result<()> {
         self.transaction(|tx| {
-        let old=strings(tx,"SELECT path FROM roots ORDER BY position",[])?;
-        for path in old { if !roots.contains(&path) { sql(tx.execute("DELETE FROM roots WHERE path=?",[path]))?; } }
-        for (position,path) in roots.iter().enumerate() { sql(tx.execute("INSERT INTO roots VALUES(?1,?2) ON CONFLICT(path) DO UPDATE SET position=excluded.position",params![path,position as i64]))?; }
-        record(tx,at,"managedRootsMutation",&encode(&roots)?)?; Ok(())
-    })
+            replace_roots(tx, roots, self.path_flavor)?;
+            record(tx, at, "managedRootsMutation", &encode(&roots)?)?;
+            Ok(())
+        })
     }
     pub fn set_settings(&self, paused: bool, settings: AgentSettings, at: f64) -> Result<()> {
         finite(settings.default_grace_period_seconds)?;
@@ -405,6 +427,7 @@ impl Store {
         at: f64,
     ) -> Result<()> {
         self.transaction(|tx| {
+            let root = stored_root(tx, root, self.path_flavor)?;
             let mut seen = HashSet::with_capacity(candidates.len());
             {
                 let mut up = sql(tx.prepare_cached(UPSERT_CANDIDATE))?;
@@ -412,7 +435,7 @@ impl Store {
                     let k = key(&c.identity);
                     sql(up.execute(params![
                         &k,
-                        root,
+                        &root,
                         encode(&Candidate::from(c))?,
                         &c.identity.path_hint
                     ]))?;
@@ -422,7 +445,7 @@ impl Store {
             let existing = strings(
                 tx,
                 "SELECT identity_key FROM candidates WHERE root=?",
-                [root],
+                [&root],
             )?;
             let mut del = sql(tx.prepare_cached("DELETE FROM candidates WHERE identity_key=?"))?;
             for k in existing.iter().filter(|k| !seen.contains(*k)) {
@@ -449,8 +472,9 @@ impl Store {
         at: f64,
     ) -> Result<usize> {
         self.transaction(|tx| {
-            let flavor = flavor_of(tx)?;
-            let roots = strings(tx, "SELECT path FROM roots ORDER BY length(path) DESC", [])?;
+            let flavor = self.path_flavor;
+            let mut roots = strings(tx, "SELECT path FROM roots", [])?;
+            roots.sort_by_key(|root| std::cmp::Reverse(flavor.normalize(root).len()));
             let mut seen = HashSet::with_capacity(candidates.len());
             let mut changed = 0usize;
             {
@@ -517,6 +541,7 @@ impl Store {
         limit: std::num::NonZeroUsize,
     ) -> Result<Vec<(String, RuleCandidate)>> {
         let c = self.read()?;
+        let root = stored_root(&c, root, self.path_flavor)?;
         let mut s=sql(c.prepare("SELECT identity_key,payload FROM candidates WHERE root=?1 AND (?2 IS NULL OR identity_key>?2) ORDER BY identity_key LIMIT ?3"))?;
         let rows = sql(s.query_map(params![root, after, limit.get() as i64], |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
@@ -887,14 +912,27 @@ fn strings<P: rusqlite::Params>(c: &Connection, query: &str, p: P) -> Result<Vec
     let rows = sql(s.query_map(p, |r| r.get(0)))?;
     rows.map(sql).collect()
 }
-fn flavor_of(tx: &Transaction<'_>) -> Result<PathFlavor> {
-    let windows: bool =
-        sql(tx.query_row("SELECT windows FROM settings WHERE id=1", [], |r| r.get(0)))?;
-    Ok(if windows {
-        PathFlavor::Windows
-    } else {
-        PathFlavor::Posix
-    })
+fn stored_root(c: &Connection, path: &str, flavor: PathFlavor) -> Result<String> {
+    Ok(strings(c, "SELECT path FROM roots", [])?
+        .into_iter()
+        .find(|root| same_path(path, root, flavor))
+        .unwrap_or_else(|| path.into()))
+}
+fn replace_roots(tx: &Transaction<'_>, roots: &[String], flavor: PathFlavor) -> Result<()> {
+    let old = strings(tx, "SELECT path FROM roots", [])?;
+    for path in &old {
+        if !roots.iter().any(|root| same_path(path, root, flavor)) {
+            sql(tx.execute("DELETE FROM roots WHERE path=?", [path]))?;
+        }
+    }
+    for (position, root) in roots.iter().enumerate() {
+        let path = old
+            .iter()
+            .find(|path| same_path(path, root, flavor))
+            .unwrap_or(root);
+        sql(tx.execute("INSERT INTO roots VALUES(?1,?2) ON CONFLICT(path) DO UPDATE SET position=excluded.position", params![path, position as i64]))?;
+    }
+    Ok(())
 }
 /// Deletes rows of a table keyed by `identity_key` with a `path_hint` column, selected by `hit(key, hint)`.
 /// Scans only those two columns (covering index for candidates), never decoding payload JSON.
@@ -938,7 +976,7 @@ fn record(tx: &Transaction<'_>, at: f64, kind: &str, payload: &str) -> Result<i6
     }
     Ok(tx.last_insert_rowid())
 }
-fn append_event(tx: &Transaction<'_>, e: &AuditEvent) -> Result<()> {
+fn append_event(tx: &Transaction<'_>, e: &AuditEvent, flavor: PathFlavor) -> Result<()> {
     let id = record(
         tx,
         e.occurred_at,
@@ -973,7 +1011,6 @@ fn append_event(tx: &Transaction<'_>, e: &AuditEvent) -> Result<()> {
                     ))?;
                 }
             }
-            let flavor = flavor_of(tx)?;
             let moved = key(identity);
             let volume_prefix = format!("{}:", identity.volume);
             // Candidate deletion cascades to current_decisions via trigger; also drop the moved
@@ -1102,7 +1139,7 @@ impl ObservationStore for Store {
         Ok(&self.projects)
     }
     fn publish_projects(&mut self, root: &str, projects: Vec<Project>) -> Result<()> {
-        let flavor = self.load_snapshot()?.settings.path_flavor;
+        let flavor = self.path_flavor;
         self.transaction(|tx| {
             let old=strings(tx,"SELECT identity FROM projects",[])?;
             for p in old { let identity=decode::<Identity>(&p)?.decode()?; if within(&identity.path_hint,root,flavor)&&!projects.iter().any(|p|p.identity==identity) { sql(tx.execute("DELETE FROM projects WHERE identity_key=?",[key(&identity)]))?; } }
@@ -1112,7 +1149,7 @@ impl ObservationStore for Store {
         self.refresh_projects()
     }
     fn remove_below(&mut self, path: &str) -> Result<()> {
-        let flavor = self.load_snapshot()?.settings.path_flavor;
+        let flavor = self.path_flavor;
         self.transaction(|tx| {
             for table in ["observations", "projects", "candidates"] {
                 delete_where(tx, table, |_, hint| within(hint, path, flavor))?;
@@ -1137,6 +1174,7 @@ impl AgentStore for Store {
     /// nothing (no row rewrite, no audit).
     fn replace_deadlines(&mut self, root: &str, deadlines: &[TrashRequest]) -> Result<()> {
         self.transaction(|tx| {
+            let root = stored_root(tx, root, self.path_flavor)?;
             let mut seen = HashSet::with_capacity(deadlines.len());
             {
                 let mut up = sql(tx.prepare_cached(UPSERT_DEADLINE))?;
@@ -1145,7 +1183,7 @@ impl AgentStore for Store {
                     finite(r.scheduled_at)?;
                     let k = key(&r.candidate_identity);
                     let p = encode(&Request::from(r))?;
-                    if sql(up.execute(params![&k, root, r.scheduled_at, &p]))? > 0 {
+                    if sql(up.execute(params![&k, &root, r.scheduled_at, &p]))? > 0 {
                         sql(audit.execute(params![r.scheduled_at, "deadlineScheduled", &p]))?;
                     }
                     seen.insert(k);
@@ -1154,7 +1192,7 @@ impl AgentStore for Store {
             let existing = strings(
                 tx,
                 "SELECT identity_key FROM deadlines WHERE root=?",
-                [root],
+                [&root],
             )?;
             let mut del = sql(tx.prepare_cached("DELETE FROM deadlines WHERE identity_key=?"))?;
             for k in existing.iter().filter(|k| !seen.contains(*k)) {
@@ -1187,7 +1225,7 @@ impl AgentStore for Store {
 }
 impl AuditSink for Store {
     fn append(&mut self, e: AuditEvent) -> Result<()> {
-        self.transaction(|tx| append_event(tx, &e))
+        self.transaction(|tx| append_event(tx, &e, self.path_flavor))
     }
 }
 impl AgentAudit for Store {
@@ -1210,7 +1248,7 @@ impl AgentAudit for Store {
         self.transaction(|tx| {
             let deleted = sql(tx.execute("DELETE FROM attempts WHERE identity_key=?", [key(i)]))?;
             if deleted > 0 {
-                append_event(tx, &e)?;
+                append_event(tx, &e, self.path_flavor)?;
             }
             Ok(())
         })

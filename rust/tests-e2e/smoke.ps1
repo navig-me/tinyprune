@@ -66,9 +66,21 @@ function MovedCount {
     $json = (Tp activity --json) | ConvertFrom-Json
     return @($json.events | Where-Object { $_.kind -eq 'movedToTrash' }).Count
 }
-function BinNames {
+function BinPaths {
     $shell = New-Object -ComObject Shell.Application
-    return @($shell.Namespace(0xA).Items() | ForEach-Object { $_.Name })
+    try {
+        $folder = $shell.Namespace(0xA)
+        foreach ($item in $folder.Items()) {
+            # Scope assertions to this unique fixture, not unrelated user/runner Bin entries.
+            $from = [string]$item.ExtendedProperty('System.Recycle.DeletedFrom')
+            if ($from -eq $Root -or $from.StartsWith("$Root\", [System.StringComparison]::OrdinalIgnoreCase)) {
+                $name = [string]$item.ExtendedProperty('System.ItemNameDisplay')
+                Join-Path $from $name
+            }
+        }
+    } finally {
+        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($shell)
+    }
 }
 function StartAgent {
     $script:proc = Start-Process -FilePath $agentd -ArgumentList '--data-dir', "`"$Data`"", '--reconcile-seconds', '1' -PassThru -WindowStyle Hidden
@@ -107,7 +119,7 @@ if ((Tp status) -notmatch 'available') { Fail 'status output' }
 
 (Tp roots add smoke-root $Root Fixture) | Out-Null
 if ($global:TpExit -ne 0) { Fail 'roots add' }
-if ((Tp roots list) -notmatch [regex]::Escape("$name\root")) { Fail 'managed root not listed' }
+if ((Tp roots list) -notmatch [regex]::Escape("$name/root")) { Fail 'managed root not listed' }
 Ok 'managed root added'
 
 (Tp keep (Join-Path $Root 'keep.txt')) | Out-Null; if ($global:TpExit -ne 0) { Fail 'keep file' }
@@ -172,10 +184,15 @@ Start-Sleep 3
 $survivors = (Get-ChildItem -Recurse $Root | ForEach-Object { $_.FullName.Substring($Root.Length + 1) } | Sort-Object) -join ' '
 if ($survivors -ne 'docs docs\protected.txt keep.txt recent.txt') { Fail "unexpected survivors: $survivors" }
 Ok 'survivors are exactly docs, docs\protected.txt, keep.txt, recent.txt'
-$bin_ = BinNames
-foreach ($n in 'old.txt', 'stale') { if ($bin_ -notcontains $n) { Fail "Recycle Bin lacks $n (has: $($bin_ -join ', '))" } }
-foreach ($n in 'keep.txt', 'recent.txt', 'protected.txt', 'docs') { if ($bin_ -contains $n) { Fail "Recycle Bin unexpectedly holds $n" } }
-Ok 'Recycle Bin holds old.txt and stale and none of the protected items'
+WaitFor 30 'Recycle Bin entries for old.txt and stale' {
+    $bin_ = @(BinPaths)
+    # Shell display names may hide known extensions. Original directories still isolate our fixture.
+    ($bin_ -contains (Join-Path $Root 'old.txt') -or $bin_ -contains (Join-Path $Root 'old')) -and
+        $bin_ -contains (Join-Path $Root 'stale')
+}
+$bin_ = @(BinPaths)
+if ($bin_.Count -ne 2) { Fail "unexpected fixture Recycle Bin entries: $($bin_ -join ', ')" }
+Ok 'Recycle Bin holds only old.txt and stale from this fixture'
 
 # ---- audit / explain completeness ------------------------------------------------------------
 $moved = MovedCount
@@ -189,7 +206,7 @@ Ok "activity: $moved movedToTrash events, each with an explanation"
 StopAgent
 StartAgent
 if ((Tp rules) -notmatch "$Rule.*active") { Fail 'Active rule not persisted' }
-if ((Tp roots list) -notmatch [regex]::Escape("$name\root")) { Fail 'root not persisted' }
+if ((Tp roots list) -notmatch [regex]::Escape("$name/root")) { Fail 'root not persisted' }
 if ((Tp explain (Join-Path $Root 'keep.txt')) -notmatch 'Suppression: "protected"') { Fail 'Keep not persisted' }
 if ((MovedCount) -ne $moved) { Fail 'audit history changed across restart' }
 Ok 'rule, root, Keep and audit history persisted across restart'

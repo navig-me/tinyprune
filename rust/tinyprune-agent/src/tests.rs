@@ -234,6 +234,29 @@ fn raw(path: &str, kind: RawKind) -> RawEvent {
     }
 }
 #[test]
+fn windows_project_hydration_matches_the_project_itself_across_spellings() {
+    let mut item = candidate(r"\\?\c:\managed\project", 1);
+    let mut project = item.identity.clone();
+    project.path_hint = "C:/Managed/Project".into();
+    let store = Store {
+        projects: vec![Project {
+            identity: project,
+            activity: 42.0,
+        }],
+        ..Default::default()
+    };
+    item = Hydrator(&store, PathFlavor::Windows)
+        .hydrate(&item, &[], 50.0)
+        .unwrap();
+    assert_eq!(item.timestamps.project_activity, Some(42.0));
+    assert!(same_path(
+        r"\\?\c:\managed",
+        "C:/MANAGED",
+        PathFlavor::Windows
+    ));
+    assert!(!same_path("/managed", "/MANAGED", PathFlavor::Posix));
+}
+#[test]
 fn scheduled_item_moves_at_deadline_with_scripted_clock() {
     let mut agent = agent(vec![candidate("/root/a", 1)]);
     assert_eq!(agent.tick_clock(&At(9.0)).unwrap().trashed, 0);

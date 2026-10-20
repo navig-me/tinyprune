@@ -150,7 +150,7 @@ impl Daemon {
         })?;
         let database = options.paths.data.join("agent.sqlite3");
         drop(private_file(&database)?);
-        let store = Store::open(database).map_err(io_error)?;
+        let store = Store::open_with_flavor(database, codec::flavor()).map_err(io_error)?;
         let service = Arc::new(
             Service::new(
                 store,

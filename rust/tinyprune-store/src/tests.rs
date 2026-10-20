@@ -57,6 +57,148 @@ fn candidate(n: u8) -> RuleCandidate {
         },
     )
 }
+#[test]
+fn windows_subtree_publication_and_removal_use_lexical_flavor() {
+    for (root, native, alias) in [
+        (
+            r"C:\Managed\Tree",
+            r"\\?\c:\managed\tree",
+            "C:/MANAGED/TREE",
+        ),
+        (
+            r"\\Server\Share\Tree",
+            r"\\?\UNC\server\share\tree",
+            "//SERVER/SHARE/TREE",
+        ),
+    ] {
+        let mut store = Store::memory_with_flavor(PathFlavor::Windows).unwrap();
+        store.replace_roots(&[root.into()], 0.0).unwrap();
+        let mut item = candidate(1);
+        item.identity.path_hint = native.into();
+        // Include the scan root itself: is_descendant is deliberately strict.
+        assert_eq!(
+            store
+                .publish_candidate_subtree(alias, &[item.clone()], 1.0)
+                .unwrap(),
+            1
+        );
+        let mut child = candidate(2);
+        child.identity.path_hint = format!(r"{native}\Child.txt");
+        store
+            .publish_candidate_subtree(alias, &[item.clone(), child.clone()], 2.0)
+            .unwrap();
+        assert_eq!(
+            store
+                .candidate_page(alias, None, NonZeroUsize::new(10).unwrap())
+                .unwrap()
+                .len(),
+            2
+        );
+        store.replace_roots(&[alias.into()], 3.0).unwrap();
+        assert_eq!(
+            store.candidate_count().unwrap(),
+            2,
+            "spelling changes must not cascade-delete candidates"
+        );
+        store
+            .save_observation(Observation {
+                identity: child.identity.clone(),
+                first: 1.0,
+                last: 2.0,
+            })
+            .unwrap();
+        store
+            .publish_projects(
+                alias,
+                vec![Project {
+                    identity: item.identity.clone(),
+                    activity: 2.0,
+                }],
+            )
+            .unwrap();
+        store.publish_projects(root, vec![]).unwrap();
+        assert!(store.projects().unwrap().is_empty());
+        let mut sibling = candidate(3);
+        sibling.identity.path_hint = format!("{alias}-other/file");
+        assert!(store
+            .publish_candidate_subtree(alias, &[sibling], 4.0)
+            .is_err());
+        assert_eq!(
+            store
+                .publish_candidate_subtree(alias, &[item], 5.0)
+                .unwrap(),
+            1
+        );
+        assert!(store.observation(&child.identity).unwrap().is_some());
+        store.remove_below(alias).unwrap();
+        assert!(store.observation(&child.identity).unwrap().is_none());
+        assert_eq!(store.candidate_count().unwrap(), 0);
+    }
+}
+
+#[test]
+fn default_store_keeps_posix_case_and_separator_semantics() {
+    let store = Store::memory().unwrap();
+    store.replace_roots(&["/Managed/Tree".into()], 0.0).unwrap();
+    let mut item = candidate(1);
+    item.identity.path_hint = "/Managed/Tree".into();
+    store
+        .publish_candidate_subtree("/Managed/Tree", &[item.clone()], 1.0)
+        .unwrap();
+    for path in ["/managed/tree", r"\Managed\Tree", "/Managed/Tree-other"] {
+        item.identity.path_hint = path.into();
+        assert!(
+            store
+                .publish_candidate_subtree("/Managed/Tree", &[item.clone()], 2.0)
+                .is_err(),
+            "{path}"
+        );
+    }
+    assert_eq!(store.candidate_count().unwrap(), 1);
+}
+#[test]
+fn windows_store_reopen_deadlines_and_trash_cleanup_accept_aliases() {
+    let db = Temp::new();
+    let root = r"C:\Managed\Tree";
+    let alias = r"\\?\c:\managed\tree";
+    let mut item = candidate(1);
+    item.identity.path_hint = format!("{alias}\\folder");
+    let mut child = candidate(2);
+    child.identity.path_hint = "C:/MANAGED/TREE/folder/child".into();
+    let mut sibling = candidate(3);
+    sibling.identity.path_hint = "C:/MANAGED/TREE/folder-other".into();
+    let mut request = request(1, 10.0);
+    request.candidate_identity = item.identity.clone();
+    {
+        let mut store = Store::open_with_flavor(&db.0, PathFlavor::Windows).unwrap();
+        store.replace_roots(&[root.into()], 0.0).unwrap();
+        store
+            .replace_candidates(alias, &[item.clone(), child.clone(), sibling.clone()], 1.0)
+            .unwrap();
+        store.replace_deadlines(root, &[request.clone()]).unwrap();
+        store.replace_deadlines(alias, &[]).unwrap();
+        assert!(store.load_deadlines().unwrap().is_empty());
+        store.replace_deadlines(alias, &[request]).unwrap();
+    }
+    let mut store = Store::open_with_flavor(&db.0, PathFlavor::Windows).unwrap();
+    assert_eq!(store.load_deadlines().unwrap().len(), 1);
+    assert_eq!(
+        store
+            .candidate_page(alias, None, NonZeroUsize::new(10).unwrap())
+            .unwrap()
+            .len(),
+        3
+    );
+    let mut moved = event(AuditKind::MovedToTrash, 12.0);
+    moved.identity = Some(item.identity);
+    store.append(moved).unwrap();
+    let remaining = store
+        .candidate_page(root, None, NonZeroUsize::new(10).unwrap())
+        .unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].1.identity, sibling.identity);
+    assert!(store.load_deadlines().unwrap().is_empty());
+}
 struct Temp(std::path::PathBuf);
 impl Temp {
     fn new() -> Self {

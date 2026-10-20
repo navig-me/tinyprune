@@ -133,6 +133,12 @@ impl SizeMeasurer for NoSizes {
     }
 }
 struct Hydrator<'a, S>(&'a S, PathFlavor);
+fn same_path(a: &str, b: &str, flavor: PathFlavor) -> bool {
+    match flavor {
+        PathFlavor::Posix => flavor.equal(a, b),
+        PathFlavor::Windows => flavor.equal(&flavor.normalize(a), &flavor.normalize(b)),
+    }
+}
 impl<S: ObservationStore> CandidateHydrator for Hydrator<'_, S> {
     fn hydrate(
         &mut self,
@@ -150,13 +156,12 @@ impl<S: ObservationStore> CandidateHydrator for Hydrator<'_, S> {
             .projects()?
             .iter()
             .filter(|p| {
-                self.1
-                    .equal(&candidate.identity.path_hint, &p.identity.path_hint)
+                same_path(&candidate.identity.path_hint, &p.identity.path_hint, self.1)
                     || self
                         .1
                         .is_descendant(&candidate.identity.path_hint, &p.identity.path_hint)
             })
-            .max_by_key(|p| p.identity.path_hint.len())
+            .max_by_key(|p| self.1.normalize(&p.identity.path_hint).len())
             .map(|p| p.activity);
         Ok(candidate)
     }
@@ -265,10 +270,10 @@ impl<
             return Ok(report);
         }
         let policy = self.policy.load_snapshot()?;
-        let within = |path: &str, root: &str| {
-            policy.settings.path_flavor.equal(path, root)
-                || policy.settings.path_flavor.is_descendant(path, root)
-        };
+        let flavor = policy.settings.path_flavor;
+        let same_path = |a: &str, b: &str| same_path(a, b, flavor);
+        let within =
+            |path: &str, root: &str| same_path(path, root) || flavor.is_descendant(path, root);
         if !self.initialized {
             for request in self.store.load_deadlines()? {
                 let at = request.scheduled_at;
@@ -291,7 +296,7 @@ impl<
             let root = root
                 .to_str()
                 .ok_or("non-UTF-8 root cannot be represented by the core")?;
-            if policy.managed_roots.iter().any(|r| r == root) {
+            if let Some(root) = policy.managed_roots.iter().find(|r| same_path(r, root)) {
                 self.reconcile(root);
             }
         }
@@ -306,7 +311,15 @@ impl<
                 .to_str()
                 .ok_or("non-UTF-8 event path")?
                 .to_owned();
-            if !policy.managed_roots.contains(&root) || !within(&path, &root) {
+            let Some(root) = policy
+                .managed_roots
+                .iter()
+                .find(|r| same_path(r, &root))
+                .cloned()
+            else {
+                continue;
+            };
+            if !within(&path, &root) {
                 continue;
             }
             let removed = match event.kind {
@@ -339,7 +352,11 @@ impl<
             self.job(root, scan_path, removed, events);
         }
         if let Some(mut job) = self.jobs.pop_front() {
-            if !policy.managed_roots.contains(&job.root) {
+            if !policy
+                .managed_roots
+                .iter()
+                .any(|root| same_path(root, &job.root))
+            {
                 report.pending_work = true;
                 return Ok(report);
             }
