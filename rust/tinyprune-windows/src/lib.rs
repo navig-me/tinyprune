@@ -321,8 +321,10 @@ fn recycle(path: &str, expected: &FilesystemIdentity) -> Result<String, String> 
     let _apartment = Apartment;
     let result = Rc::new(RefCell::new(RecycleResult::default()));
     let sink: IFileOperationProgressSink = RecycleSink { path: path.into(), expected: expected.clone(), result: result.clone() }.into();
-    let native = absolute(path)?;
-    let path = wide(text(&native)?)?;
+    // The Shell namespace rejects `\\?\` extended-length paths (E_INVALIDARG), so it gets the plain path after the
+    // same validation; paths beyond MAX_PATH therefore fail closed here instead of being recycled.
+    absolute(path)?;
+    let path = wide(&display_path(path))?;
     let stage = std::cell::Cell::new("create IFileOperation");
     // SAFETY: COM initialized above; all interfaces and nul-terminated buffers live through PerformOperations.
     let operation_result = unsafe {
