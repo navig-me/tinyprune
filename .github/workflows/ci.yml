@@ -80,6 +80,50 @@ jobs:
         run: cargo test --locked
       - name: Lint
         run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Build release binaries (agent and CLI)
+        run: cargo build --release --locked -p tinyprune-daemon -p tinyprune-cli
+      # Real tinyprune-agentd + tinyprune against a temp fixture with isolated data/socket/Trash dirs.
+      - name: End-to-end smoke (Unix)
+        if: runner.os != 'Windows'
+        env:
+          SMOKE_SKIP_BUILD: "1"
+        run: bash tests-e2e/smoke.sh
+      - name: End-to-end smoke (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          SMOKE_SKIP_BUILD: "1"
+        run: ./tests-e2e/smoke.ps1
+      # 100k-entry benchmark against the real agent. Numbers are reported, not gated: thresholds are only compared
+      # with the Swift PhaseTwoBenchmarkTests bounds in the table, and a benchmark failure never fails CI.
+      - name: Benchmark (non-gating; table goes to the job summary)
+        continue-on-error: true
+        shell: bash
+        run: |
+          export TINYPRUNE_BENCH_OUT="$GITHUB_STEP_SUMMARY"
+          cargo test --release --locked -p tinyprune-daemon --test bench -- --ignored --nocapture
+
+  # Frontend tests plus a Tauri 2 compile check of the in-development desktop shell (rust/ui is its own workspace).
+  rust-ui:
+    name: Rust UI (frontend tests, Tauri check)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 22.14.0
+      - name: Frontend tests
+        run: node --test rust/ui/frontend/tests/frontend.test.js
+      # Package list from https://v2.tauri.app/start/prerequisites/#linux (Debian/Ubuntu).
+      - name: Install Tauri 2 Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust/rust-toolchain.toml)" --profile minimal
+      - name: Check Tauri shell
+        run: cargo check --locked --manifest-path rust/ui/Cargo.toml
 
   native:
     name: Native acceptance (${{ matrix.runner }})

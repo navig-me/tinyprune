@@ -1,0 +1,19 @@
+[package]
+name = "tinyprune-store"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+tinyprune-core = { path = "../tinyprune-core" }
+tinyprune-agent = { path = "../tinyprune-agent" }
+rusqlite = { version = "0.38", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+# float_roundtrip: persisted creation times take part in identity equality, so they must decode bit-exactly.
+serde_json = { version = "1", features = ["float_roundtrip"] }
+
+[dev-dependencies]
+tinyprune-watch = { path = "../tinyprune-watch" }
+
+[target.'cfg(unix)'.dev-dependencies]
+tinyprune-unix = { path = "../tinyprune-unix" }

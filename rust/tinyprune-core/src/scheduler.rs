@@ -141,6 +141,11 @@ pub fn scan(
             store.publish_projects(policy.root, projects)?;
         }
     }
+    // Candidates that protect their ancestors, found once (O(N x overrides)) instead of rescanning every
+    // candidate for every directory (O(dirs x N)).
+    let protecting: Vec<&RuleCandidate> = candidates.iter().filter(|child|
+        policy.overrides.iter().any(|item| crate::resolve::keep_covers_with_flavor(Some(&child.identity), &child.identity.path_hint, item, None, flavor))
+        || (policy.settings.protect_hidden_files && (child.platform_hidden || child.name.starts_with('.')))).collect();
     let mut decisions = Vec::with_capacity(candidates.len());
     for candidate in candidates {
         let mut hydrated = candidate.clone();
@@ -164,8 +169,7 @@ pub fn scan(
         if uses(candidate, policy.rules, &[ExpiryBasis::ProjectActivity]) {
             hydrated.timestamps.project_activity = store.projects()?.iter().filter(|project| within(&candidate.identity.path_hint, &project.identity.path_hint, flavor)).max_by_key(|project| project.identity.path_hint.len()).map(|project| project.activity);
         }
-        let protected_descendant = candidate.kind == ItemKind::Directory && candidates.iter().any(|child| flavor.is_descendant(&child.identity.path_hint, &candidate.identity.path_hint) &&
-            (policy.overrides.iter().any(|item| crate::resolve::keep_covers_with_flavor(Some(&child.identity), &child.identity.path_hint, item, None, flavor)) || (policy.settings.protect_hidden_files && (child.platform_hidden || child.name.starts_with('.')))));
+        let protected_descendant = candidate.kind == ItemKind::Directory && protecting.iter().any(|child| flavor.is_descendant(&child.identity.path_hint, &candidate.identity.path_hint));
         decisions.push(Decision { path: candidate.identity.path_hint.clone(), resolution: resolve(&hydrated, policy.rules, policy.overrides, false, policy.settings), protected_descendant });
     }
     for path in removed { store.remove_below(path)?; }

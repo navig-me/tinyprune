@@ -1,6 +1,8 @@
 //! Unreleased Unix metadata and freedesktop Trash adapter; not a platform agent.
 #![cfg(unix)]
 
+mod identity;
+
 use std::ffi::CString;
 use std::fs::{self, Metadata, OpenOptions};
 use std::io::{self, Write};
@@ -11,7 +13,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tinyprune_core::resolve::{keep_covers, keep_protects_descendant, ItemPolicyOverride};
 use tinyprune_core::rule::{CandidateTimestamps, FilesystemIdentity, ItemKind, RuleCandidate};
 use tinyprune_core::trash::{DescendantProtection, FileAccess, WalkBudget};
-use tinyprune_core::uuid::Uuid;
 
 pub struct UnixFileAccess {
     home_trash: PathBuf,
@@ -91,11 +92,15 @@ fn absolute(path: &Path) -> Result<(), String> {
 }
 
 fn candidate(path: &Path, m: &Metadata) -> Result<RuleCandidate, String> {
+    // Creation (birth) time is the inode-reuse guard: statx btime on Linux, st_birthtime on macOS. Without it,
+    // or without a durable volume id, the identity is process-local and stores drop it on reopen.
     let created = m.created().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_secs_f64());
+    let volume = identity::volume(if m.file_type().is_symlink() { path.parent().unwrap_or(path) } else { path }, m.dev());
     Ok(RuleCandidate {
         identity: FilesystemIdentity {
-            volume: Uuid(m.dev() as u128), resource: m.ino().to_be_bytes().to_vec(),
-            path_hint: text(path)?.into(), creation_time: created, generation: None, is_persistent: false,
+            volume: volume.id, resource: m.ino().to_be_bytes().to_vec(),
+            path_hint: text(path)?.into(), creation_time: created, generation: None,
+            is_persistent: volume.stable && created.is_some(),
         },
         name: text(Path::new(path.file_name().ok_or("filesystem root is not an item")?))?.into(),
         kind: if m.is_dir() { ItemKind::Directory } else { ItemKind::File },

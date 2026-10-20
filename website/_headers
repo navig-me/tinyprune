@@ -3,6 +3,7 @@
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
   Permissions-Policy: camera=(), microphone=(), geolocation=()
+  Link: <https://tinyprune.com/llms.txt>; rel="alternate"; type="text/plain"; title="TinyPrune agent reference"
 /assets/*
   Cache-Control: public, max-age=86400
 /updates/*
@@ -10,4 +11,9 @@
 /stats.json
   Cache-Control: public, max-age=3600
 /badge.json
+  Cache-Control: public, max-age=3600
+/404.html
+  X-Robots-Tag: noindex
+/llms.txt
+  Content-Type: text/plain; charset=utf-8
   Cache-Control: public, max-age=3600

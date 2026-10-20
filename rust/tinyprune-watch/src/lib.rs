@@ -1,5 +1,7 @@
 //! Unreleased event-source infrastructure, not a platform-support promise.
 //! Events are hints for reinspection, never authorization to Trash.
+//! Windows ReadDirectoryChangesW is implemented and cross-compile-checked only;
+//! native Windows execution remains a separate CI acceptance requirement.
 
 use std::collections::{HashSet, VecDeque};
 use std::io;
@@ -11,6 +13,13 @@ use std::time::Duration;
 mod linux;
 #[cfg(target_os = "linux")]
 pub use linux::InotifyEventSource;
+
+#[cfg(windows)]
+mod windows;
+#[cfg(any(windows, test))]
+mod windows_notify;
+#[cfg(windows)]
+pub use windows::WindowsEventSource;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum EventKind {
@@ -134,7 +143,9 @@ impl Coalescer {
         let mut seen = HashSet::new();
         let mut events = Vec::new();
         while events.len() < limit {
-            let Some(event) = self.output.pop_front() else { break };
+            let Some(event) = self.output.pop_front() else {
+                break;
+            };
             if seen.insert(event.clone()) {
                 events.push(event);
             }
@@ -170,7 +181,9 @@ impl EventSource for ScriptedEventSource {
         if self.coalescer.output.is_empty() {
             if let Some(frame) = self.frames.front_mut() {
                 for _ in 0..limit.get() {
-                    let Some(event) = frame.pop_front() else { break };
+                    let Some(event) = frame.pop_front() else {
+                        break;
+                    };
                     self.coalescer.push(event);
                 }
                 if frame.is_empty() {
@@ -196,9 +209,12 @@ impl WatchTable {
     }
 
     fn subtree(&mut self, path: &std::path::Path) -> Vec<i32> {
-        let descriptors: Vec<_> = self.0.iter()
+        let descriptors: Vec<_> = self
+            .0
+            .iter()
             .filter(|(_, (_, watched))| watched.starts_with(path))
-            .map(|(descriptor, _)| *descriptor).collect();
+            .map(|(descriptor, _)| *descriptor)
+            .collect();
         for descriptor in &descriptors {
             self.0.remove(descriptor);
         }
@@ -211,35 +227,58 @@ mod tests {
     use super::*;
 
     fn raw(path: &str, kind: RawKind) -> RawEvent {
-        RawEvent { root: "/root".into(), path: path.into(), kind, is_directory: false }
+        RawEvent {
+            root: "/root".into(),
+            path: path.into(),
+            kind,
+            is_directory: false,
+        }
     }
 
     fn poll(source: &mut ScriptedEventSource, limit: usize) -> EventBatch {
-        source.poll(Duration::ZERO, NonZeroUsize::new(limit).unwrap()).unwrap()
+        source
+            .poll(Duration::ZERO, NonZeroUsize::new(limit).unwrap())
+            .unwrap()
     }
 
     #[test]
     fn coalesces_duplicates_but_preserves_different_changes() {
         let mut source = ScriptedEventSource::new([vec![
-            raw("/root/a", RawKind::Created), raw("/root/a", RawKind::Modified),
-            raw("/root/a", RawKind::Modified), raw("/root/a", RawKind::Attribute),
+            raw("/root/a", RawKind::Created),
+            raw("/root/a", RawKind::Modified),
+            raw("/root/a", RawKind::Modified),
+            raw("/root/a", RawKind::Attribute),
             raw("/root/a", RawKind::Removed),
         ]]);
         let batch = poll(&mut source, 10);
-        assert_eq!(batch.events.iter().map(|e| &e.kind).collect::<Vec<_>>(),
-            vec![&EventKind::Created, &EventKind::Modified, &EventKind::Attribute, &EventKind::Removed]);
+        assert_eq!(
+            batch.events.iter().map(|e| &e.kind).collect::<Vec<_>>(),
+            vec![
+                &EventKind::Created,
+                &EventKind::Modified,
+                &EventKind::Attribute,
+                &EventKind::Removed
+            ]
+        );
         assert!(!batch.pending_work);
     }
 
     #[test]
     fn pairs_rename_across_bounded_polls_and_flushes_unpaired_moves() {
         let mut source = ScriptedEventSource::new([vec![
-            raw("/root/a", RawKind::RenameFrom(7)), raw("/root/b", RawKind::RenameTo(7)),
-            raw("/root/out", RawKind::RenameFrom(8)), raw("/root/in", RawKind::RenameTo(9)),
+            raw("/root/a", RawKind::RenameFrom(7)),
+            raw("/root/b", RawKind::RenameTo(7)),
+            raw("/root/out", RawKind::RenameFrom(8)),
+            raw("/root/in", RawKind::RenameTo(9)),
         ]]);
         assert!(poll(&mut source, 1).events.is_empty());
-        assert_eq!(poll(&mut source, 1).events[0].kind,
-            EventKind::Renamed { from: "/root/a".into(), cookie: 7 });
+        assert_eq!(
+            poll(&mut source, 1).events[0].kind,
+            EventKind::Renamed {
+                from: "/root/a".into(),
+                cookie: 7
+            }
+        );
         assert!(poll(&mut source, 1).events.is_empty());
         assert_eq!(poll(&mut source, 1).events[0].kind, EventKind::Created);
         assert_eq!(poll(&mut source, 1).events[0].kind, EventKind::Removed);
@@ -249,8 +288,10 @@ mod tests {
     #[test]
     fn overflow_and_limit_exhaustion_deduplicate_rescan_and_discard_cookie() {
         let mut source = ScriptedEventSource::new([vec![
-            raw("/root/a", RawKind::RenameFrom(1)), raw("/root", RawKind::QueueOverflow),
-            raw("/root", RawKind::WatchLimit), raw("/root/b", RawKind::RenameTo(1)),
+            raw("/root/a", RawKind::RenameFrom(1)),
+            raw("/root", RawKind::QueueOverflow),
+            raw("/root", RawKind::WatchLimit),
+            raw("/root/b", RawKind::RenameTo(1)),
         ]]);
         let batch = poll(&mut source, 8);
         assert_eq!(batch.must_rescan, vec![PathBuf::from("/root")]);
@@ -271,7 +312,9 @@ mod tests {
         table.insert(2, "/root".into(), "/root/new".into());
         assert_eq!(table.0[&2].1, PathBuf::from("/root/new"));
         assert_eq!(table.0.len(), 3);
-        assert!(table.subtree(std::path::Path::new("/root/missing")).is_empty());
+        assert!(table
+            .subtree(std::path::Path::new("/root/missing"))
+            .is_empty());
     }
 
     #[test]
@@ -286,17 +329,24 @@ mod tests {
         let mut source = ScriptedEventSource::new([vec![from, to]]);
         let batch = poll(&mut source, 2);
         assert!(batch.events[0].is_directory);
-        let EventKind::Renamed { from, .. } = &batch.events[0].kind else { panic!("expected rename") };
+        let EventKind::Renamed { from, .. } = &batch.events[0].kind else {
+            panic!("expected rename")
+        };
         assert_eq!(table.subtree(from), vec![1, 2]);
         table.insert(3, "/root".into(), batch.events[0].path.clone());
         table.insert(4, "/root".into(), batch.events[0].path.join("child"));
-        assert_eq!(table.subtree(std::path::Path::new("/root/old")), Vec::<i32>::new());
+        assert_eq!(
+            table.subtree(std::path::Path::new("/root/old")),
+            Vec::<i32>::new()
+        );
         assert_eq!(table.subtree(std::path::Path::new("/root/new")), vec![3, 4]);
     }
 
     #[test]
     fn a_busy_queue_bounds_retained_rename_cookies() {
-        let frame = (1..=4097).map(|cookie| raw("/root/out", RawKind::RenameFrom(cookie))).collect();
+        let frame = (1..=4097)
+            .map(|cookie| raw("/root/out", RawKind::RenameFrom(cookie)))
+            .collect();
         let mut source = ScriptedEventSource::new([frame]);
         for _ in 0..4096 {
             assert!(poll(&mut source, 1).events.is_empty());
@@ -313,9 +363,14 @@ mod tests {
         let mut incoming = raw("/other/b", RawKind::RenameTo(3));
         incoming.root = "/other".into();
         let mut source = ScriptedEventSource::new([
-            vec![], vec![raw("/root/a", RawKind::RenameFrom(3)), incoming],
+            vec![],
+            vec![raw("/root/a", RawKind::RenameFrom(3)), incoming],
         ]);
-        assert!(source.poll(Duration::from_secs(100), NonZeroUsize::new(8).unwrap()).unwrap().events.is_empty());
+        assert!(source
+            .poll(Duration::from_secs(100), NonZeroUsize::new(8).unwrap())
+            .unwrap()
+            .events
+            .is_empty());
         let batch = poll(&mut source, 8);
         assert_eq!(batch.events[0].kind, EventKind::Created);
         assert_eq!(batch.events[1].kind, EventKind::Removed);

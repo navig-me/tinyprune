@@ -26,9 +26,22 @@ The target-only `libc` dependency fills a concrete gap: Rust's standard library 
 
 A rescan signal is not proof that kernel coverage recovered. The future agent must reconcile its metadata index and, after overflow, moved roots, or failed watch installation, recreate this source from current validated roots to restore complete coverage (after resolving watch-limit/permission/resource problems). It must never clear the incomplete state just because a later poll is empty. Concurrent filesystem replacement can race path-based enumeration; watcher paths remain hints, not security authority. Mount changes, remote filesystems, hard-link aliases, and changes through unwatched aliases are not a complete activity history.
 
+## Windows implementation
+
+`WindowsEventSource::new(roots)` exists only on Windows. It opens one overlapped directory handle per root and immediately arms recursive `ReadDirectoryChangesW` (`bWatchSubtree=TRUE`). Roots must be absolute, nonoverlapping real directories without reparse-point ancestors; canonical paths preserve native UTF-16 spelling, and overlap checks use Windows ordinal case-insensitive component comparison. This watcher is implemented but **compile-checked only on the development Mac**; configured Windows CI is not evidence of native execution or released support.
+
+- The notification mask includes file/directory names, attributes, size, last write, and creation. No file contents are read and nothing is mutated. Construction does not enumerate existing items; perform the initial metadata index separately.
+- Each root retains one DWORD-aligned 64 KiB buffer and stable boxed `OVERLAPPED` storage. A shared manual-reset completion event supports any number of roots without the 64-handle wait limit. Polling waits only up to the supplied timeout, rounded up to milliseconds, and checks root availability at most one second apart while waiting. Zero timeout does not wait. Completion/availability probes are proportional to the number of managed roots; raw parsing and output remain bounded by the supplied limit.
+- The platform-independent parser bounds-checks headers, UTF-16 lengths, record offsets and relative paths without aligned pointer reads or lossy Unicode conversion. Malformed/truncated records conservatively request a rescan rather than yielding untrusted paths.
+- Adjacent old/new rename names receive a source-generated nonzero cookie and pair within a root across bounded polls. Unmatched names become remove/create hints when the completion queue drains; cross-root moves remain independent. Attribute/size/timestamp notifications are `Modified` hints because Windows does not distinguish these in the returned action. Removed paths have an unknown/false directory hint; consumers must use their existing index and fresh metadata, not rely on that bit to authorize effects.
+- Zero-byte completions, `ERROR_NOTIFY_ENUM_DIR`, and malformed/overflowed buffers clear outstanding rename pairing and request a root rescan. New/moved-in directories also request reconciliation because they may contain existing descendants. Other completion/rearm failures and unavailable roots request a rescan and disable that watch; recreate the source with freshly validated roots to recover coverage. A later empty poll does not establish recovery.
+- Drop uses `CancelIoEx`, observes cancellation/completion before freeing any pending buffer or `OVERLAPPED`, and closes every owned handle. Paths can still race namespace replacement and changes through aliases; this is an invalidation adapter, not a security boundary or complete activity history.
+
+The target-only locked `windows` 0.62 dependency fills std's concrete gaps: recursive notifications, overlapped I/O/cancellation, waitable events, and ordinal path comparison. No asynchronous runtime or new crates.io package is needed.
+
 ## Other targets
 
-macOS and other non-Linux targets compile the portable trait, event types, coalescer, and scripted source only. There is deliberately **no native watcher stub pretending to observe changes**, no kqueue/FSEvents implementation, and no platform watcher on Windows. Consumers must select an actual platform adapter explicitly.
+macOS and targets other than Linux/Windows compile the portable trait, event types, coalescer, and scripted source only. There is deliberately **no native watcher stub pretending to observe changes**, and no kqueue/FSEvents implementation. Consumers must select an actual platform adapter explicitly.
 
 ## Verification
 
@@ -38,7 +51,12 @@ From `rust/`:
 rustup target add x86_64-unknown-linux-gnu
 cargo check --locked -p tinyprune-watch --target x86_64-unknown-linux-gnu --all-targets
 cargo clippy --locked -p tinyprune-watch --target x86_64-unknown-linux-gnu --all-targets -- -D warnings
+rustup target add x86_64-pc-windows-msvc
+cargo check --locked -p tinyprune-watch --target x86_64-pc-windows-msvc --all-targets
+cargo clippy --locked -p tinyprune-watch --target x86_64-pc-windows-msvc --all-targets -- -D warnings
 cargo test --locked -p tinyprune-watch
 ```
 
 The portable tests exercise coalescing, cookie pairing across bounded polls, unmatched and cross-root moves, overflow/watch-limit rescan signals, bounded retained cookies, and watch-table deletion/rename bookkeeping using the scripted source. macOS can run these tests and cross-check Linux compilation, but that does **not** execute inotify. Real Linux inotify behavior requires a Linux runtime and is not established by these checks.
+
+Portable tests additionally execute synthetic Windows buffers (including unaligned input, malformed/truncated records, UTF-16 preservation, chained records, and rename pairing/reset) on macOS. Windows-only tests use real disposable temporary directories for recursive create/modify/rename/delete, root unavailability, bounded output, pending-I/O drop, root validation, and an injected overflow through the production loss handler. `cargo test --locked -p tinyprune-watch` on the Windows CI runner includes those tests. Overflow injection verifies recovery signaling, not actual kernel-buffer exhaustion. Native Windows tests have not been executed on this Mac.

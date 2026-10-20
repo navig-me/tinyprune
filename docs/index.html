@@ -17,20 +17,21 @@
   <meta name="twitter:title" content="TinyPrune docs: automatic file cleanup rules for macOS">
   <meta name="twitter:description" content="Set file lifetimes, preview matches, and move expired files to Trash on your Mac.">
   <meta name="twitter:image" content="https://tinyprune.com/og.png">
+  <link rel="alternate" type="text/plain" href="https://docs.tinyprune.com/llms.txt" title="TinyPrune facts and documentation links">
   <script type="application/ld+json">
   {"@context":"https://schema.org","@graph":[
-    {"@type":"TechArticle","@id":"https://docs.tinyprune.com/#article","headline":"TinyPrune documentation","description":"How to install TinyPrune, create file lifetime rules, preview matches, and use the Finder menu and command line on macOS.","url":"https://docs.tinyprune.com/","inLanguage":"en","about":{"@id":"https://tinyprune.com/#software"},"isPartOf":{"@type":"WebSite","name":"TinyPrune docs","url":"https://docs.tinyprune.com/"},"publisher":{"@type":"Organization","name":"TinyPrune","url":"https://tinyprune.com"}},
+    {"@type":"TechArticle","@id":"https://docs.tinyprune.com/#article","headline":"TinyPrune documentation: set up file lifetimes","description":"How to install TinyPrune, create file lifetime rules, preview matches, and use the Finder menu and command line on macOS.","url":"https://docs.tinyprune.com/","inLanguage":"en","about":{"@id":"https://tinyprune.com/#software"},"isPartOf":{"@type":"WebSite","@id":"https://docs.tinyprune.com/#website","name":"TinyPrune docs","url":"https://docs.tinyprune.com/"},"publisher":{"@type":"Organization","name":"TinyPrune","url":"https://tinyprune.com"},"hasPart":[{"@type":"WebPageElement","name":"Install TinyPrune","url":"https://docs.tinyprune.com/#install"},{"@type":"WebPageElement","name":"Rules and Preview","url":"https://docs.tinyprune.com/#rules"},{"@type":"WebPageElement","name":"Cleanup templates","url":"https://docs.tinyprune.com/#templates"},{"@type":"WebPageElement","name":"Command line reference","url":"https://docs.tinyprune.com/#cli"}]},
     {"@type":"FAQPage","@id":"https://docs.tinyprune.com/#faq","mainEntity":[
       {"@type":"Question","name":"What is TinyPrune?","acceptedAnswer":{"@type":"Answer","text":"TinyPrune is a local macOS app that gives files and folders a lifetime. You choose folders and rules, and when an item expires TinyPrune moves it to the Trash."}},
       {"@type":"Question","name":"Does TinyPrune permanently delete files?","acceptedAnswer":{"@type":"Answer","text":"No. TinyPrune only moves items to the macOS Trash. It does not delete anything permanently."}},
       {"@type":"Question","name":"How is TinyPrune different from a Mac cleaner app?","acceptedAnswer":{"@type":"Answer","text":"TinyPrune is not a system optimizer. It only touches folders you choose, follows rules you write, explains every decision, and lets you test a rule in Preview first."}},
       {"@type":"Question","name":"Can TinyPrune clean node_modules and other developer folders?","acceptedAnswer":{"@type":"Answer","text":"Yes. Rules can match folders such as node_modules or .venv and expire them after a project has been inactive. Developer templates always start in Preview."}},
-      {"@type":"Question","name":"Does TinyPrune need an account or network access?","acceptedAnswer":{"@type":"Answer","text":"The app has no telemetry and needs no account. Core cleanup reads filesystem metadata only, does not inspect file contents, and does not require network access. Key-enabled direct-download builds, including ad-hoc builds, check their EdDSA-authenticated update feed over HTTPS. Homebrew and no-key copies ask github.com once a day for a newer release and offer a download link or the brew upgrade command. Check for new versions is on by default and can be turned off in Settings; installation always requires user confirmation. The tinyprune.com website, separately, uses Google Analytics and PostHog."}},
+      {"@type":"Question","name":"Does TinyPrune need an account or network access?","acceptedAnswer":{"@type":"Answer","text":"The app has no telemetry and needs no account. Core cleanup reads filesystem metadata only, does not inspect file contents, and does not require network access. Key-enabled direct-download builds, including ad-hoc builds, check their EdDSA-authenticated update feed over HTTPS. Homebrew and no-key copies ask github.com once a day for a newer release and offer a download link or the brew upgrade command. Check for new versions is on by default and can be turned off in Settings; installation always requires user confirmation. The tinyprune.com marketing website, separately, uses Google Analytics and PostHog."}},
       {"@type":"Question","name":"How do I keep a file from being removed?","acceptedAnswer":{"@type":"Answer","text":"Mark it Keep from the Finder menu or run tinyprune keep. Keep takes precedence over every rule, and a folder with a kept item inside is never trashed."}},
       {"@type":"Question","name":"Does TinyPrune work on Intel and Apple silicon, and which macOS versions?","acceptedAnswer":{"@type":"Answer","text":"It requires macOS 14 or later. Releases are universal binaries for Intel and Apple silicon."}},
-      {"@type":"Question","name":"How do I clean up after AI coding agents and LLM tools?","acceptedAnswer":{"@type":"Answer","text":"Agents create scratch projects, git worktrees, virtual environments, build output and logs faster than you remove them. Give one disposable folder to the agents, apply the Temporary Workspace template there, add Developer Cleanup or Build Artifacts to your projects folder, and review everything in Preview first."}},
+      {"@type":"Question","name":"How do I clean up after AI coding agents and LLM tools?","acceptedAnswer":{"@type":"Answer","text":"Agents create scratch projects, git worktrees, virtual environments, build output and logs faster than you remove them. Give one disposable folder to the agents, apply the Temporary Workspace template there, add Developer Cleanup or Build Artifacts to your projects folder, and review everything in Preview first. See Prune AI agent clutter."}},
       {"@type":"Question","name":"Does TinyPrune know which files an AI agent created?","acceptedAnswer":{"@type":"Answer","text":"No. TinyPrune reads only filesystem metadata and does not identify the tool that wrote a file. Rules work on where an item lives, its name, its age and project inactivity, so point agents at a folder you chose and put the rule on that folder."}},
-      {"@type":"Question","name":"How do I install TinyPrune?","acceptedAnswer":{"@type":"Answer","text":"Run brew install --cask navig-me/tap/tinyprune, or download the DMG from GitHub Releases. Version 0.1.0 is an unsigned pre-release, so macOS asks you to approve it on first launch. You can also build from source: git clone https://github.com/navig-me/tinyprune && cd tinyprune && swift Scripts/package-app.swift && open .build/package/TinyPrune.app"}}
+      {"@type":"Question","name":"How do I install TinyPrune?","acceptedAnswer":{"@type":"Answer","text":"Run brew install --cask navig-me/tap/tinyprune, or download the DMG from GitHub Releases. You can also build from source; see Install for details."}}
     ]}
   ]}
   </script>
@@ -66,64 +67,73 @@
       <article>
         <div class="intro-block" id="start">
           <p class="eyebrow">Documentation</p>
-          <h1>Set up your<br><em>file lifetimes.</em></h1>
-          <p class="intro">Choose the folders TinyPrune can manage, give disposable files an expiry date, and check the results in Preview before anything moves to Trash.</p>
-          <p class="intro-meta">Local-first. No account needed. macOS 14+.</p>
+          <h1>TinyPrune docs:<br><em>set up file lifetimes.</em></h1>
+          <p class="intro">TinyPrune is a local macOS app that moves expired files and folders to Trash using rules you choose. Choose the folders it can manage, give disposable files a lifetime, and check the results in Preview before enabling cleanup.</p>
+          <p class="intro-meta">macOS 14+ · Intel and Apple silicon · Free and open source · No account</p>
+          <nav aria-label="Choose a documentation task">
+            <ul>
+              <li><a href="#install">Install and approve the background agent</a>, then <a href="#preview">review your first rule in Preview</a>.</li>
+              <li><a href="#templates">Choose a cleanup template</a> for Downloads, developer output, caches, or agent logs.</li>
+              <li><a href="#rules">Understand matching and Keep</a>, or <a href="#cli">use the command line and rule configuration</a>.</li>
+              <li><a href="#safety">Understand safety and restoring from Trash</a>, <a href="#updates">updates</a>, and <a href="#cross-platform">unreleased platform work</a>.</li>
+            </ul>
+          </nav>
+          <p>This guide covers the Swift macOS app, Finder extension, and CLI. No Linux or Windows build is released. <a href="https://docs.tinyprune.com/llms.txt">Plain-text facts and documentation links</a> are available for readers and tools; the full guide below is readable without JavaScript.</p>
           <p class="sample-link"><a href="https://tinyprune.com#how-it-works">Try the interactive sample on tinyprune.com <svg class="icon" aria-hidden="true"><use href="assets/icons.svg#arrow-right"></use></svg></a></p>
         </div>
         <section id="install">
-          <h2>Install</h2>
+          <h2 id="install-title">Install</h2>
           <div class="notice"><strong>Early release.</strong><p>TinyPrune 0.1.0 is an unsigned, not notarized pre-release. macOS asks you to approve it on first launch; see below.</p></div>
-          <h3>Download or use Homebrew</h3>
+          <h3 id="download-or-use-homebrew">Download or use Homebrew</h3>
           <p>Install with Homebrew:</p>
           <pre aria-label="Homebrew installation command"><code>brew install --cask navig-me/tap/tinyprune</code></pre>
           <p>Or download the DMG from <a href="https://github.com/navig-me/tinyprune/releases">GitHub Releases</a> and move TinyPrune to Applications. The Homebrew cask clears the quarantine flag for you; for a direct download, approve it as follows.</p>
           <p>Early builds are unsigned. On first launch, use <strong>System Settings &gt; Privacy &amp; Security &gt; Open Anyway</strong>. Only open a build you trust. Alternatively, if you installed it in Applications:</p>
           <pre aria-label="Remove quarantine from a trusted early build"><code>xattr -dr com.apple.quarantine /Applications/TinyPrune.app</code></pre>
-          <h3>Open TinyPrune</h3>
+          <h3 id="open-tinyprune">Open TinyPrune</h3>
           <p>Homebrew puts <code>TinyPrune.app</code> in your Applications folder. Open it from Launchpad or Spotlight, or run:</p>
           <pre aria-label="Open TinyPrune"><code>open /Applications/TinyPrune.app</code></pre>
           <p>TinyPrune lives in the menu bar and in its own window. If you have other copies of the app on your Mac, such as a build folder or Downloads, open the one in Applications so macOS finds the background helper.</p>
-          <h3>First run</h3>
+          <h3 id="first-run">First run</h3>
           <ol>
             <li>Click <strong>Install background agent</strong>, then approve TinyPrune in <strong>System Settings &gt; General &gt; Login Items &amp; Extensions</strong>. The agent does the scheduling; the app is only the window.</li>
             <li>Choose a folder you control and add a template. New rules start in Preview, so nothing moves yet.</li>
             <li>Review <strong>Upcoming</strong>, then switch the rule to Active when you are happy.</li>
           </ol>
-          <h3>Build from source</h3>
+          <h3 id="build-from-source">Build from source</h3>
           <p>With Apple's Swift development tools installed, run:</p>
           <pre aria-label="Build and open TinyPrune"><code>git clone https://github.com/navig-me/tinyprune &amp;&amp; cd tinyprune &amp;&amp; swift Scripts/package-app.swift &amp;&amp; open .build/package/TinyPrune.app</code></pre>
           <p>Open the app, choose a folder you control, and add a template or your own rule. Start in Preview and review Upcoming before enabling cleanup.</p>
         </section>
         <section id="safety">
-          <h2>What TinyPrune can change</h2>
+          <h2 id="safety-title">What TinyPrune can change</h2>
           <p>TinyPrune only manages folders you choose. It reads filesystem metadata for normal operation, not file contents, and does not need an account or cloud service.</p>
           <div class="principles">
-            <div><h3>Items go to Trash</h3><p>TinyPrune never permanently deletes files. Eligible items move to macOS Trash.</p></div>
-            <div><h3>Keep wins</h3><p>Keep overrides every expiry rule. A folder cannot be trashed if it contains a protected item.</p></div>
+            <div><h3 id="items-go-to-trash">Items go to Trash</h3><p>TinyPrune never permanently deletes files. Eligible items move to macOS Trash.</p></div>
+            <div><h3 id="keep-wins">Keep wins</h3><p>Keep overrides every expiry rule. A folder cannot be trashed if it contains a protected item.</p></div>
           </div>
           <p>Before each move, the agent checks the item's identity, current rules, protection, deadline, pause state, permissions, and volume availability again, confirms the item still lives inside a managed folder (not behind a symlinked ancestor), and re-reads the policy immediately before the Trash call. The index schedules work; it does not authorize a move. If a check cannot be completed (for example cleanup is paused, a Preview rule is involved, or the deadline moved), the item is deferred and retried rather than dropped; items that are gone, replaced, kept, or outside managed folders are skipped for good.</p>
-          <h3>Very broad folders</h3>
+          <h3 id="very-broad-folders">Very broad folders</h3>
           <p>Folders such as your home folder, <code>/Users</code>, <code>/Volumes</code>, <code>/private</code>, or a whole volume can be managed, but their rules are Preview-only: TinyPrune will not enable cleanup on them, and the agent rejects an Active rule with that scope. Dangerous system roots are refused outright, compared case-insensitively after resolving symlinks.</p>
-          <h3>Pause and settings</h3>
+          <h3 id="pause-and-settings">Pause and settings</h3>
           <p>Pause cleanup globally, for a managed folder, or for a rule. A timed global pause resumes when its time is up. In Settings, you can set the default grace period, protect hidden files, and choose how long to retain activity history. These settings apply to the app, Finder, and CLI.</p>
-          <h3>Activity and restoring items</h3>
+          <h3 id="activity-and-restoring-items">Activity and restoring items</h3>
           <p>Activity summarizes only the loaded audit events: items moved to Trash, items skipped for safety, and the last recorded cleanup time. Each move offers <strong>Show in Trash</strong> to reveal its recorded destination in Finder. Exact original and Trash paths are copyable. If the destination no longer exists, the row says <strong>No longer in Trash</strong>.</p>
           <p>To restore, use Finder’s <strong>Put Back</strong> in Trash, if available. Items stay in the Trash until you or macOS empty it; TinyPrune does not restore items or empty Trash. Once an item leaves Trash, the audit event does not guarantee it can be recovered.</p>
-          <h3>Exporting and importing rule configuration</h3>
+          <h3 id="exporting-and-importing-rule-configuration">Exporting and importing rule configuration</h3>
           <p>In Settings, use <strong>Export rule config…</strong> and <strong>Import rules…</strong>. Export is not a complete backup: the restricted YAML format supports only expressible rules shared by every managed root, plus Keep overrides. Export reports how many rules were exported or skipped and lists skipped names and reasons; a partial or zero-rule export requires confirmation. The saved file also lists omissions in comments.</p>
           <p>Import opens a review before applying additions, changes, and removals through the agent. Matching configuration-created rules can change, and absent configuration-created rules within the file’s roots can be removed; app-created rules are kept. Surviving app-created rules can therefore gain configuration copies when imported. Folder access must already be granted. New rules start in Preview; existing configuration rules retain their state. A lossless per-root backup format is not currently supported.</p>
         </section>
         <section id="rules">
-          <h2>Choose what expires and when</h2>
+          <h2 id="rules-title">Choose what expires and when</h2>
           <p>A rule specifies a folder, the files or folders to match, and the time basis for expiry. For example, you can target dependencies in inactive projects without expiring the source folder itself.</p>
-          <div class="rule-card"><div class="card-heading"><h3>Old Node modules</h3><span class="badge">Preview</span></div><dl><div><dt>Where</dt><dd>~/Developer/**</dd></div><div><dt>What</dt><dd>Folder named node_modules</dd></div><div><dt>When</dt><dd>Project inactive for 30 days</dd></div><div><dt>Action</dt><dd>Move the folder to Trash</dd></div></dl></div>
+          <div class="rule-card"><div class="card-heading"><h3 id="old-node-modules">Old Node modules</h3><span class="badge">Preview</span></div><dl><div><dt>Where</dt><dd>~/Developer/**</dd></div><div><dt>What</dt><dd>Folder named node_modules</dd></div><div><dt>When</dt><dd>Project inactive for 30 days</dd></div><div><dt>Action</dt><dd>Move the folder to Trash</dd></div></dl></div>
           <p>Match by exact name or glob, item type, and scope depth. A glob without a <code>/</code> matches the item's name at any depth, like a <code>.gitignore</code> line (<code>*.dmg</code> matches <code>a/b/c.dmg</code>); a glob containing <code>/</code> matches the path relative to the folder, and <code>**</code> crosses directories. Only <code>*</code>, <code>?</code>, and <code>**</code> are supported; there are no character classes, braces, or <code>!</code> negation. Exact names always match the item's name. Expiry can use age, modification time, or project inactivity. Set an explicit expiry on an individual item, use Keep to protect it, or choose Inherit to return it to the folder's rules.</p>
           <p>Keep follows the item by identity and, if the item was renamed or its identity cannot be matched, by its recorded path as well, so it fails toward protection. A Keep on a folder with <em>protect descendants</em> covers everything below it, and a folder is never trashed while any protected item is inside it.</p>
           <p>Every decision includes an explanation: the matching rule, time basis, resolved deadline, project context when relevant, any override, and why an item is protected or skipped.</p>
         </section>
         <section id="preview">
-          <h2>Check the matches before cleanup</h2>
+          <h2 id="preview-title">Check the matches before cleanup</h2>
           <p>A rule saved in Preview runs matching and scheduling without moving anything to Trash. Upcoming shows indexed candidates and their explanations.</p>
           <p>Overview totals count all published Active and Preview schedules, not just the visible sample. Upcoming filters by rule and mode before paging; use <strong>Load more</strong> to review the remaining items. Size estimates remain bounded metadata samples rather than exact totals for every scheduled folder.</p>
           <ol><li>Choose a managed folder and create a rule.</li><li>Use <strong>Preview matches</strong> in the rule editor for a read-only dry run. It is bounded and cancellable, and does not save changes or trash items.</li><li>Review the matches, deadlines, and explanations. Add Keep or expiry overrides where needed.</li><li>Enable the rule only when the result matches what you want.</li></ol>
@@ -132,9 +142,9 @@
           <p>First-observed lifetimes survive renames and restarts for the same filesystem identity. Inactivity deadlines can still change after genuine meaningful activity or rule edits; replaying an old event does not restart the timer at replay time. Git bookkeeping and generated dependency changes do not count as meaningful project activity.</p>
         </section>
         <section id="templates">
-          <h2>Start with a template</h2>
+          <h2 id="templates-title">Start with a template</h2>
           <p>Templates create ordinary rules you can edit, pause, duplicate, or delete. Pick a folder and adjust the match and lifetime to suit the files you actually keep there.</p>
-          <div class="table-wrap" tabindex="0" role="region" aria-label="Available templates"><table><thead><tr><th scope="col">Template</th><th scope="col">Use it for</th></tr></thead><tbody>
+          <div class="table-wrap" id="template-table" tabindex="0" role="region" aria-label="Available templates"><table><thead><tr><th scope="col">Template</th><th scope="col">Use it for</th></tr></thead><tbody>
             <tr><td>Downloads</td><td>Top-level items only (not subfolders' contents): DMG files after 7 days, ZIP files after 14, other items after 30 days in the folder</td></tr>
             <tr><td>Screenshots</td><td>Screenshot and Screen Shot filenames, 7 days after creation</td></tr>
             <tr><td>Temporary Workspace</td><td>Disposable top-level items in a chosen folder, 3 days after first observation by default</td></tr>
@@ -164,7 +174,7 @@
           <p>Finder sends actions to the same background agent as the app and CLI. Folder lifetime, rule creation, and custom expiry open the app to finish the action and require a single selected item. Keep, expiry presets, and inherited rules can act on multiple selected items, applied in one batch.</p>
         </section>
         <section id="cli">
-          <h2>Work from the command line</h2>
+          <h2 id="cli-title">Work from the command line</h2>
           <p>The <code>tinyprune</code> command talks to the background agent; it does not run a separate cleanup engine. Use it to inspect upcoming items, set overrides, or pause cleanup.</p>
           <pre aria-label="CLI examples"><code>tinyprune status
 tinyprune rules
@@ -177,7 +187,7 @@ tinyprune why node_modules
 tinyprune pause
 tinyprune resume</code></pre>
           <p>Expiry values also accept <code>12h</code>, <code>30m</code>, <code>tonight</code> (23:59 today, or 23:59 tomorrow if it is already past 23:59), and <code>tomorrow</code>. Add <code>--json</code> for structured output; each document carries <code>schemaVersion: 1</code>, and errors are JSON too. Unknown flags and extra arguments are usage errors, and swapped <code>expire &lt;path&gt; &lt;when&gt;</code> arguments are detected.</p>
-          <h3>Exit codes</h3>
+          <h3 id="exit-codes">Exit codes</h3>
           <div class="table-wrap" tabindex="0" role="region" aria-label="CLI exit codes"><table><thead><tr><th scope="col">Code</th><th scope="col">Meaning</th></tr></thead><tbody>
             <tr><td>0</td><td>Success</td></tr>
             <tr><td>64</td><td>Usage error (bad flag, missing or extra argument)</td></tr>
@@ -187,7 +197,7 @@ tinyprune resume</code></pre>
             <tr><td>78</td><td>Config roots are not inside a managed folder; add them in the app first</td></tr>
             <tr><td>75</td><td>Timed out, interrupted, or busy. The request may have been applied; check with <code>tinyprune status</code> before retrying</td></tr>
           </tbody></table></div>
-          <h3>Manage rules as code</h3>
+          <h3 id="manage-rules-as-code">Manage rules as code</h3>
           <pre aria-label="Config commands"><code>tinyprune config validate tinyprune.yml
 tinyprune config preview tinyprune.yml
 tinyprune config apply tinyprune.yml
@@ -196,7 +206,7 @@ tinyprune config export</code></pre>
           <p>Apply only works inside folders already managed in the app, because the app must obtain folder access. Rules created from a config start in Preview unless you pass <code>--active</code>. Apply keeps the current pause state and Keep overrides; if the policy changed while you were applying, the CLI reloads and retries, then reports a conflict.</p>
         </section>
         <section id="updates">
-          <h2>How updates work</h2>
+          <h2 id="updates-title">How updates work</h2>
           <p>Direct-download builds with a configured Ed25519 public key use Sparkle, including ad-hoc builds without an Apple account. Use <strong>Check for Updates…</strong> in the application menu. Sparkle verifies EdDSA-signed feeds, release notes, and downloaded updates. Automatic checks follow <em>Check for new versions</em> in Settings, on by default. <strong>Update Now</strong> opens Sparkle's native confirmation dialog; installation is never automatic.</p>
           <p>Homebrew never constructs Sparkle. Homebrew and direct copies without a public key instead use a daily github.com release check, controlled by the same setting. A banner offers <em>Download</em> (direct) or <em>Copy Upgrade Command</em> (<code>brew upgrade --cask tinyprune</code>, Homebrew), plus Release Notes, Skip This Version and Later. This fallback downloads or installs nothing automatically and visibly explains why in-app installation is unavailable. No identifiers are sent.</p>
           <p>Pruning stops while a downloadable update is pending. An update cannot interrupt an in-flight Trash operation. If a downloaded update is interrupted, resume it with Check for Updates or manually install and launch its intended key-enabled direct target. Matching-target recovery also works for ad-hoc direct builds and reconciles an already-enabled background agent; an old-app launch, wrong target or failed recovery never silently resumes pruning. Homebrew/no-key copies cannot clear or resume the pending marker. The menu offers <strong>Update Safety Status…</strong> while an update is blocking cleanup.</p>
@@ -204,16 +214,24 @@ tinyprune config export</code></pre>
           <p>For implementation details, read the <a href="https://github.com/navig-me/tinyprune/blob/main/AGENTS.md">contributor guide</a> and <a href="https://github.com/navig-me/tinyprune/blob/main/PLAN.md">release plan</a>. Report problems or suggest improvements on <a href="https://github.com/navig-me/tinyprune/issues">GitHub</a>.</p>
         </section>
         <section id="cross-platform">
-          <h2>Cross-platform status (in development)</h2>
-          <p>TinyPrune remains a macOS-only product. Linux and Windows work is an unreleased engineering effort: <strong>no Linux or Windows build is released</strong>.</p>
-          <p>The Rust core contains domain decisions, config handling, a synchronous pre-Trash coordinator, and scheduler scan decisions with injected Clock/MetadataSource/ObservationStore. Swift is the reference for 577 golden cases across 13 JSONL files, including templates, broadness, roots, plans, and schedule. The existing <code>rust-core</code> CI job runs workspace tests and Clippy on Ubuntu, Windows, and macOS, including target-applicable adapter tests; configured CI is not native execution evidence or a complete application.</p>
-          <p><code>tinyprune-unix</code> implements FileAccess and freedesktop Trash and has been tested on macOS. <code>tinyprune-watch</code> implements an inotify EventSource, cross-compile-checked only and never executed. <code>tinyprune-windows</code> implements Recycle Bin/IFileOperation access, compile-checked only and never executed.</p>
-          <p><code>tinyprune-agent</code> implements a synchronous deterministic engine for bounded indexing, events, execution, cancellation/resume, a deadline queue, per-item backoff, and restart recovery. Its 12 tests include a real Unix temporary-tree Trash move. This is not a standalone daemon: embedding must supply durable stores, a production metadata enumerator, daemon/IPC hosting, and pausing during update installation. Enumeration and per-tick event/execution work are bounded; full snapshot evaluation and retained metadata grow with root size. Durable Rust stores, the production enumerator, daemon/IPC, UIs, packaging, and native Windows/Linux execution are not started.</p>
-          <p>The core adds a <code>platform_hidden</code> candidate flag and explicit Windows <code>PathFlavor</code>, covered by Rust-only tests with no Swift counterpart. Default <code>Posix</code> behavior leaves the 577 shared golden cases unchanged; the config codec remains POSIX. POSIX rename and Windows Shell cannot atomically condition a move on identity; the crate READMEs document the remaining race boundaries. The same safety invariants apply: Trash only, metadata only, Keep wins, re-check before Trash, and Preview never trashes.</p>
-          <p>Contributors can read the <a href="https://github.com/navig-me/tinyprune/blob/main/rust/README.md">Rust workspace guide</a>, <a href="https://github.com/navig-me/tinyprune/blob/main/Fixtures/golden/README.md">shared fixture contract</a>, and <a href="https://github.com/navig-me/tinyprune/blob/main/ADRs/0010-cross-platform-core-and-golden-fixtures.md">architecture decision</a>. Test commands and intentional fixture regeneration are documented in the <a href="https://github.com/navig-me/tinyprune/blob/main/AGENTS.md#rust-core-and-shared-golden-fixtures">contributor guide</a>.</p>
+          <h2 id="cross-platform-title">Cross-platform status (in development)</h2>
+          <p>TinyPrune remains a macOS-only product, and the macOS app is the Swift implementation. Linux and Windows work is an unreleased engineering effort: <strong>no Linux or Windows build is released</strong> and there is no installer.</p>
+          <p>The Rust workspace has crates <code>core</code>, <code>unix</code>, <code>windows</code>, <code>watch</code>, <code>agent</code>, <code>store</code>, <code>scan</code>, <code>ipc</code>, <code>daemon</code> (<code>tinyprune-agentd</code>) and <code>cli</code> (<code>tinyprune</code>), plus a Tauri UI in a separate workspace. Swift is the reference for 577 golden cases across 13 JSONL files. The IPC protocol is length-prefixed JSON over a Unix socket or Windows named pipe and is not compatible with the macOS XPC protocol.</p>
+          <div class="table-wrap" tabindex="0" role="region" aria-label="Rust component verification status"><table><thead><tr><th scope="col">Component</th><th scope="col">Linux</th><th scope="col">Windows</th><th scope="col">macOS (Rust)</th></tr></thead><tbody>
+            <tr><td>Core, 577 golden cases</td><td>Tests run in CI</td><td>Tests run in CI</td><td>Tests run in CI and locally</td></tr>
+            <tr><td>Filesystem and Trash adapters</td><td><code>unix</code> tests run in CI</td><td><code>windows</code> tests run in CI</td><td><code>unix</code> tests run</td></tr>
+            <tr><td>Native watchers</td><td>inotify: compile-checked only, never executed</td><td>ReadDirectoryChangesW: compile-checked only, never executed</td><td>None; periodic reconcile fallback</td></tr>
+            <tr><td>Agent engine</td><td>Tests run in CI</td><td>Tests run in CI</td><td>Tests run</td></tr>
+            <tr><td>Store, scan, IPC, daemon, CLI</td><td>Never executed</td><td>Never executed (named pipes cross-checked only)</td><td>Tests run on the development Mac</td></tr>
+            <tr><td>UI</td><td>Never run</td><td>Never run</td><td>9 Node frontend tests; no webview run</td></tr>
+            <tr><td>Installers and packaging</td><td>Unsigned development archive scripts, never run on Linux or systemd; nothing shipped</td><td>Unsigned development archive scripts, never run or parse-checked; nothing shipped</td><td>Not applicable</td></tr>
+          </tbody></table></div>
+          <p>“Tests run in CI” means they passed on the pull request's last pushed commit. The store, scan, IPC, daemon, CLI, UI and the Windows watcher were added afterwards and have no CI result yet. An end-to-end smoke of the real agent and CLI, a non-gating benchmark and a UI check are configured in CI but have not yet run on GitHub. Restart-stable item identity is implemented and tested on the development Mac only. The only measurement is on one development Mac: <code>tinyprune-scan</code> traversed 50,101 entries at 35,761 entries per second. Not verified: real inotify events, the Windows watcher, named pipes, Linux and Windows UI, installers, performance on those systems, and accessibility (no audit and no screen reader run).</p>
+          <p>Known limits: the Rust daemon's config import and export are POSIX-only, so Windows returns an error. macOS has no native Rust watcher. POSIX rename and Windows Shell cannot atomically condition a move on identity. Items on volumes without a durable id, on filesystems without creation time, or on cloned volumes are re-observed after a restart. The same safety invariants apply: Trash only, metadata only, Keep wins, re-check before Trash, the store schedules but never authorizes, and Preview never trashes. The core's <code>platform_hidden</code> flag and explicit Windows <code>PathFlavor</code> have Rust-only tests and leave the 577 golden cases unchanged.</p>
+          <p>Contributors can read the <a href="https://github.com/navig-me/tinyprune/blob/main/rust/README.md#status-matrix">Rust workspace guide and full status matrix</a>, <a href="https://github.com/navig-me/tinyprune/blob/main/Fixtures/golden/README.md">shared fixture contract</a>, and the architecture decisions <a href="https://github.com/navig-me/tinyprune/blob/main/ADRs/0010-cross-platform-core-and-golden-fixtures.md">ADR 0010</a> and <a href="https://github.com/navig-me/tinyprune/blob/main/ADRs/0011-rust-runtime-store-scan-ipc-daemon-cli-ui.md">ADR 0011</a>. Test commands and intentional fixture regeneration are documented in the <a href="https://github.com/navig-me/tinyprune/blob/main/AGENTS.md#rust-core-and-shared-golden-fixtures">contributor guide</a>.</p>
         </section>
         <section id="agents">
-          <h2>Prune AI agent clutter</h2>
+          <h2 id="agents-title">Prune AI agent clutter</h2>
           <p>Coding agents and LLM tools are generous with disk space. In a week of debugging they can leave behind scratch projects, cloned repositories, git worktrees, virtual environments, <code>node_modules</code>, build output and long logs. Left alone, that adds up to gigabytes you never chose to keep. Lifetime rules let you clean up once in a while without a cleanup day and without touching what matters.</p>
           <ol>
             <li><strong>Give agents one place to work.</strong> Create a folder such as <code>~/agent-scratch</code> and tell your tools to use it for throwaway work. Add it as a managed folder and apply the <em>Temporary Workspace</em> template: disposable top-level items are scheduled 3 days after first observation by default. Raise the lifetime if your sessions run longer.</li>
@@ -227,26 +245,26 @@ tinyprune config export</code></pre>
           <p>TinyPrune does not detect which tool created a file, and it never inspects file contents. It acts on the location, name, age and project inactivity you chose, always moves items to Trash instead of deleting them permanently, and rechecks Keep, rules and deadlines immediately before every move.</p>
         </section>
         <section id="faq">
-          <h2>Frequently asked questions</h2>
-          <h3>What is TinyPrune?</h3>
+          <h2 id="faq-title">Frequently asked questions</h2>
+          <h3 id="what-is-tinyprune">What is TinyPrune?</h3>
           <p>TinyPrune is a local macOS app that gives files and folders a lifetime. You choose folders and rules, and when an item expires TinyPrune moves it to the Trash.</p>
-          <h3>Does TinyPrune permanently delete files?</h3>
+          <h3 id="does-tinyprune-permanently-delete-files">Does TinyPrune permanently delete files?</h3>
           <p>No. TinyPrune only moves items to the macOS Trash. It does not delete anything permanently.</p>
-          <h3>How is TinyPrune different from a Mac cleaner app?</h3>
+          <h3 id="how-is-tinyprune-different-from-a-mac-cleaner-app">How is TinyPrune different from a Mac cleaner app?</h3>
           <p>TinyPrune is not a system optimizer. It only touches folders you choose, follows rules you write, explains every decision, and lets you test a rule in Preview first.</p>
-          <h3>Can TinyPrune clean node_modules and other developer folders?</h3>
+          <h3 id="can-tinyprune-clean-node-modules-and-other-developer-folders">Can TinyPrune clean node_modules and other developer folders?</h3>
           <p>Yes. Rules can match folders such as <code>node_modules</code> or <code>.venv</code> and expire them after a project has been inactive. Developer templates always start in Preview.</p>
-          <h3>Does TinyPrune need an account or network access?</h3>
+          <h3 id="does-tinyprune-need-an-account-or-network-access">Does TinyPrune need an account or network access?</h3>
           <p>The app has no telemetry and needs no account. Core cleanup reads filesystem metadata only, does not inspect file contents, and does not require network access. Key-enabled direct-download builds, including ad-hoc builds, check their EdDSA-authenticated update feed over HTTPS. Homebrew and no-key copies ask github.com once a day for a newer release and offer a download link or the brew upgrade command. <em>Check for new versions</em> is on by default and can be turned off in Settings; installation always requires user confirmation. The <a href="https://tinyprune.com">tinyprune.com</a> marketing website, separately, uses Google Analytics and PostHog.</p>
-          <h3>How do I keep a file from being removed?</h3>
+          <h3 id="how-do-i-keep-a-file-from-being-removed">How do I keep a file from being removed?</h3>
           <p>Mark it Keep from the Finder menu or run <code>tinyprune keep</code>. Keep takes precedence over every rule, and a folder with a kept item inside is never trashed.</p>
-          <h3>Does TinyPrune work on Intel and Apple silicon, and which macOS versions?</h3>
+          <h3 id="does-tinyprune-work-on-intel-and-apple-silicon-and-which-macos-versions">Does TinyPrune work on Intel and Apple silicon, and which macOS versions?</h3>
           <p>It requires macOS 14 or later. Releases are universal binaries for Intel and Apple silicon.</p>
-          <h3>How do I install TinyPrune?</h3>
+          <h3 id="how-do-i-install-tinyprune">How do I install TinyPrune?</h3>
           <p>Run <code>brew install --cask navig-me/tap/tinyprune</code>, or download the DMG from <a href="https://github.com/navig-me/tinyprune/releases">GitHub Releases</a>. You can also build from source; see <a href="#install">Install</a> for details.</p>
-          <h3>How do I clean up after AI coding agents and LLM tools?</h3>
+          <h3 id="how-do-i-clean-up-after-ai-coding-agents-and-llm-tools">How do I clean up after AI coding agents and LLM tools?</h3>
           <p>Agents create scratch projects, git worktrees, virtual environments, build output and logs faster than you remove them. Give one disposable folder to the agents, apply the Temporary Workspace template there, add Developer Cleanup or Build Artifacts to your projects folder, and review everything in Preview first. See <a href="#agents">Prune AI agent clutter</a>.</p>
-          <h3>Does TinyPrune know which files an AI agent created?</h3>
+          <h3 id="does-tinyprune-know-which-files-an-ai-agent-created">Does TinyPrune know which files an AI agent created?</h3>
           <p>No. TinyPrune reads only filesystem metadata and does not identify the tool that wrote a file. Rules work on where an item lives, its name, its age and project inactivity, so point agents at a folder you chose and put the rule on that folder.</p>
         </section>
       </article>

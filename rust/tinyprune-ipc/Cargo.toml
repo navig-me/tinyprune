@@ -1,0 +1,16 @@
+[package]
+name = "tinyprune-ipc"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Unreleased TinyPrune local agent protocol and blocking transport"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Pipes", "Win32_System_Threading", "Win32_System_Memory", "Win32_System_IO"] }

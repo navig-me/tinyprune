@@ -1,0 +1,15 @@
+[package]
+name = "tinyprune-scan"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+tinyprune-core = { path = "../tinyprune-core" }
+tinyprune-agent = { path = "../tinyprune-agent" }
+
+[target.'cfg(unix)'.dependencies]
+tinyprune-unix = { path = "../tinyprune-unix" }
+
+[target.'cfg(windows)'.dependencies]
+tinyprune-windows = { path = "../tinyprune-windows" }

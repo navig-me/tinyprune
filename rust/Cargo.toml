@@ -1,3 +1,4 @@
 [workspace]
 resolver = "2"
-members = ["tinyprune-core", "tinyprune-unix", "tinyprune-windows", "tinyprune-watch", "tinyprune-agent"]
+exclude = ["ui"]
+members = ["tinyprune-core", "tinyprune-unix", "tinyprune-windows", "tinyprune-watch", "tinyprune-agent", "tinyprune-ipc", "tinyprune-scan", "tinyprune-store", "tinyprune-daemon", "tinyprune-cli"]

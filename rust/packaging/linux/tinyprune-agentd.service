@@ -1,0 +1,42 @@
+# TinyPrune background agent: systemd USER unit (unreleased development artifact).
+# install.sh substitutes @BINDIR@. Install to ~/.config/systemd/user/; never run as root.
+#
+# Sandboxing is deliberately limited. The agent must move arbitrary files the user
+# owns into the freedesktop Trash: $XDG_DATA_HOME/Trash, or <mount>/.Trash-$UID /
+# <mount>/.Trash/$UID on other mounts (e.g. /media, /mnt, network shares). Therefore
+# these are NOT set, because each would make some legitimate trash operation fail:
+#   ProtectSystem=strict|full, ReadWritePaths= (cannot enumerate every managed root
+#     or per-mount trash directory), ProtectHome=, InaccessiblePaths=, TemporaryFileSystem=,
+#     PrivateTmp= (hides the real /tmp and its mounts), PrivateDevices=, PrivateUsers=,
+#     BindPaths=, and any other mount-namespace option.
+# Only restrictions that do not alter the filesystem view are used (seccomp/prctl).
+# See rust/packaging/README.md, "Sandboxing".
+[Unit]
+Description=TinyPrune agent (development build, unreleased)
+
+[Service]
+Type=simple
+ExecStart=@BINDIR@/tinyprune-agentd
+# The agent installs only a SIGINT handler (ctrlc); SIGTERM would kill it without
+# releasing its lock/socket cleanly, so stop with SIGINT.
+KillSignal=SIGINT
+TimeoutStopSec=20
+Restart=on-failure
+RestartSec=5
+# Back off if it keeps crashing instead of looping forever.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+UMask=0077
+NoNewPrivileges=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+SystemCallArchitectures=native
+# Unix socket (IPC) only; the agent never uses the network.
+RestrictAddressFamilies=AF_UNIX
+MemoryDenyWriteExecute=yes
+
+[Install]
+WantedBy=default.target

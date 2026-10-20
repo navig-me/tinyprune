@@ -132,7 +132,9 @@ fn inspect_path(path: &str) -> Result<Option<RuleCandidate>, String> {
     Ok(Some(RuleCandidate {
         identity: FilesystemIdentity { volume: Uuid(id.VolumeSerialNumber as u128),
             resource: id.FileId.Identifier.to_vec(), path_hint: display_path(path),
-            creation_time: created, generation: None, is_persistent: false },
+            creation_time: created, generation: None,
+            // Volume serial + 128-bit file id survive reboot; creation time guards file-id reuse.
+            is_persistent: id.VolumeSerialNumber != 0 && created.is_some() },
         name: native.file_name().and_then(|n| n.to_str()).ok_or("filesystem root is not an item")?.into(),
         kind: if m.is_dir() { ItemKind::Directory } else { ItemKind::File },
         platform_hidden: m.file_attributes() & FILE_ATTRIBUTE_HIDDEN.0 != 0,

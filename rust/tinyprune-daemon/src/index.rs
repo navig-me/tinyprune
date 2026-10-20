@@ -1,0 +1,420 @@
+use crate::{codec, explain};
+use std::{
+    collections::{BTreeSet, HashMap, HashSet},
+    fmt::Write as _,
+    hash::{DefaultHasher, Hasher},
+    num::NonZeroUsize,
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc, Mutex,
+    },
+    time::Instant,
+};
+use tinyprune_agent::{AgentStore, IndexBatch, IndexSource};
+use tinyprune_core::{
+    rule::{ExpiryBasis, FilesystemIdentity, RuleCandidate, RuleState},
+    scheduler::{Observation, ObservationStore, Project},
+    trash::{Clock, PolicySnapshot, PolicyStore, TrashRequest},
+    uuid::Uuid,
+};
+use tinyprune_scan::ProductionIndexSource;
+use tinyprune_store::{DecisionRow, Store};
+
+type Key = (Uuid, Vec<u8>);
+fn key(identity: &FilesystemIdentity) -> Key {
+    (identity.volume, identity.resource.clone())
+}
+/// More changed candidates than this are not tracked individually: the root is re-evaluated in full.
+const DIRTY_CAP: usize = 20_000;
+
+/// Scan/decision progress shared between the engine, the polling fallback and the decision job.
+#[derive(Default)]
+pub(crate) struct Pace {
+    scanning: AtomicBool,
+    decisions: AtomicBool,
+    last_scan_millis: AtomicU64,
+    last_complete_bits: AtomicU64,
+}
+impl Pace {
+    pub fn busy(&self) -> bool {
+        self.scanning.load(Ordering::Acquire) || self.decisions.load(Ordering::Acquire)
+    }
+    pub fn last_scan_seconds(&self) -> f64 {
+        self.last_scan_millis.load(Ordering::Relaxed) as f64 / 1000.0
+    }
+    /// Injected-clock time at which the latest scan finished (0 before the first).
+    pub fn last_complete(&self) -> f64 {
+        f64::from_bits(self.last_complete_bits.load(Ordering::Relaxed))
+    }
+}
+
+/// State shared by the engine-side store wrapper and the decision job.
+#[derive(Default)]
+pub(crate) struct Shared {
+    pub pace: Arc<Pace>,
+    /// Roots queued for a full decision pass.
+    roots: Mutex<BTreeSet<String>>,
+    /// Policy revision each root's decisions were last evaluated at.
+    evaluated: Mutex<HashMap<String, u64>>,
+    /// Last published fingerprint (and path hint) per candidate identity.
+    prints: Mutex<HashMap<Key, (u64, String)>>,
+    /// Candidates whose published metadata changed since their decision was last written.
+    dirty: Mutex<HashMap<Key, RuleCandidate>>,
+    /// More than `DIRTY_CAP` candidates changed: queue a full pass at the next scheduling publish.
+    overflow: AtomicBool,
+}
+
+/// Hash of the complete candidate metadata (path hint, dates, kind, flags) without allocating.
+fn fingerprint(candidate: &RuleCandidate) -> u64 {
+    struct Sip(DefaultHasher);
+    impl std::fmt::Write for Sip {
+        fn write_str(&mut self, text: &str) -> std::fmt::Result {
+            self.0.write(text.as_bytes());
+            Ok(())
+        }
+    }
+    let mut hasher = Sip(DefaultHasher::new());
+    let _ = write!(hasher, "{candidate:?}");
+    hasher.0.finish()
+}
+
+impl Shared {
+    /// Records a completed, already-published subtree scan and notes which candidates changed.
+    fn record(&self, path: &str, candidates: &[RuleCandidate]) -> Result<(), String> {
+        let flavor = codec::flavor();
+        let mut prints = self.prints.lock().map_err(|_| "Fingerprints poisoned")?;
+        let mut dirty = self.dirty.lock().map_err(|_| "Dirty set poisoned")?;
+        let mut overflow = self.overflow.load(Ordering::Acquire);
+        let mut current: HashSet<Key> = HashSet::with_capacity(candidates.len());
+        for candidate in candidates {
+            let k = key(&candidate.identity);
+            let print = fingerprint(candidate);
+            if prints.get(&k).is_none_or(|(old, _)| *old != print) {
+                prints.insert(k.clone(), (print, candidate.identity.path_hint.clone()));
+                if !overflow {
+                    if dirty.len() >= DIRTY_CAP {
+                        dirty.clear();
+                        overflow = true;
+                    } else {
+                        dirty.insert(k.clone(), candidate.clone());
+                    }
+                }
+            }
+            current.insert(k);
+        }
+        let below = |hint: &str| flavor.equal(hint, path) || flavor.is_descendant(hint, path);
+        prints.retain(|k, (_, hint)| current.contains(k) || !below(hint));
+        dirty.retain(|k, c| current.contains(k) || !below(&c.identity.path_hint));
+        self.overflow.store(overflow, Ordering::Release);
+        if overflow || !dirty.is_empty() {
+            self.pace.decisions.store(true, Ordering::Release);
+        }
+        Ok(())
+    }
+}
+
+pub(crate) struct DurableIndex {
+    source: ProductionIndexSource,
+    store: Store,
+    path: String,
+    candidates: Vec<RuleCandidate>,
+    clock: Arc<dyn Clock + Send + Sync>,
+    shared: Arc<Shared>,
+    started: Option<Instant>,
+}
+impl DurableIndex {
+    pub fn new(store: Store, clock: Arc<dyn Clock + Send + Sync>, shared: Arc<Shared>) -> Self {
+        Self {
+            source: ProductionIndexSource::default(),
+            store,
+            path: String::new(),
+            candidates: vec![],
+            clock,
+            shared,
+            started: None,
+        }
+    }
+}
+impl IndexSource for DurableIndex {
+    fn available(&mut self, root: &str) -> Result<bool, String> {
+        self.source.available(root)
+    }
+    fn begin(&mut self, root: &str) -> Result<(), String> {
+        self.source.begin(root)?;
+        self.path = root.into();
+        self.candidates.clear();
+        self.started = Some(Instant::now());
+        self.shared.pace.scanning.store(true, Ordering::Release);
+        Ok(())
+    }
+    fn next_batch(&mut self, limit: NonZeroUsize) -> Result<IndexBatch, String> {
+        let batch = match self.source.next_batch(limit) {
+            Ok(batch) => batch,
+            Err(error) => {
+                self.shared.pace.scanning.store(false, Ordering::Release);
+                return Err(error);
+            }
+        };
+        self.candidates.extend(batch.candidates.iter().cloned());
+        if batch.complete {
+            let now = self.clock.now();
+            // Unchanged candidates are not rewritten by the store and not re-evaluated here.
+            let published = self
+                .store
+                .publish_candidate_subtree(&self.path, &self.candidates, now)
+                .and_then(|_| self.shared.record(&self.path, &self.candidates));
+            let pace = &self.shared.pace;
+            if let Some(started) = self.started.take() {
+                // Real elapsed time: it paces the polling fallback against actual scan cost.
+                pace.last_scan_millis
+                    .store(started.elapsed().as_millis() as u64, Ordering::Relaxed);
+            }
+            pace.last_complete_bits
+                .store(now.to_bits(), Ordering::Relaxed);
+            pace.scanning.store(false, Ordering::Release);
+            self.candidates = Vec::new();
+            published?;
+        }
+        Ok(batch)
+    }
+}
+
+/// Bounded, resumable decision evaluation, run off the engine lock in small steps by the tick thread.
+/// A full pass pages the published candidate snapshot of a root (first scan, policy change, overflow);
+/// otherwise only candidates whose metadata changed are evaluated.
+#[derive(Default)]
+pub(crate) struct Decisions {
+    job: Option<Job>,
+}
+struct Job {
+    root: String,
+    after: Option<String>,
+    revision: u64,
+    policy: PolicySnapshot,
+    store: Store,
+}
+const PAGE: usize = 512;
+const PAGES_PER_STEP: usize = 8;
+
+impl Decisions {
+    /// Evaluates up to a bounded number of candidates; true while more work remains.
+    pub fn advance(&mut self, shared: &Shared, reader: &Store, now: f64) -> Result<bool, String> {
+        let result = self.advance_inner(shared, reader, now);
+        if result.is_err() {
+            // Retry the whole root on a later turn rather than trusting a half-evaluated cursor.
+            if let Some(job) = self.job.take() {
+                if let Ok(mut roots) = shared.roots.lock() {
+                    roots.insert(job.root);
+                }
+            }
+        }
+        let pending = result?;
+        shared.pace.decisions.store(pending, Ordering::Release);
+        Ok(pending)
+    }
+    fn load(root: String, reader: &Store) -> Result<Job, String> {
+        let mut store = reader.clone();
+        let policy = store.load_snapshot()?;
+        let (revision, _, _) = store.runtime_state()?;
+        store.refresh_projects()?;
+        Ok(Job {
+            root,
+            after: None,
+            revision,
+            policy,
+            store,
+        })
+    }
+    /// Evaluates the candidates and writes changed decisions in one store transaction.
+    fn write(job: &Job, candidates: &[&RuleCandidate], now: f64) -> Result<(), String> {
+        let mut values = Vec::with_capacity(candidates.len());
+        for candidate in candidates {
+            let e = explain(candidate, &job.policy, &job.store, now)?;
+            values.push((
+                e.scheduled_at,
+                e.rule.as_ref().map(|r| r.id.clone()),
+                e.disposition == Some(tinyprune_ipc::Disposition::Preview),
+                serde_json::to_value(&e).map_err(|e| e.to_string())?,
+            ));
+        }
+        let rows: Vec<DecisionRow<'_>> = candidates
+            .iter()
+            .zip(&values)
+            .map(|(candidate, (at, rule, preview, value))| DecisionRow {
+                identity: &candidate.identity,
+                scheduled_at: *at,
+                rule_id: rule.as_deref(),
+                preview: *preview,
+                explanation: value,
+            })
+            .collect();
+        // Unchanged decisions are neither rewritten nor re-audited by the store.
+        job.store.put_decisions(now, &rows)?;
+        Ok(())
+    }
+    fn advance_inner(&mut self, shared: &Shared, reader: &Store, now: f64) -> Result<bool, String> {
+        for _ in 0..PAGES_PER_STEP {
+            if self.job.is_none() {
+                let next = shared
+                    .roots
+                    .lock()
+                    .map_err(|_| "Decision queue poisoned")?
+                    .pop_first();
+                let Some(root) = next else {
+                    return Self::dirty_step(shared, reader, now);
+                };
+                self.job = Some(Self::load(root, reader)?);
+            }
+            let job = self.job.as_mut().expect("job loaded");
+            // A newer scan or policy revision of this root restarts its evaluation.
+            if shared
+                .roots
+                .lock()
+                .map_err(|_| "Decision queue poisoned")?
+                .remove(&job.root)
+            {
+                *job = Self::load(job.root.clone(), reader)?;
+            }
+            let page = job.store.candidate_page(
+                &job.root,
+                job.after.as_deref(),
+                NonZeroUsize::new(PAGE).expect("nonzero"),
+            )?;
+            if page.is_empty() {
+                shared
+                    .evaluated
+                    .lock()
+                    .map_err(|_| "Decision state poisoned")?
+                    .insert(job.root.clone(), job.revision);
+                self.job = None;
+                continue;
+            }
+            job.after = page.last().map(|v| v.0.clone());
+            let refs: Vec<&RuleCandidate> = page.iter().map(|(_, c)| c).collect();
+            Self::write(job, &refs, now)?;
+        }
+        Ok(true)
+    }
+    /// One bounded batch of changed candidates; true while more remain.
+    fn dirty_step(shared: &Shared, reader: &Store, now: f64) -> Result<bool, String> {
+        let batch: Vec<(Key, RuleCandidate)> = {
+            let mut dirty = shared.dirty.lock().map_err(|_| "Dirty set poisoned")?;
+            let keys: Vec<Key> = dirty.keys().take(PAGE).cloned().collect();
+            keys.iter().filter_map(|k| dirty.remove_entry(k)).collect()
+        };
+        if batch.is_empty() {
+            return Ok(false);
+        }
+        let result = (|| {
+            let job = Self::load(String::new(), reader)?;
+            // One changed file moves a project's activity, which moves every item below it.
+            if job.policy.rules.iter().any(|r| {
+                r.expiry_basis == ExpiryBasis::ProjectActivity && r.state != RuleState::Paused
+            }) {
+                shared
+                    .roots
+                    .lock()
+                    .map_err(|_| "Decision queue poisoned")?
+                    .extend(job.policy.managed_roots.iter().cloned());
+                shared
+                    .dirty
+                    .lock()
+                    .map_err(|_| "Dirty set poisoned")?
+                    .clear();
+                return Ok(());
+            }
+            let refs: Vec<&RuleCandidate> = batch.iter().map(|(_, c)| c).collect();
+            Self::write(&job, &refs, now)
+        })();
+        if let Err(error) = result {
+            // Keep them for the next turn.
+            if let Ok(mut dirty) = shared.dirty.lock() {
+                dirty.extend(batch);
+            }
+            return Err(error);
+        }
+        let more = !shared
+            .dirty
+            .lock()
+            .map_err(|_| "Dirty set poisoned")?
+            .is_empty()
+            || !shared
+                .roots
+                .lock()
+                .map_err(|_| "Decision queue poisoned")?
+                .is_empty();
+        Ok(more)
+    }
+}
+
+pub(crate) fn wire_roots(paths: &[String]) -> Vec<tinyprune_ipc::Root> {
+    paths.iter().map(|v| codec::root(v)).collect()
+}
+
+pub(crate) struct DurableStore {
+    inner: Store,
+    shared: Arc<Shared>,
+}
+impl DurableStore {
+    pub fn new(inner: Store, shared: Arc<Shared>) -> Self {
+        Self { inner, shared }
+    }
+}
+impl std::ops::Deref for DurableStore {
+    type Target = Store;
+    fn deref(&self) -> &Store {
+        &self.inner
+    }
+}
+impl std::ops::DerefMut for DurableStore {
+    fn deref_mut(&mut self) -> &mut Store {
+        &mut self.inner
+    }
+}
+impl ObservationStore for DurableStore {
+    fn observation(&self, i: &FilesystemIdentity) -> Result<Option<Observation>, String> {
+        self.inner.observation(i)
+    }
+    fn save_observation(&mut self, value: Observation) -> Result<(), String> {
+        self.inner.save_observation(value)
+    }
+    fn projects(&self) -> Result<&[Project], String> {
+        self.inner.projects()
+    }
+    fn publish_projects(&mut self, root: &str, values: Vec<Project>) -> Result<(), String> {
+        self.inner.publish_projects(root, values)
+    }
+    fn remove_below(&mut self, path: &str) -> Result<(), String> {
+        self.inner.remove_below(path)
+    }
+}
+impl AgentStore for DurableStore {
+    fn load_deadlines(&mut self) -> Result<Vec<TrashRequest>, String> {
+        self.inner.load_deadlines()
+    }
+    fn replace_deadlines(&mut self, root: &str, deadlines: &[TrashRequest]) -> Result<(), String> {
+        self.inner.replace_deadlines(root, deadlines)?;
+        // A full pass is needed only when the policy moved on since this root was last evaluated or
+        // too many candidates changed to track; otherwise the dirty set is evaluated incrementally.
+        let (revision, _, _) = self.inner.runtime_state()?;
+        let stale = self
+            .shared
+            .evaluated
+            .lock()
+            .map_err(|_| "Decision state poisoned")?
+            .get(root)
+            != Some(&revision);
+        if self.shared.overflow.swap(false, Ordering::AcqRel) || stale {
+            self.shared
+                .roots
+                .lock()
+                .map_err(|_| "Decision queue poisoned")?
+                .insert(root.to_owned());
+            self.shared.pace.decisions.store(true, Ordering::Release);
+        }
+        Ok(())
+    }
+    fn remove_deadline(&mut self, request: &TrashRequest) -> Result<(), String> {
+        self.inner.remove_deadline(request)
+    }
+}

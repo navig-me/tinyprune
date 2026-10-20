@@ -39,7 +39,7 @@ fn identity_uses_volume_and_128_bit_file_id_with_creation_time() {
     // Keep the old file alive, so an ID cannot be recycled for the replacement.
     File::create(&path).unwrap();
     assert_ne!(first.identity, candidate(&path).identity);
-    assert!(!first.identity.is_persistent);
+    assert!(first.identity.is_persistent);
 }
 
 #[test]

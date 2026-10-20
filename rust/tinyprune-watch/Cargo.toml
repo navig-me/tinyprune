@@ -8,3 +8,7 @@ description = "In-development metadata-only event sources for TinyPrune"
 [target.'cfg(target_os = "linux")'.dependencies]
 # std has no inotify or poll API; libc provides the Linux ABI without a runtime.
 libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+# std has no recursive directory change notification or overlapped cancellation API.
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Threading"] }

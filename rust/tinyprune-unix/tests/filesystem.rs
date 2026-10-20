@@ -186,3 +186,23 @@ fn coordinator_moves_due_tree_but_keep_descendant_blocks_it() {
     assert_eq!(audit.0.iter().filter(|event| event.kind == AuditKind::MovedToTrash).count(), 1);
     assert_eq!(audit.0.iter().filter(|event| event.kind == AuditKind::SafetySkipped).count(), 1);
 }
+
+#[test]
+fn identity_is_durable_where_birth_time_and_volume_id_exist() {
+    let tree = Tree::new();
+    let mut files = tree.files();
+    let path = tree.path("item");
+    fs::write(&path, b"x").unwrap();
+    let first = files.inspect(s(&path)).unwrap().unwrap().identity;
+    // Persistence requires the inode-reuse guard (creation time) and a durable volume id; never one without it.
+    if !first.is_persistent { return; }
+    assert!(first.creation_time.is_some());
+    // A fresh inspection (as after a daemon restart) yields the same identity and volume id.
+    let again = identity(&mut files, &path);
+    assert_eq!((first.volume, &first.resource, first.creation_time), (again.volume, &again.resource, again.creation_time));
+    // Renaming keeps identity; a replacement at the old path is a different identity.
+    fs::rename(&path, tree.path("renamed")).unwrap();
+    assert_eq!(first, identity(&mut files, &tree.path("renamed")));
+    fs::write(&path, b"replacement").unwrap();
+    assert_ne!(first, identity(&mut files, &path));
+}
