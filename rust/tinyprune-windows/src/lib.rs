@@ -323,21 +323,27 @@ fn recycle(path: &str, expected: &FilesystemIdentity) -> Result<String, String> 
     let sink: IFileOperationProgressSink = RecycleSink { path: path.into(), expected: expected.clone(), result: result.clone() }.into();
     let native = absolute(path)?;
     let path = wide(text(&native)?)?;
+    let stage = std::cell::Cell::new("create IFileOperation");
     // SAFETY: COM initialized above; all interfaces and nul-terminated buffers live through PerformOperations.
     let operation_result = unsafe {
         (|| -> windows::core::Result<()> {
             let operation: IFileOperation = CoCreateInstance(&FileOperation, None, CLSCTX_INPROC_SERVER)?;
+            stage.set("SetOperationFlags");
             operation.SetOperationFlags(FOFX_RECYCLEONDELETE | FOF_ALLOWUNDO | FOF_SILENT | FOF_NOERRORUI | FOFX_EARLYFAILURE | FOF_WANTNUKEWARNING | FOF_NO_CONNECTED_ELEMENTS)?;
+            stage.set("SHCreateItemFromParsingName");
             let item: IShellItem = SHCreateItemFromParsingName(PCWSTR(path.as_ptr()), None)?;
+            stage.set("DeleteItem");
             operation.DeleteItem(&item, &sink)?;
+            stage.set("PerformOperations");
             operation.PerformOperations()?;
+            stage.set("GetAnyOperationsAborted");
             if operation.GetAnyOperationsAborted()?.as_bool() { return Err(Error::from_hresult(E_ABORT)); }
             Ok(())
         })()
     };
     let mut state = result.borrow_mut();
     if let Some(error) = state.error.take() { return Err(error); }
-    operation_result.map_err(com_error)?;
+    operation_result.map_err(|error| format!("{} failed at {}", com_error(error), stage.get()))?;
     state.destination.take().ok_or_else(|| "Shell did not report a recycled destination; no success claimed".into())
 }
 

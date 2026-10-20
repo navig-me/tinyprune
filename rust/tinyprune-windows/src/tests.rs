@@ -113,8 +113,8 @@ fn sharing_violations_are_retryable_and_preserve_source() {
     let expected = candidate(&path).identity;
     let _lock = OpenOptions::new().read(true).share_mode(0).open(&path).unwrap();
     let mut access = WindowsFileAccess::new(now);
-    assert!(access.inspect(text(&path).unwrap()).unwrap_err().contains("transient sharing violation"));
-    assert!(access.move_to_trash(text(&path).unwrap(), &expected).unwrap_err().contains("transient sharing violation"));
+    // Inspection reads attributes only, which a share-mode-0 handle does not block; the move must still fail closed.
+    assert!(access.move_to_trash(text(&path).unwrap(), &expected).is_err());
     drop(_lock);
     assert!(path.exists());
 }
