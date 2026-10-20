@@ -43,7 +43,7 @@ impl PathResolver for Resolver {
     fn canonical_path(&self, path: &str) -> String {
         fs::canonicalize(path)
             .ok()
-            .and_then(|v| v.to_str().map(str::to_owned))
+            .and_then(|v| codec::path(&v).ok())
             .unwrap_or_else(|| path.into())
     }
     fn home_directories(&self) -> &[String] {
@@ -606,7 +606,7 @@ fn authorize(path: &str, roots: &[String]) -> Result<(), String> {
     let flavor = codec::flavor();
     if roots
         .iter()
-        .any(|root| flavor.equal(path, root) || flavor.is_descendant(path, root))
+        .any(|root| codec::same_path(path, root) || flavor.is_descendant(path, root))
     {
         Ok(())
     } else {
@@ -628,7 +628,7 @@ fn validate_rule(rule: &LifetimeRule, managed: &[String], preview: bool) -> Resu
         && managed
             .iter()
             .filter(|r| {
-                codec::flavor().equal(r, &rule.scope.path)
+                codec::same_path(r, &rule.scope.path)
                     || codec::flavor().is_descendant(&rule.scope.path, r)
             })
             .any(|r| roots::is_very_broad(r, &Resolver::new()))
@@ -655,7 +655,7 @@ fn validate_policy(policy: &PolicySnapshot) -> Result<(), String> {
             return Err("Managed roots must be canonical paths".into());
         }
         if policy.managed_roots[..index].iter().any(|r| {
-            codec::flavor().equal(root, r)
+            codec::same_path(root, r)
                 || codec::flavor().is_descendant(root, r)
                 || codec::flavor().is_descendant(r, root)
         }) {
@@ -679,7 +679,7 @@ fn inspect_override(
     authorize(path, roots)?;
     let root = roots
         .iter()
-        .find(|r| codec::flavor().equal(path, r) || codec::flavor().is_descendant(path, r))
+        .find(|r| codec::same_path(path, r) || codec::flavor().is_descendant(path, r))
         .ok_or("Root unavailable")?;
     if files.has_symbolic_link_ancestor(path, root)? {
         return Err("Symlink ancestor".into());
@@ -702,7 +702,7 @@ fn change_override(
         None
     };
     policy.overrides.retain(|o| {
-        !codec::flavor().equal(&o.path, path)
+        !codec::same_path(&o.path, path)
             && !candidate
                 .as_ref()
                 .is_some_and(|c| o.identity.as_ref() == Some(&c.identity))

@@ -1,7 +1,9 @@
 //! Observation lifetimes across a store reopen (daemon restart): FirstObserved/last survive for the same
 //! identity, and reset for replaced files or reused inodes. Fakes cover every platform; a real-tree test
 //! covers the Unix adapter's durable identity.
-use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tinyprune_core::rule::*;
 use tinyprune_core::scheduler::{self, MetadataSource, ObservationStore, ScanPolicy};

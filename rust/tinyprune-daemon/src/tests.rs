@@ -23,10 +23,13 @@ impl Fixture {
         fs::create_dir_all(path.join("tree")).unwrap();
         let path = fs::canonicalize(path).unwrap();
         Self {
-            root: path.join("tree").to_str().unwrap().into(),
+            root: codec::path(&path.join("tree")).unwrap(),
             path,
             clock: Arc::new(ScriptClock(AtomicU64::new(1_800_000_000))),
         }
+    }
+    fn item(&self, relative: &str) -> String {
+        codec::path(&self.path.join("tree").join(relative)).unwrap()
     }
     fn options(&self) -> Options {
         Options {
@@ -109,7 +112,7 @@ fn loopback(
 #[test]
 fn loopback_operations_preview_pause_settings_and_recovery() {
     let fixture = Fixture::new();
-    let file = format!("{}/old.tmp", fixture.root);
+    let file = fixture.item("old.tmp");
     fs::write(&file, b"fixture").unwrap();
     let daemon = fixture.daemon();
     let (mut client, worker) = loopback(daemon.service.clone());
@@ -346,8 +349,8 @@ fn broad_roots_cannot_activate_and_single_instance_is_enforced() {
 #[test]
 fn real_unix_socket_trash_keep_and_midway_restart() {
     let fixture = Fixture::new();
-    let old = format!("{}/old.tmp", fixture.root);
-    let keep = format!("{}/keep.tmp", fixture.root);
+    let old = fixture.item("old.tmp");
+    let keep = fixture.item("keep.tmp");
     fs::write(&old, b"old").unwrap();
     fs::write(&keep, b"keep").unwrap();
     let daemon = fixture.daemon();
@@ -425,8 +428,8 @@ fn real_unix_socket_trash_keep_and_midway_restart() {
 #[test]
 fn explain_directory_reports_protected_descendant_like_preview() {
     let fixture = Fixture::new();
-    let dir = format!("{}/sub", fixture.root);
-    let child = format!("{dir}/child.tmp");
+    let dir = fixture.item("sub");
+    let child = fixture.item("sub/child.tmp");
     fs::create_dir_all(&dir).unwrap();
     fs::write(&child, b"x").unwrap();
     let daemon = fixture.daemon();
@@ -453,16 +456,17 @@ fn explain_directory_reports_protected_descendant_like_preview() {
         Some(ipc::Suppression::ProtectedDescendant)
     );
     match service.handle(Request::PreviewRule(rule)) {
-        Response::RulePreview(p) => assert!(p.samples.iter().any(|s| s.explanation.item.path_hint
-            == dir
-            && s.explanation.suppression_reason == Some(ipc::Suppression::ProtectedDescendant))),
+        Response::RulePreview(p) => assert!(p.samples.iter().any(|s| {
+            codec::same_path(&s.explanation.item.path_hint, &dir)
+                && s.explanation.suppression_reason == Some(ipc::Suppression::ProtectedDescendant)
+        })),
         other => panic!("{other:?}"),
     }
 }
 #[test]
 fn unchanged_skips_are_not_reaudited_on_reconcile() {
     let fixture = Fixture::new();
-    fs::write(format!("{}/a.tmp", fixture.root), b"x").unwrap();
+    fs::write(fixture.item("a.tmp"), b"x").unwrap();
     let daemon = fixture.daemon();
     let service = &daemon.service;
     let revision = acknowledged(service.handle(Request::AddRoot(fixture.root())));
@@ -490,7 +494,7 @@ fn unchanged_skips_are_not_reaudited_on_reconcile() {
 #[test]
 fn reads_are_answered_while_the_engine_is_busy() {
     let fixture = Fixture::new();
-    fs::write(format!("{}/a.tmp", fixture.root), b"x").unwrap();
+    fs::write(fixture.item("a.tmp"), b"x").unwrap();
     let daemon = fixture.daemon();
     let service = &daemon.service;
     let revision = acknowledged(service.handle(Request::AddRoot(fixture.root())));
@@ -527,7 +531,7 @@ fn reads_are_answered_while_the_engine_is_busy() {
     ));
     assert!(matches!(
         service.handle(Request::ExplainItem {
-            path: format!("{}/a.tmp", fixture.root)
+            path: fixture.item("a.tmp")
         }),
         Response::ItemExplanation(_)
     ));
@@ -539,15 +543,34 @@ fn abandoned_connections_do_not_stop_the_agent() {
     let daemon = fixture.daemon();
     let endpoint = fixture.options().paths.endpoint;
     let shutdown = Arc::new(AtomicBool::new(false));
+    struct StopOnDrop(Arc<AtomicBool>);
+    impl Drop for StopOnDrop {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
     std::thread::scope(|scope| {
         let runner = scope.spawn(|| daemon.run(shutdown.clone()));
+        // Unwinding must stop the scoped daemon thread too, or a failed assertion hangs forever.
+        let _stop = StopOnDrop(shutdown.clone());
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
         let connect = || loop {
+            assert!(!runner.is_finished(), "agent exited early");
+            assert!(
+                std::time::Instant::now() < deadline,
+                "agent connection deadline exceeded"
+            );
             match ipc::unix::connect(&endpoint) {
-                Ok(stream) => break stream,
-                Err(_) => {
-                    assert!(!runner.is_finished(), "agent exited early");
-                    std::thread::yield_now();
+                Ok(stream) => {
+                    stream
+                        .set_read_timeout(Some(Duration::from_millis(200)))
+                        .unwrap();
+                    stream
+                        .set_write_timeout(Some(Duration::from_millis(200)))
+                        .unwrap();
+                    break stream;
                 }
+                Err(_) => std::thread::yield_now(),
             }
         };
         // Clients that vanish immediately or mid-frame (these made macOS accept fail with EINVAL).
@@ -558,18 +581,35 @@ fn abandoned_connections_do_not_stop_the_agent() {
             }
             drop(stream);
         }
-        let mut client = Client::connect(
-            connect(),
-            ipc::VersionRange::default(),
-            ipc::DEFAULT_MAX_FRAME,
-        )
-        .unwrap();
-        assert!(matches!(
-            client.request(Request::Health).unwrap(),
-            Response::Health(_)
-        ));
+        loop {
+            let result = Client::connect(
+                connect(),
+                ipc::VersionRange::default(),
+                ipc::DEFAULT_MAX_FRAME,
+            )
+            .and_then(|mut client| client.request(Request::Health));
+            match result {
+                Ok(Response::Health(_)) => break,
+                Ok(other) => panic!("unexpected health response: {other:?}"),
+                // Saturation intentionally drops connections at the 16-worker limit.
+                // Wait for abandoned workers to release their permits, bounded by deadline.
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::ConnectionReset
+                            | io::ErrorKind::ConnectionAborted
+                            | io::ErrorKind::BrokenPipe
+                            | io::ErrorKind::UnexpectedEof
+                            | io::ErrorKind::WouldBlock
+                            | io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    std::thread::yield_now()
+                }
+                Err(error) => panic!("health request failed: {error}"),
+            }
+        }
         assert!(!runner.is_finished());
-        drop(client);
         shutdown.store(true, Ordering::Release);
         runner.join().unwrap().unwrap();
         // Tolerated errors are counted (possibly zero on kernels that never fail these accepts).
@@ -579,7 +619,7 @@ fn abandoned_connections_do_not_stop_the_agent() {
 #[test]
 fn changed_candidates_get_decisions_without_a_full_pass_and_trashed_ones_leave_no_row() {
     let fixture = Fixture::new();
-    let a = format!("{}/a.tmp", fixture.root);
+    let a = fixture.item("a.tmp");
     fs::write(&a, b"x").unwrap();
     let daemon = fixture.daemon();
     let service = &daemon.service;
@@ -602,7 +642,7 @@ fn changed_candidates_get_decisions_without_a_full_pass_and_trashed_ones_leave_n
         other => panic!("{other:?}"),
     };
     assert_eq!(total(service), 1);
-    fs::write(format!("{}/b.tmp", fixture.root), b"y").unwrap();
+    fs::write(fixture.item("b.tmp"), b"y").unwrap();
     acknowledged(service.handle(Request::RebuildIndex));
     settle(&daemon);
     assert_eq!(total(service), 2);
@@ -622,7 +662,7 @@ fn changed_candidates_get_decisions_without_a_full_pass_and_trashed_ones_leave_n
 #[test]
 fn polling_fallback_detects_new_files_before_the_full_rescan() {
     let fixture = Fixture::new();
-    fs::write(format!("{}/a.tmp", fixture.root), b"x").unwrap();
+    fs::write(fixture.item("a.tmp"), b"x").unwrap();
     let daemon = fixture.daemon();
     let service = &daemon.service;
     let revision = acknowledged(service.handle(Request::AddRoot(fixture.root())));
@@ -654,8 +694,74 @@ fn polling_fallback_detects_new_files_before_the_full_rescan() {
         .unwrap();
     fixture.clock.0.fetch_add(35, Ordering::SeqCst);
     settle(&daemon); // this poll observes the pinned mtime
-    fs::write(format!("{}/b.tmp", fixture.root), b"y").unwrap();
+    fs::write(fixture.item("b.tmp"), b"y").unwrap();
     fixture.clock.0.fetch_add(35, Ordering::SeqCst);
     settle(&daemon);
     assert_eq!(total(service), 2);
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_native_and_core_paths_share_root_authorization_across_restart() {
+    let fixture = Fixture::new();
+    fs::write(fixture.item("a.tmp"), b"x").unwrap();
+    let native_root = fixture.path.join("tree").to_str().unwrap().to_owned();
+    assert!(native_root.starts_with(r"\\?\"));
+    let daemon = fixture.daemon();
+    let service = &daemon.service;
+    let revision = acknowledged(service.handle(Request::AddRoot(codec::root(&native_root))));
+    let mut rule = fixture.rule();
+    rule.state = ipc::RuleState::Preview;
+    acknowledged(service.handle(Request::SaveRule {
+        rule: rule.clone(),
+        roots: None,
+        keep_paths: vec![],
+        unkeep_paths: vec![],
+        revision,
+    }));
+    settle(&daemon);
+    assert!(matches!(
+        service.handle(Request::ExplainItem {
+            path: fixture.root.clone()
+        }),
+        Response::ItemExplanation(_)
+    ));
+    acknowledged(service.handle(Request::SetItemOverrides {
+        changes: vec![ipc::OverrideChange {
+            path: fixture.root.clone(),
+            policy: Some(ipc::OverridePolicy::Keep {
+                protect_descendants: true,
+            }),
+        }],
+    }));
+    acknowledged(service.handle(Request::ClearItemOverride {
+        path: native_root.clone(),
+    }));
+    let policy = match service.handle(Request::LoadPolicy) {
+        Response::Policy(p) => p,
+        other => panic!("{other:?}"),
+    };
+    assert!(
+        policy.overrides.is_empty(),
+        "native spelling must clear the normalized override"
+    );
+    acknowledged(service.handle(Request::ReplacePolicy(policy)));
+    assert!(matches!(
+        service.handle(Request::PreviewRule(rule.clone())),
+        Response::RulePreview(p) if p.matches == 1
+    ));
+    let sibling = fixture.path.join("tree-sibling").join("a.tmp");
+    assert!(matches!(
+        service.handle(Request::ExplainItem { path: codec::path(&sibling).unwrap() }),
+        Response::Failure(e) if e.code == ipc::ErrorCode::InvalidRequest
+    ));
+    drop(daemon);
+    let daemon = fixture.daemon();
+    assert!(matches!(
+        daemon.service.handle(Request::PreviewRule(rule)),
+        Response::RulePreview(p) if p.matches == 1
+    ));
+    acknowledged(daemon.service.handle(Request::RemoveRoot {
+        id: codec::root(&native_root).id,
+    }));
 }

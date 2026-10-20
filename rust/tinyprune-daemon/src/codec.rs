@@ -18,10 +18,28 @@ pub fn uuid(value: &str) -> Result<Uuid, String> {
     Uuid::parse(value).ok_or_else(|| "Invalid UUID".into())
 }
 pub fn flavor() -> c::PathFlavor {
-    if cfg!(windows) {
-        c::PathFlavor::Windows
-    } else {
+    #[cfg(windows)]
+    {
+        tinyprune_windows::PATH_FLAVOR
+    }
+    #[cfg(not(windows))]
+    {
         c::PathFlavor::Posix
+    }
+}
+/// Convert native paths into the core's lexical representation without lossy Unicode conversion.
+pub fn path(value: &std::path::Path) -> Result<String, String> {
+    value
+        .to_str()
+        .map(|v| flavor().normalize(v))
+        .ok_or_else(|| "Path is not UTF-8; never converted lossily".into())
+}
+pub fn same_path(a: &str, b: &str) -> bool {
+    let flavor = flavor();
+    if flavor == c::PathFlavor::Posix {
+        flavor.equal(a, b)
+    } else {
+        flavor.equal(&flavor.normalize(a), &flavor.normalize(b))
     }
 }
 pub fn rule(value: &d::Rule) -> Result<c::LifetimeRule, String> {

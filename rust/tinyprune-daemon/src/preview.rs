@@ -49,7 +49,7 @@ impl ObservationStore for ReadOnly {
     }
     fn publish_projects(&mut self, root: &str, projects: Vec<Project>) -> Result<(), String> {
         self.projects.retain(|p| {
-            !codec::flavor().equal(&p.identity.path_hint, root)
+            !codec::same_path(&p.identity.path_hint, root)
                 && !codec::flavor().is_descendant(&p.identity.path_hint, root)
         });
         self.projects.extend(projects);
@@ -146,7 +146,7 @@ pub(crate) fn run(
             .projects
             .iter()
             .filter(|p| {
-                codec::flavor().equal(&candidate.identity.path_hint, &p.identity.path_hint)
+                codec::same_path(&candidate.identity.path_hint, &p.identity.path_hint)
                     || codec::flavor()
                         .is_descendant(&candidate.identity.path_hint, &p.identity.path_hint)
             })

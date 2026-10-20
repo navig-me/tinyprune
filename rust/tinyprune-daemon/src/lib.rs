@@ -310,7 +310,13 @@ impl Daemon {
             ipc::unix::Listener::bind(&self.options.paths.endpoint)?
         };
         #[cfg(windows)]
-        let mut listener = ipc::windows::Listener::bind(self.options.paths.endpoint.to_str().ok_or_else(|| io_error("pipe name is not UTF-8".into()))?)?;
+        let mut listener = ipc::windows::Listener::bind(
+            self.options
+                .paths
+                .endpoint
+                .to_str()
+                .ok_or_else(|| io_error("pipe name is not UTF-8".into()))?,
+        )?;
         listener.set_nonblocking(true)?;
         let server = ipc::Server::new(self.service.clone(), ipc::ServerOptions::default())?;
         let result = std::thread::scope(|scope| {
@@ -355,7 +361,7 @@ fn explain(
         .projects()?
         .iter()
         .filter(|p| {
-            codec::flavor().equal(&candidate.identity.path_hint, &p.identity.path_hint)
+            codec::same_path(&candidate.identity.path_hint, &p.identity.path_hint)
                 || codec::flavor()
                     .is_descendant(&candidate.identity.path_hint, &p.identity.path_hint)
         })

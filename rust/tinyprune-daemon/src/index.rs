@@ -102,7 +102,7 @@ impl Shared {
             }
             current.insert(k);
         }
-        let below = |hint: &str| flavor.equal(hint, path) || flavor.is_descendant(hint, path);
+        let below = |hint: &str| codec::same_path(hint, path) || flavor.is_descendant(hint, path);
         prints.retain(|k, (_, hint)| current.contains(k) || !below(hint));
         dirty.retain(|k, c| current.contains(k) || !below(&c.identity.path_hint));
         self.overflow.store(overflow, Ordering::Release);
