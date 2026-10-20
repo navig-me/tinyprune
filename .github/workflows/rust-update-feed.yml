@@ -1,0 +1,249 @@
+name: Rust update feed (unreleased)
+
+# ADR 0012. Produces, signs and verifies the update feed for the Rust runtime (Linux/Windows) from the
+# archives of a `rust-artifacts.yml` run. UNRELEASED: nothing here may be run until a Rust runtime
+# release is deliberately decided; no Linux or Windows support is claimed publicly.
+#
+# Trust boundaries:
+#   * Manual only (workflow_dispatch) and only from main. No pull_request or push trigger: signing never
+#     runs in PR builds, and there is no way to sign an artifact built from untrusted PR code.
+#   * `prepare` has NO environment and NO secret. It validates the chosen artifact run and builds the
+#     unsigned feed.
+#   * `sign` runs in the reviewer-protected `update-feed` Environment, the same one and the same
+#     SPARKLE_ED25519_PRIVATE_KEY / SPARKLE_ED25519_PUBLIC_KEY as publish-update-feed.yml (ADR 0009 key,
+#     reused by ADR 0012). The private key is read from the Environment secret into Sparkle's pinned
+#     `sign_update` on stdin only; never an argument, never echoed, never written to disk.
+#   * Review boundary: the feed is published by a reviewed PR (website/updates/rust/), like the Sparkle
+#     appcast. `verify_public` re-checks the deployed bytes after Pages deploys.
+
+on:
+  workflow_dispatch:
+    inputs:
+      artifacts_run_id:
+        description: Run id of a successful rust-artifacts.yml workflow_dispatch run on main (ubuntu and windows artifacts)
+        required: false
+        type: string
+      release_tag:
+        description: Existing, published GitHub release that will host the archives (created beforehand; assets are never overwritten)
+        required: true
+        type: string
+      verify_public:
+        description: Verify the deployed public feed AFTER the feed PR is merged and Pages deployed (no signing)
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-update-feed
+  cancel-in-progress: false
+
+env:
+  FEED_NAME: rust-update-feed.json
+  PAGES_DIR: website/updates/rust
+
+jobs:
+  prepare:
+    if: ${{ !inputs.verify_public && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      build: ${{ steps.meta.outputs.build }}
+      embedded_key: ${{ steps.meta.outputs.embedded_key }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust/rust-toolchain.toml)" --profile minimal
+
+      - name: Validate and download the chosen rust-artifacts run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.artifacts_run_id }}
+        run: |
+          set -euo pipefail
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]] || { echo 'artifacts_run_id is required and must be a number'; exit 1; }
+          info="$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json workflowName,conclusion,event,headBranch,headSha,number)"
+          echo "$info"
+          [[ "$(jq -r .workflowName <<<"$info")" == 'Rust dev artifacts' ]] || { echo 'not a Rust dev artifacts run'; exit 1; }
+          [[ "$(jq -r .conclusion <<<"$info")" == success ]] || { echo 'run did not succeed'; exit 1; }
+          # Pull-request runs build untrusted code and must never be promoted.
+          [[ "$(jq -r .event <<<"$info")" == workflow_dispatch && "$(jq -r .headBranch <<<"$info")" == main ]] || { echo 'only a workflow_dispatch run on main may be promoted'; exit 1; }
+          sha="$(jq -r .headSha <<<"$info")"
+          git merge-base --is-ancestor "$sha" origin/main || { echo 'run commit is not on main'; exit 1; }
+          echo "BUILD=$(jq -r .number <<<"$info")" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/in"
+          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/in" --pattern 'tinyprune-rust-dev-ubuntu-24.04' --pattern 'tinyprune-rust-dev-windows-2022'
+          ls -R "$RUNNER_TEMP/in"
+
+      - name: Verify checksums and collect archives
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/archives"
+          for dir in "$RUNNER_TEMP"/in/*/; do
+            (cd "$dir" && sha256sum -c SHA256SUMS)
+            cp "$dir"/*.tar.gz "$dir"/*.zip "$RUNNER_TEMP/archives/" 2>/dev/null || true
+          done
+          ls "$RUNNER_TEMP"/archives/*.tar.gz "$RUNNER_TEMP"/archives/*.zip
+
+      - name: Self-check the Linux build (identity, build number and embedded key)
+        id: meta
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          tar -xzf "$RUNNER_TEMP"/archives/*-linux-x86_64.tar.gz -C "$tmp"
+          pkg="$(echo "$tmp"/*/)"
+          version="$(sed -n 's/^tinyprune-agentd=//p' "$pkg/VERSION" | sed -n '1p')"
+          stamped_build="$(sed -n 's/^build=//p' "$pkg/VERSION" | sed -n '1p')"
+          [[ -n "$version" && "$stamped_build" == "$BUILD" ]] || { echo "archive VERSION stamp ($version, build $stamped_build) does not match run build $BUILD"; exit 1; }
+          json="$("$pkg/bin/tinyprune" update self-check --expect-version "$version" --expect-build "$BUILD" --json)"
+          echo "$json"
+          key="$(jq -r .publicKey <<<"$json")"
+          [[ -n "$key" && "$key" != null ]] || { echo 'binary has no embedded update public key (set the TINYPRUNE_UPDATE_PUBLIC_KEY repository variable and rebuild)'; exit 1; }
+          { echo "version=$version"; echo "build=$BUILD"; echo "embedded_key=$key"; } >> "$GITHUB_OUTPUT"
+
+      - name: Build the feed tool
+        working-directory: rust
+        run: cargo build --release --locked -p tinyprune-update --bin tinyprune-feed
+
+      - name: Generate the unsigned feed (monotonic builds enforced; no signing here)
+        env:
+          TAG: ${{ inputs.release_tag }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^[A-Za-z0-9._-]+$ ]] || { echo 'bad release tag'; exit 1; }
+          existing=()
+          [[ ! -f "$PAGES_DIR/$FEED_NAME" ]] || existing=(--existing "$PAGES_DIR/$FEED_NAME")
+          mkdir -p "$RUNNER_TEMP/feed"
+          rust/target/release/tinyprune-feed generate \
+            --out "$RUNNER_TEMP/feed/$FEED_NAME" "${existing[@]}" \
+            --version "$VERSION" --build "$BUILD" \
+            --base-url "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/" \
+            --notes-url "https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG" \
+            --published "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --artifact "linux-x86_64=$(ls "$RUNNER_TEMP"/archives/*-linux-x86_64.tar.gz)" \
+            --artifact "windows-x86_64=$(ls "$RUNNER_TEMP"/archives/*-windows-x86_64.zip)"
+          cat "$RUNNER_TEMP/feed/$FEED_NAME"
+          cp "$RUNNER_TEMP"/archives/* "$RUNNER_TEMP/feed/"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rust-feed-input
+          path: ${{ runner.temp }}/feed/
+          if-no-files-found: error
+          retention-days: 1
+
+  sign:
+    needs: prepare
+    runs-on: macos-15
+    timeout-minutes: 30
+    environment: update-feed
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust/rust-toolchain.toml)" --profile minimal
+      - name: Fetch the unsigned feed and archives from this run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/feed"
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name rust-feed-input --dir "$RUNNER_TEMP/feed"
+          ls -l "$RUNNER_TEMP/feed"
+      - name: Sign with the ADR 0009 key and verify with both implementations
+        env:
+          SPARKLE_ED25519_PRIVATE_KEY: ${{ secrets.SPARKLE_ED25519_PRIVATE_KEY }}
+          SPARKLE_ED25519_PUBLIC_KEY: ${{ vars.SPARKLE_ED25519_PUBLIC_KEY }}
+          EMBEDDED_KEY: ${{ needs.prepare.outputs.embedded_key }}
+        run: |
+          set -euo pipefail
+          [[ -n "$SPARKLE_ED25519_PRIVATE_KEY" && -n "$SPARKLE_ED25519_PUBLIC_KEY" ]] || { echo 'update-feed Environment needs SPARKLE_ED25519_PRIVATE_KEY and SPARKLE_ED25519_PUBLIC_KEY'; exit 1; }
+          # The binaries users run must trust exactly the key we sign with.
+          [[ "$EMBEDDED_KEY" == "$SPARKLE_ED25519_PUBLIC_KEY" ]] || { echo 'embedded public key differs from the Environment public key; refusing to sign'; exit 1; }
+          # Sparkle tools come from the same pinned, checksum-verified tarball as publish-update-feed.yml.
+          mkdir -p "$RUNNER_TEMP/rust-feed-tools"
+          bin="$(python3 -c "import sys,pathlib; sys.path.insert(0,'Scripts'); import distribution as d; print(d.tools(pathlib.Path(sys.argv[1])))" "$RUNNER_TEMP/rust-feed-tools")"
+          feed="$RUNNER_TEMP/feed/$FEED_NAME"
+          # Private key on stdin only.
+          printf '%s\n' "$SPARKLE_ED25519_PRIVATE_KEY" | "$bin/sign_update" --ed-key-file - -p "$feed" > "$feed.sig"
+          [[ -s "$feed.sig" ]] || { echo 'empty signature'; exit 1; }
+          printf '%s\n' "$SPARKLE_ED25519_PRIVATE_KEY" | "$bin/sign_update" --verify --ed-key-file - "$feed" "$(cat "$feed.sig")"
+          (cd rust && cargo build --release --locked -p tinyprune-update --bin tinyprune-feed)
+          rust/target/release/tinyprune-feed verify --feed "$feed" --sig "$feed.sig" --public-key "$SPARKLE_ED25519_PUBLIC_KEY" --artifact-dir "$RUNNER_TEMP/feed"
+          # A flipped byte must fail the Rust verifier too.
+          cp "$feed" "$RUNNER_TEMP/tampered.json"
+          printf 'X' | dd of="$RUNNER_TEMP/tampered.json" bs=1 seek=40 conv=notrunc 2>/dev/null
+          if rust/target/release/tinyprune-feed verify --feed "$RUNNER_TEMP/tampered.json" --sig "$feed.sig" --public-key "$SPARKLE_ED25519_PUBLIC_KEY" >/dev/null 2>&1; then
+            echo 'tampered feed verified: refusing to publish'; exit 1
+          fi
+      - name: Attach archives to the release (never overwrites) and open the feed review PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag }}
+          BUILD_NUMBER: ${{ needs.prepare.outputs.build }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+          # No --clobber: an existing asset of the same name aborts, so published artifacts stay immutable.
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" "$RUNNER_TEMP"/feed/*.tar.gz "$RUNNER_TEMP"/feed/*.zip
+          mkdir -p "$PAGES_DIR"
+          cp "$RUNNER_TEMP/feed/$FEED_NAME" "$RUNNER_TEMP/feed/$FEED_NAME.sig" "$PAGES_DIR/"
+          branch="rust-updates/b$BUILD_NUMBER"
+          git switch -c "$branch"
+          git config user.name 'tinyprune-release-bot'
+          git config user.email 'release-bot@users.noreply.github.com'
+          git add "$PAGES_DIR"
+          git commit -m "Publish Rust runtime update feed build $BUILD_NUMBER"
+          gh auth setup-git
+          git push origin "$branch"
+          gh pr create --base main --head "$branch" --title "Rust update feed build $BUILD_NUMBER" \
+            --body 'Review the signed feed. Merge to deploy Pages, then dispatch this workflow with verify_public=true. The Rust runtime is unreleased: do not announce Linux or Windows support.'
+
+  verify-public:
+    if: ${{ inputs.verify_public && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: update-feed
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust/rust-toolchain.toml)" --profile minimal
+      - name: Verify the deployed feed, signature and every published archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SPARKLE_ED25519_PUBLIC_KEY: ${{ vars.SPARKLE_ED25519_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          [[ -n "$SPARKLE_ED25519_PUBLIC_KEY" ]] || { echo 'update-feed Environment has no SPARKLE_ED25519_PUBLIC_KEY'; exit 1; }
+          deploy="$(gh run list --workflow deploy-pages.yml --branch main --commit "$(git rev-parse HEAD)" --status success --json databaseId --jq '.[0].databaseId // empty')"
+          [[ -n "$deploy" ]] || { echo 'Deploy this main commit successfully with deploy-pages.yml before public verification.'; exit 1; }
+          (cd rust && cargo build --release --locked -p tinyprune-update --bin tinyprune-feed)
+          dir="$RUNNER_TEMP/public"; mkdir -p "$dir"
+          curl --proto '=https' --tlsv1.2 -fsS "https://tinyprune.com/updates/rust/$FEED_NAME" -o "$dir/$FEED_NAME"
+          curl --proto '=https' --tlsv1.2 -fsS "https://tinyprune.com/updates/rust/$FEED_NAME.sig" -o "$dir/$FEED_NAME.sig"
+          # Newest release's archives, from the URLs the feed itself names.
+          jq -r '.releases | max_by(.build) | .artifacts[].url' "$dir/$FEED_NAME" | while read -r url; do
+            case "$url" in https://*) curl --proto '=https' --tlsv1.2 -fsSL "$url" -o "$dir/$(basename "$url")" ;; *) echo "non-HTTPS URL $url"; exit 1 ;; esac
+          done
+          rust/target/release/tinyprune-feed verify --feed "$dir/$FEED_NAME" --sig "$dir/$FEED_NAME.sig" --public-key "$SPARKLE_ED25519_PUBLIC_KEY" --artifact-dir "$dir"

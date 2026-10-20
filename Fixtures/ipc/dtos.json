@@ -803,6 +803,23 @@
       "operation": "exportConfig"
     },
     {
+      "operation": "quiesceForUpdate",
+      "arguments": {
+        "token": "update-token-0001",
+        "target": "0.2.0",
+        "leaseSeconds": 120
+      }
+    },
+    {
+      "operation": "releaseUpdateQuiesce",
+      "arguments": {
+        "token": "update-token-0001"
+      }
+    },
+    {
+      "operation": "loadUpdateStatus"
+    },
+    {
       "operation": "loadUpcoming",
       "arguments": {
         "ruleId": "rule",
@@ -1564,6 +1581,15 @@
       "type": "config",
       "data": {
         "text": "version: 1\n"
+      }
+    },
+    {
+      "type": "updateStatus",
+      "data": {
+        "phase": "draining",
+        "target": "0.2.0",
+        "trashInFlight": 1,
+        "leaseRemainingSeconds": 59.5
       }
     }
   ],

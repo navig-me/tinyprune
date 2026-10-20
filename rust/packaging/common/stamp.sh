@@ -21,10 +21,14 @@ dirty=""
 if [ -z "${GITHUB_SHA:-}" ] && [ -n "$(git -C "$root" status --porcelain -- rust 2>/dev/null || true)" ]; then
   dirty="-dirty"
 fi
+# Monotonic build number the updater orders by (ADR 0012); 0 = unstamped development build.
+build="${TINYPRUNE_BUILD:-0}"
+case "$build" in ''|*[!0-9]*) echo "TINYPRUNE_BUILD must be a number" >&2; exit 1 ;; esac
 
 cat <<EOF
 status=unreleased-development-artifact
 package_version=$daemon+g$short$dirty
+build=$build
 tinyprune-agentd=$daemon
 tinyprune=$cli
 tinyprune-ui=$ui

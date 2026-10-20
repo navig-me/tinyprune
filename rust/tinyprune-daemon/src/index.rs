@@ -1,6 +1,6 @@
-use crate::{codec, explain};
+use crate::{codec, explain_with, phases};
 use std::{
-    collections::{BTreeSet, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fmt::Write as _,
     hash::{DefaultHasher, Hasher},
     num::NonZeroUsize,
@@ -8,12 +8,12 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
-    time::Instant,
+    time::{Duration, Instant},
 };
 use tinyprune_agent::{AgentStore, IndexBatch, IndexSource};
 use tinyprune_core::{
     rule::{ExpiryBasis, FilesystemIdentity, RuleCandidate, RuleState},
-    scheduler::{Observation, ObservationStore, Project},
+    scheduler::{self, Observation, ObservationStore, Project},
     trash::{Clock, PolicySnapshot, PolicyStore, TrashRequest},
     uuid::Uuid,
 };
@@ -57,11 +57,13 @@ pub(crate) struct Shared {
     /// Policy revision each root's decisions were last evaluated at.
     evaluated: Mutex<HashMap<String, u64>>,
     /// Last published fingerprint (and path hint) per candidate identity.
-    prints: Mutex<HashMap<Key, (u64, String)>>,
+    prints: Mutex<Prints>,
     /// Candidates whose published metadata changed since their decision was last written.
     dirty: Mutex<HashMap<Key, RuleCandidate>>,
     /// More than `DIRTY_CAP` candidates changed: queue a full pass at the next scheduling publish.
     overflow: AtomicBool,
+    /// When the latest scan was published; `replace_deadlines` reports the evaluation time since then.
+    published_at: Mutex<Option<Instant>>,
 }
 
 /// Hash of the complete candidate metadata (path hint, dates, kind, flags) without allocating.
@@ -78,33 +80,96 @@ fn fingerprint(candidate: &RuleCandidate) -> u64 {
     hasher.0.finish()
 }
 
+/// Last published fingerprint per candidate identity, plus the same items ordered by path key so that a
+/// subtree scan only visits the entries below it.
+#[derive(Default)]
+struct Prints {
+    by_key: HashMap<Key, (u64, String)>,
+    by_path: BTreeMap<String, Key>,
+}
+impl Prints {
+    fn forget(&mut self, key: &Key) {
+        if let Some((_, path)) = self.by_key.remove(key) {
+            self.by_path.remove(&path);
+        }
+    }
+}
+
 impl Shared {
+    /// Notes `candidate` as changed when its published metadata differs from the last published print.
+    fn note(
+        prints: &mut Prints,
+        dirty: &mut HashMap<Key, RuleCandidate>,
+        overflow: &mut bool,
+        candidate: &RuleCandidate,
+    ) -> Key {
+        let k = key(&candidate.identity);
+        let print = fingerprint(candidate);
+        if prints.by_key.get(&k).is_none_or(|(old, _)| *old != print) {
+            prints.forget(&k);
+            let path = scheduler::path_key(codec::flavor(), &candidate.identity.path_hint);
+            // An identity that held this path before has been replaced by this one.
+            if let Some(displaced) = prints.by_path.insert(path.clone(), k.clone()) {
+                if displaced != k {
+                    prints.by_key.remove(&displaced);
+                    dirty.remove(&displaced);
+                }
+            }
+            prints.by_key.insert(k.clone(), (print, path));
+            if !*overflow {
+                if dirty.len() >= DIRTY_CAP {
+                    dirty.clear();
+                    *overflow = true;
+                } else {
+                    dirty.insert(k.clone(), candidate.clone());
+                }
+            }
+        }
+        k
+    }
     /// Records a completed, already-published subtree scan and notes which candidates changed.
     fn record(&self, path: &str, candidates: &[RuleCandidate]) -> Result<(), String> {
-        let flavor = codec::flavor();
         let mut prints = self.prints.lock().map_err(|_| "Fingerprints poisoned")?;
         let mut dirty = self.dirty.lock().map_err(|_| "Dirty set poisoned")?;
         let mut overflow = self.overflow.load(Ordering::Acquire);
         let mut current: HashSet<Key> = HashSet::with_capacity(candidates.len());
         for candidate in candidates {
-            let k = key(&candidate.identity);
-            let print = fingerprint(candidate);
-            if prints.get(&k).is_none_or(|(old, _)| *old != print) {
-                prints.insert(k.clone(), (print, candidate.identity.path_hint.clone()));
-                if !overflow {
-                    if dirty.len() >= DIRTY_CAP {
-                        dirty.clear();
-                        overflow = true;
-                    } else {
-                        dirty.insert(k.clone(), candidate.clone());
-                    }
-                }
-            }
-            current.insert(k);
+            current.insert(Self::note(
+                &mut prints,
+                &mut dirty,
+                &mut overflow,
+                candidate,
+            ));
         }
-        let below = |hint: &str| codec::same_path(hint, path) || flavor.is_descendant(hint, path);
-        prints.retain(|k, (_, hint)| current.contains(k) || !below(hint));
-        dirty.retain(|k, c| current.contains(k) || !below(&c.identity.path_hint));
+        // Everything previously published below `path` that this scan no longer contains is gone.
+        let root = scheduler::path_key(codec::flavor(), path);
+        let (low, high) = scheduler::descendant_bounds(&root);
+        let gone: Vec<Key> = prints
+            .by_path
+            .range(low..high)
+            .map(|(_, k)| k)
+            .chain(prints.by_path.get(&root))
+            .filter(|k| !current.contains(*k))
+            .cloned()
+            .collect();
+        for k in &gone {
+            prints.forget(k);
+            dirty.remove(k);
+        }
+        self.overflow.store(overflow, Ordering::Release);
+        if overflow || !dirty.is_empty() {
+            self.pace.decisions.store(true, Ordering::Release);
+        }
+        Ok(())
+    }
+    /// Records single items rewritten without a subtree enumeration (the parents of event paths).
+    fn record_upserts(&self, candidates: &[RuleCandidate]) -> Result<(), String> {
+        let mut prints = self.prints.lock().map_err(|_| "Fingerprints poisoned")?;
+        let mut dirty = self.dirty.lock().map_err(|_| "Dirty set poisoned")?;
+        let mut overflow = self.overflow.load(Ordering::Acquire);
+        for candidate in candidates {
+            Self::note(&mut prints, &mut dirty, &mut overflow, candidate);
+        }
         self.overflow.store(overflow, Ordering::Release);
         if overflow || !dirty.is_empty() {
             self.pace.decisions.store(true, Ordering::Release);
@@ -121,6 +186,8 @@ pub(crate) struct DurableIndex {
     clock: Arc<dyn Clock + Send + Sync>,
     shared: Arc<Shared>,
     started: Option<Instant>,
+    /// Time spent inside the enumerator (excluding publication) during the current scan.
+    enumerating: Duration,
 }
 impl DurableIndex {
     pub fn new(store: Store, clock: Arc<dyn Clock + Send + Sync>, shared: Arc<Shared>) -> Self {
@@ -132,6 +199,7 @@ impl DurableIndex {
             clock,
             shared,
             started: None,
+            enumerating: Duration::ZERO,
         }
     }
 }
@@ -144,11 +212,15 @@ impl IndexSource for DurableIndex {
         self.path = root.into();
         self.candidates.clear();
         self.started = Some(Instant::now());
+        self.enumerating = Duration::ZERO;
         self.shared.pace.scanning.store(true, Ordering::Release);
         Ok(())
     }
     fn next_batch(&mut self, limit: NonZeroUsize) -> Result<IndexBatch, String> {
-        let batch = match self.source.next_batch(limit) {
+        let call = Instant::now();
+        let outcome = self.source.next_batch(limit);
+        self.enumerating += call.elapsed();
+        let batch = match outcome {
             Ok(batch) => batch,
             Err(error) => {
                 self.shared.pace.scanning.store(false, Ordering::Release);
@@ -159,10 +231,18 @@ impl IndexSource for DurableIndex {
         if batch.complete {
             let now = self.clock.now();
             // Unchanged candidates are not rewritten by the store and not re-evaluated here.
-            let published = self
+            let publish_started = Instant::now();
+            let stored = self
                 .store
-                .publish_candidate_subtree(&self.path, &self.candidates, now)
-                .and_then(|_| self.shared.record(&self.path, &self.candidates));
+                .publish_candidate_subtree(&self.path, &self.candidates, now);
+            phases::since("publish", publish_started, self.candidates.len());
+            let record_started = Instant::now();
+            let published = stored.and_then(|_| self.shared.record(&self.path, &self.candidates));
+            phases::since("record", record_started, self.candidates.len());
+            phases::record("enumerate", self.enumerating, self.candidates.len());
+            if let Ok(mut at) = self.shared.published_at.lock() {
+                *at = Some(Instant::now());
+            }
             let pace = &self.shared.pace;
             if let Some(started) = self.started.take() {
                 // Real elapsed time: it paces the polling fallback against actual scan cost.
@@ -176,6 +256,23 @@ impl IndexSource for DurableIndex {
             published?;
         }
         Ok(batch)
+    }
+    fn publish_delta(
+        &mut self,
+        removed: &[String],
+        refreshed: &[RuleCandidate],
+    ) -> Result<(), String> {
+        let now = self.clock.now();
+        for path in removed {
+            // An empty subtree deletes its rows and, with them, their fingerprints.
+            self.store.publish_candidate_subtree(path, &[], now)?;
+            self.shared.record(path, &[])?;
+        }
+        if !refreshed.is_empty() {
+            self.store.upsert_candidates(refreshed, now)?;
+            self.shared.record_upserts(refreshed)?;
+        }
+        Ok(())
     }
 }
 
@@ -192,6 +289,8 @@ struct Job {
     revision: u64,
     policy: PolicySnapshot,
     store: Store,
+    /// Containment index over the project snapshot taken when the job was loaded (Windows flavor).
+    projects: Option<crate::ProjectIndex>,
 }
 const PAGE: usize = 512;
 const PAGES_PER_STEP: usize = 8;
@@ -217,19 +316,28 @@ impl Decisions {
         let policy = store.load_snapshot()?;
         let (revision, _, _) = store.runtime_state()?;
         store.refresh_projects()?;
+        let projects = crate::ProjectIndex::new(store.projects()?);
         Ok(Job {
             root,
             after: None,
             revision,
             policy,
             store,
+            projects,
         })
     }
     /// Evaluates the candidates and writes changed decisions in one store transaction.
     fn write(job: &Job, candidates: &[&RuleCandidate], now: f64) -> Result<(), String> {
+        let explain_started = Instant::now();
         let mut values = Vec::with_capacity(candidates.len());
         for candidate in candidates {
-            let e = explain(candidate, &job.policy, &job.store, now)?;
+            let e = explain_with(
+                candidate,
+                &job.policy,
+                &job.store,
+                now,
+                job.projects.as_ref(),
+            )?;
             values.push((
                 e.scheduled_at,
                 e.rule.as_ref().map(|r| r.id.clone()),
@@ -237,6 +345,7 @@ impl Decisions {
                 serde_json::to_value(&e).map_err(|e| e.to_string())?,
             ));
         }
+        phases::since("explain", explain_started, candidates.len());
         let rows: Vec<DecisionRow<'_>> = candidates
             .iter()
             .zip(&values)
@@ -249,7 +358,9 @@ impl Decisions {
             })
             .collect();
         // Unchanged decisions are neither rewritten nor re-audited by the store.
+        let put_started = Instant::now();
         job.store.put_decisions(now, &rows)?;
+        phases::since("decisions_store", put_started, rows.len());
         Ok(())
     }
     fn advance_inner(&mut self, shared: &Shared, reader: &Store, now: f64) -> Result<bool, String> {
@@ -388,14 +499,10 @@ impl ObservationStore for DurableStore {
         self.inner.remove_below(path)
     }
 }
-impl AgentStore for DurableStore {
-    fn load_deadlines(&mut self) -> Result<Vec<TrashRequest>, String> {
-        self.inner.load_deadlines()
-    }
-    fn replace_deadlines(&mut self, root: &str, deadlines: &[TrashRequest]) -> Result<(), String> {
-        self.inner.replace_deadlines(root, deadlines)?;
-        // A full pass is needed only when the policy moved on since this root was last evaluated or
-        // too many candidates changed to track; otherwise the dirty set is evaluated incrementally.
+impl DurableStore {
+    /// A full decision pass is needed only when the policy moved on since this root was last evaluated or
+    /// too many candidates changed to track; otherwise the dirty set is evaluated incrementally.
+    fn queue_decisions(&self, root: &str) -> Result<(), String> {
         let (revision, _, _) = self.inner.runtime_state()?;
         let stale = self
             .shared
@@ -413,6 +520,38 @@ impl AgentStore for DurableStore {
             self.shared.pace.decisions.store(true, Ordering::Release);
         }
         Ok(())
+    }
+}
+impl AgentStore for DurableStore {
+    fn load_deadlines(&mut self) -> Result<Vec<TrashRequest>, String> {
+        self.inner.load_deadlines()
+    }
+    fn replace_deadlines(&mut self, root: &str, deadlines: &[TrashRequest]) -> Result<(), String> {
+        // Since the snapshot was published: agent snapshot merge, hydration and scheduler evaluation.
+        if let Some(published) = self
+            .shared
+            .published_at
+            .lock()
+            .ok()
+            .and_then(|mut at| at.take())
+        {
+            phases::since("evaluate", published, deadlines.len());
+        }
+        let started = Instant::now();
+        self.inner.replace_deadlines(root, deadlines)?;
+        phases::since("deadlines", started, deadlines.len());
+        self.queue_decisions(root)
+    }
+    fn update_deadlines(
+        &mut self,
+        root: &str,
+        evaluated: &[FilesystemIdentity],
+        deadlines: &[TrashRequest],
+    ) -> Result<(), String> {
+        let started = Instant::now();
+        self.inner.update_deadlines(root, evaluated, deadlines)?;
+        phases::since("deadlines_delta", started, evaluated.len());
+        self.queue_decisions(root)
     }
     fn remove_deadline(&mut self, request: &TrashRequest) -> Result<(), String> {
         self.inner.remove_deadline(request)

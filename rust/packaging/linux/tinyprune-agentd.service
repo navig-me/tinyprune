@@ -13,6 +13,9 @@
 # See rust/packaging/README.md, "Sandboxing".
 [Unit]
 Description=TinyPrune agent (development build, unreleased)
+# Rate limits belong to [Unit], not [Service].
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -23,9 +26,6 @@ KillSignal=SIGINT
 TimeoutStopSec=20
 Restart=on-failure
 RestartSec=5
-# Back off if it keeps crashing instead of looping forever.
-StartLimitIntervalSec=300
-StartLimitBurst=5
 
 UMask=0077
 NoNewPrivileges=yes

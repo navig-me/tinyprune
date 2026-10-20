@@ -1,14 +1,23 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 use tinyprune_ipc::{Client, Request, Response, VersionRange, DEFAULT_MAX_FRAME};
 
+fn unreachable(endpoint: &std::path::Path, error: &std::io::Error) -> String {
+    use std::io::ErrorKind::{ConnectionRefused, NotFound, PermissionDenied};
+    let reason = match error.kind() {
+        NotFound | ConnectionRefused => "The TinyPrune agent is not running or is not listening there.",
+        PermissionDenied => "This account may not use that agent endpoint.",
+        _ => "The agent endpoint could not be opened.",
+    };
+    format!("{reason} Endpoint: {} ({error})", endpoint.display())
+}
+
 fn request_agent(request: Request) -> Result<Response, String> {
     let endpoint = tinyprune_ipc::default_endpoint().map_err(|e| e.to_string())?;
     #[cfg(unix)]
-    let stream = tinyprune_ipc::unix::connect(endpoint).map_err(|e| e.to_string())?;
+    let stream = tinyprune_ipc::unix::connect(&endpoint).map_err(|e| unreachable(&endpoint, &e))?;
     #[cfg(windows)]
-    let stream =
-        tinyprune_ipc::windows::connect(endpoint.to_str().ok_or("Endpoint is not valid Unicode")?)
-            .map_err(|e| e.to_string())?;
+    let stream = tinyprune_ipc::windows::connect(endpoint.to_str().ok_or("Endpoint is not valid Unicode")?)
+        .map_err(|e| unreachable(&endpoint, &e))?;
     let mut client = Client::connect(stream, VersionRange::default(), DEFAULT_MAX_FRAME)
         .map_err(|e| e.to_string())?;
     client.request(request).map_err(|e| {

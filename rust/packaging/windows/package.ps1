@@ -44,11 +44,15 @@ New-Item -ItemType Directory -Force -Path (Join-Path $pkg 'bin') | Out-Null
 try {
   Copy-Item (Join-Path $BinDir 'tinyprune.exe'), (Join-Path $BinDir 'tinyprune-agentd.exe') (Join-Path $pkg 'bin')
   if ($UiBin) { Copy-Item $UiBin (Join-Path $pkg 'bin\tinyprune-ui.exe') }
-  Copy-Item (Join-Path $here 'install.ps1'), (Join-Path $here 'uninstall.ps1') $pkg
+  # The launcher resolves `current` for the updatable layout (install-managed.ps1); optional for install.ps1.
+  $launcher = Join-Path $BinDir 'tinyprune-launcher.exe'
+  if (Test-Path -LiteralPath $launcher) { Copy-Item $launcher (Join-Path $pkg 'bin\tinyprune-launcher.exe') }
+  Copy-Item (Join-Path $here 'install.ps1'), (Join-Path $here 'uninstall.ps1'), (Join-Path $here 'install-managed.ps1'), (Join-Path $here 'uninstall-managed.ps1') $pkg
   Copy-Item (Join-Path $root 'LICENSE') $pkg
   @(
     'status=unreleased-development-artifact',
     "package_version=$version",
+    "build=$(if ($env:TINYPRUNE_BUILD -match '^[0-9]+$') { $env:TINYPRUNE_BUILD } else { '0' })",
     "tinyprune-agentd=$daemon",
     "tinyprune=$cli",
     "tinyprune-ui=$uiVer",
@@ -60,6 +64,7 @@ try {
     'platform; the macOS app is the only released TinyPrune.',
     'Install (no elevation):  powershell -ExecutionPolicy Bypass -File install.ps1 [-Start] [-AddToPath]',
     'Remove:                  powershell -ExecutionPolicy Bypass -File uninstall.ps1 [-Purge]',
+    'Updatable layout:        install-managed.ps1 / uninstall-managed.ps1 (needs bin\tinyprune-launcher.exe)',
     'Check:                   tinyprune doctor'
   ) | Set-Content -Path (Join-Path $pkg 'README.txt') -Encoding ascii
 

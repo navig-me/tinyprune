@@ -1162,3 +1162,194 @@ fn decisions_without_a_candidate_are_skipped_and_never_orphaned() {
         )
         .is_err());
 }
+#[test]
+fn update_deadlines_touches_only_the_named_identities() {
+    let mut s = Store::memory().unwrap();
+    s.replace_roots(&["/root".into()], 0.0).unwrap();
+    s.replace_deadlines(
+        "/root",
+        &[request(1, 10.0), request(2, 20.0), request(3, 30.0)],
+    )
+    .unwrap();
+    let audits = s.audit_records().unwrap().len();
+    // 1 moves, 2 loses its deadline, 3 is not evaluated and must survive untouched.
+    s.update_deadlines(
+        "/root",
+        &[
+            request(1, 0.0).candidate_identity,
+            request(2, 0.0).candidate_identity,
+        ],
+        &[request(1, 15.0)],
+    )
+    .unwrap();
+    let rows: Vec<(u8, f64)> = s
+        .load_deadlines()
+        .unwrap()
+        .iter()
+        .map(|r| (r.candidate_identity.resource[0], r.scheduled_at))
+        .collect();
+    assert_eq!(rows, [(1, 15.0), (3, 30.0)]);
+    assert_eq!(s.audit_records().unwrap().len(), audits + 1);
+    // Identical update: no row rewrite and no audit.
+    let writes = changes(&s);
+    s.update_deadlines(
+        "/root",
+        &[request(1, 0.0).candidate_identity],
+        &[request(1, 15.0)],
+    )
+    .unwrap();
+    assert_eq!(
+        (changes(&s), s.audit_records().unwrap().len()),
+        (writes, audits + 1)
+    );
+    // A non-finite time fails the whole transaction.
+    assert!(s
+        .update_deadlines(
+            "/root",
+            &[request(3, 0.0).candidate_identity],
+            &[request(2, f64::NAN)]
+        )
+        .is_err());
+    assert_eq!(s.load_deadlines().unwrap().len(), 2);
+}
+#[test]
+fn upsert_candidates_changes_only_named_rows_and_retires_nothing() {
+    let s = Store::memory().unwrap();
+    s.replace_roots(&["/root".into()], 0.0).unwrap();
+    s.publish_candidate_subtree("/root", &[candidate(1), candidate(2)], 1.0)
+        .unwrap();
+    let audits = s.audit_records().unwrap().len();
+    // 1 is unchanged, 3 is new, 2 is not named and must stay.
+    assert_eq!(
+        s.upsert_candidates(&[candidate(1), candidate(3)], 2.0)
+            .unwrap(),
+        1
+    );
+    assert_eq!(s.candidate_count().unwrap(), 3);
+    assert_eq!(s.audit_records().unwrap().len(), audits + 1);
+    let (writes, audits) = (changes(&s), s.audit_records().unwrap().len());
+    assert_eq!(
+        s.upsert_candidates(&[candidate(1), candidate(3)], 3.0)
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        (changes(&s), s.audit_records().unwrap().len()),
+        (writes, audits)
+    );
+    let mut outside = candidate(4);
+    outside.identity.path_hint = "/elsewhere/4".into();
+    assert!(s.upsert_candidates(&[outside], 4.0).is_err());
+    assert_eq!(s.candidate_count().unwrap(), 3);
+}
+fn windows_candidate(n: u32, path: &str) -> RuleCandidate {
+    let mut identity = bulk_identity(n);
+    identity.path_hint = path.into();
+    RuleCandidate::new(
+        identity,
+        n.to_string(),
+        ItemKind::File,
+        CandidateTimestamps::default(),
+    )
+}
+#[test]
+fn windows_flavor_containment_handles_varied_spellings_in_publication_and_removal() {
+    let mut s = Store::memory_with_flavor(PathFlavor::Windows).unwrap();
+    s.replace_roots(&[r"C:\Root".into(), r"\\?\D:\Data\X".into()], 0.0)
+        .unwrap();
+    let first = [
+        windows_candidate(1, r"C:\Root\a"),
+        windows_candidate(2, "c:/ROOT/sub/b"),
+        windows_candidate(3, r"\\?\c:\root\.\sub\..\c"),
+    ];
+    // A different spelling of the same subtree publishes and later retires the same rows.
+    assert_eq!(
+        s.publish_candidate_subtree(r"\\?\c:\root", &first, 1.0)
+            .unwrap(),
+        3
+    );
+    s.publish_candidate_subtree("d:/data/x", &[windows_candidate(4, r"D:\DATA\x\file")], 2.0)
+        .unwrap();
+    assert_eq!(s.candidate_count().unwrap(), 4);
+    assert_eq!(
+        s.candidate_page(r"C:\ROOT", None, NonZeroUsize::new(10).unwrap())
+            .unwrap()
+            .len(),
+        3
+    );
+    assert_eq!(
+        s.candidate_page(r"D:\Data\X", None, NonZeroUsize::new(10).unwrap())
+            .unwrap()
+            .len(),
+        1
+    );
+    // Only the second spelling remains in the next scan of the subtree: the other two vanished.
+    assert_eq!(
+        s.publish_candidate_subtree(r"C:\Root", &first[1..2], 3.0)
+            .unwrap(),
+        2
+    );
+    assert_eq!(s.candidate_count().unwrap(), 2);
+    // A sibling that merely shares a prefix is outside the subtree and outside every root.
+    assert!(s
+        .publish_candidate_subtree(r"C:\Root", &[windows_candidate(5, r"C:\Root-other\x")], 4.0)
+        .is_err());
+    s.remove_below(r"c:\root\SUB").unwrap();
+    assert_eq!(s.candidate_count().unwrap(), 1);
+    s.remove_below(r"C:\ROOT").unwrap();
+    assert_eq!(s.candidate_count().unwrap(), 1, "the D: root is untouched");
+}
+#[test]
+fn windows_flavor_publication_grows_near_linearly() {
+    fn run(n: u32) -> f64 {
+        let s = Store::memory_with_flavor(PathFlavor::Windows).unwrap();
+        s.replace_roots(&[r"C:\Root".into()], 0.0).unwrap();
+        let items: Vec<_> = (0..n)
+            .map(|i| windows_candidate(i, &format!(r"C:\Root\Dir{:03}\File{i:06}.dat", i / 100)))
+            .collect();
+        let start = std::time::Instant::now();
+        s.publish_candidate_subtree(r"\\?\C:\Root", &items, 1.0)
+            .unwrap();
+        // Republish identical rows (full containment sweep over every stored row), then a vanishing subtree.
+        s.publish_candidate_subtree(r"c:/root", &items, 2.0)
+            .unwrap();
+        s.publish_candidate_subtree(r"C:\Root\Dir000", &[], 3.0)
+            .unwrap();
+        start.elapsed().as_secs_f64() * 1000.0
+    }
+    let (small, large) = (
+        (0..2).map(|_| run(4_000)).fold(f64::MAX, f64::min),
+        (0..2).map(|_| run(8_000)).fold(f64::MAX, f64::min),
+    );
+    assert!(
+        large < small * 3.0 + 100.0,
+        "4k rows {small:.0} ms, 8k rows {large:.0} ms"
+    );
+}
+#[test]
+fn subtree_queries_use_the_path_key_index_and_rekey_across_flavors() {
+    let path = Temp::new();
+    {
+        let s = Store::open_with_flavor(&path.0, PathFlavor::Windows).unwrap();
+        s.replace_roots(&[r"C:\Root".into()], 0.0).unwrap();
+        s.publish_candidate_subtree(r"C:\Root", &[windows_candidate(1, r"C:\Root\a")], 1.0)
+            .unwrap();
+        let plan: String = s
+            .lock()
+            .unwrap()
+            .prepare("EXPLAIN QUERY PLAN SELECT identity_key,path_hint FROM candidates WHERE path_key=?1 OR (path_key>=?2 AND path_key<?3)")
+            .unwrap()
+            .query_map(["a", "b", "c"], |r| r.get::<_, String>(3))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(plan.contains("candidate_key"), "{plan}");
+    }
+    // The other flavor re-keys every row on open; reopening as Windows re-keys back.
+    drop(Store::open(&path.0).unwrap());
+    let mut s = Store::open_with_flavor(&path.0, PathFlavor::Windows).unwrap();
+    assert_eq!(s.candidate_count().unwrap(), 1);
+    s.remove_below(r"c:/ROOT").unwrap();
+    assert_eq!(s.candidate_count().unwrap(), 0);
+}

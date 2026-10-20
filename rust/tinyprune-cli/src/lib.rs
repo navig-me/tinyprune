@@ -8,7 +8,7 @@ use std::{
 };
 use tinyprune_ipc::*;
 
-pub const USAGE: &str = "usage: tinyprune [command] [--json]\n  status | rules [list] | upcoming | activity | doctor\n  rules add <rule.json|-> | rules edit <id> <rule.json|->\n  rules remove|activate|preview <id>\n  keep <path> [--descendants] | unkeep <path> | inherit <path>\n  expire <path> <7d|12h|30m|2w|tonight|tomorrow>\n  explain <path> | why <path>\n  pause [1h|today|tomorrow] | resume\n  roots [list|add <id> <path> [name]|remove <id>]\n  config export | config import|apply <file|-> [--active]\n  delete-rule <id> | rebuild-index\n  --socket <path> overrides TINYPRUNE_SOCKET and the default local endpoint";
+pub const USAGE: &str = "usage: tinyprune [command] [--json]\n  status | rules [list] | upcoming | activity | doctor\n  rules add <rule.json|-> | rules edit <id> <rule.json|->\n  rules remove|activate|preview <id>\n  keep <path> [--descendants] | unkeep <path> | inherit <path>\n  expire <path> <7d|12h|30m|2w|tonight|tomorrow>\n  explain <path> | why <path>\n  pause [1h|today|tomorrow] | resume\n  roots [list|add <id> <path> [name]|remove <id>]\n  config export | config import|apply <file|-> [--active]\n  delete-rule <id> | rebuild-index\n  update status|check|install|settings  (signed updates; install needs --confirm <token>)\n  --socket <path> overrides TINYPRUNE_SOCKET and the default local endpoint";
 
 #[derive(Debug)]
 struct Failure {
@@ -620,6 +620,11 @@ pub fn run(
     connect: impl FnOnce(Option<&str>) -> io::Result<Box<dyn Connection>>,
 ) -> i32 {
     let json_mode = args.iter().any(|a| a == "--json");
+    // `update` is the only command that uses the network or replaces binaries, so it lives in
+    // tinyprune-update. Its only use of the agent is the Trash/update interlock over this same IPC (ADR 0012).
+    if args.first().map(String::as_str) == Some("update") {
+        return tinyprune_update::cli::run(&args[1..], &connect_local, stdout, stderr);
+    }
     let result = (|| {
         let mut args: Vec<String> = args
             .iter()

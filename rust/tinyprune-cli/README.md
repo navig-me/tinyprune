@@ -40,6 +40,10 @@ Expiry values accept positive integers with `m`, `h`, `d`, or `w`, plus `tonight
 
 The Swift CLI's local `config validate` and config diff/plan `config preview` have no Rust IPC operations and are intentionally rejected, not reimplemented using a second policy/config evaluator. Rust import is the agent's transaction, with no automatic conflict retry or transport retry. Rule save/import carry the loaded revision. A disconnected request may already have applied: inspect current state before retrying.
 
+## `update` (ADR 0012)
+
+`tinyprune update status|check|install|settings` (`--json`) and the internal `update self-check` are implemented by [`tinyprune-update`](../tinyprune-update/README.md) and bypass the IPC command table: they use the network (feed) and the filesystem, and use the agent only for the Trash/update interlock over the same endpoint (`--socket` applies). `check --auto` honors `checkForNewVersions`; installation requires `install --confirm <token>`. Exit codes for `update` follow the table below plus 78 `disabled` (no key, development build, macOS, or a package-manager/hand-copied install; unlike the config-import meaning Swift gives 78). The loopback/IPC test connectors do not cover `update`.
+
 ## Output and exits
 
 JSON documents carry `schemaVersion: 1`; rules, upcoming, activity, explain, export and mutations preserve Swift's top-level shapes where the wire DTOs permit. Rust DTO field spellings/Unix dates follow the IPC README, not Swift Codable. Human output keeps Swift's status/empty-list/mutation wording where applicable and expands every decision into all explanation fields (including null context, full rule and identity). Preview counts explicitly warn when truncated.

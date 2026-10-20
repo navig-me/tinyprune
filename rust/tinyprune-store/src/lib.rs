@@ -11,6 +11,7 @@ use std::{
 use tinyprune_agent::{AgentAudit, AgentStore};
 use tinyprune_core::{
     config, config_plan,
+    path::WindowsKey,
     resolve::*,
     rule::*,
     scheduler::{Observation, ObservationStore, Project},
@@ -30,7 +31,13 @@ fn finite(at: f64) -> Result<()> {
     }
 }
 fn hex(resource: &[u8]) -> String {
-    resource.iter().map(|b| format!("{b:02x}")).collect()
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut text = String::with_capacity(resource.len() * 2);
+    for byte in resource {
+        text.push(DIGITS[usize::from(byte >> 4)] as char);
+        text.push(DIGITS[usize::from(byte & 15)] as char);
+    }
+    text
 }
 fn key(i: &FilesystemIdentity) -> String {
     format!("{}:{}", i.volume, hex(&i.resource))
@@ -38,11 +45,51 @@ fn key(i: &FilesystemIdentity) -> String {
 fn same_path(a: &str, b: &str, flavor: PathFlavor) -> bool {
     match flavor {
         PathFlavor::Posix => flavor.equal(a, b),
-        PathFlavor::Windows => flavor.equal(&flavor.normalize(a), &flavor.normalize(b)),
+        PathFlavor::Windows => WindowsKey::new(a) == WindowsKey::new(b),
     }
 }
 fn within(path: &str, root: &str, flavor: PathFlavor) -> bool {
-    same_path(path, root, flavor) || flavor.is_descendant(path, root)
+    match flavor {
+        PathFlavor::Posix => same_path(path, root, flavor) || flavor.is_descendant(path, root),
+        PathFlavor::Windows => WindowsKey::new(path).within(&WindowsKey::new(root)),
+    }
+}
+/// Containment against one fixed root or subtree. The Windows key of the root is computed once, and
+/// each tested path is normalized once, instead of normalizing both operands for every comparison.
+struct Contains<'a> {
+    root: &'a str,
+    flavor: PathFlavor,
+    root_key: Option<WindowsKey>,
+}
+impl<'a> Contains<'a> {
+    fn new(root: &'a str, flavor: PathFlavor) -> Self {
+        let root_key = (flavor == PathFlavor::Windows).then(|| WindowsKey::new(root));
+        Self {
+            root,
+            flavor,
+            root_key,
+        }
+    }
+    fn path(&self, path: &str) -> bool {
+        match &self.root_key {
+            Some(root) => WindowsKey::new(path).within(root),
+            None => within(path, self.root, self.flavor),
+        }
+    }
+    /// Like `path`, reusing the already computed Windows key of the tested path when there is one.
+    fn holds(&self, path: &str, key: Option<&WindowsKey>) -> bool {
+        match (&self.root_key, key) {
+            (Some(root), Some(key)) => key.within(root),
+            _ => self.path(path),
+        }
+    }
+    /// Strictly below the root (`PathFlavor::is_descendant`).
+    fn strictly_below(&self, path: &str) -> bool {
+        match &self.root_key {
+            Some(root) => WindowsKey::new(path).is_descendant_of(root),
+            None => self.flavor.is_descendant(path, self.root),
+        }
+    }
 }
 fn count(n: i64) -> Result<u64> {
     u64::try_from(n).map_err(|_| "Invalid persisted count".into())
@@ -120,7 +167,7 @@ impl AuditRecord {
         }
     }
 }
-const UPSERT_CANDIDATE: &str = "INSERT INTO candidates(identity_key,root,payload,path_hint) VALUES(?1,?2,?3,?4) ON CONFLICT(identity_key) DO UPDATE SET root=excluded.root,payload=excluded.payload,path_hint=excluded.path_hint WHERE payload<>excluded.payload OR root<>excluded.root";
+const UPSERT_CANDIDATE: &str = "INSERT INTO candidates(identity_key,root,payload,path_hint,path_key) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(identity_key) DO UPDATE SET root=excluded.root,payload=excluded.payload,path_hint=excluded.path_hint,path_key=excluded.path_key WHERE payload<>excluded.payload OR root<>excluded.root";
 const UPSERT_DEADLINE: &str = "INSERT INTO deadlines(identity_key,root,scheduled_at,payload) VALUES(?1,?2,?3,?4) ON CONFLICT(identity_key) DO UPDATE SET root=excluded.root,scheduled_at=excluded.scheduled_at,payload=excluded.payload WHERE payload<>excluded.payload OR root<>excluded.root";
 const INSERT_AUDIT: &str = "INSERT INTO audit(occurred_at,kind,payload) VALUES(?1,?2,?3)";
 /// Keyset SQL for `decision_page`; exposed to tests so query plans can be asserted.
@@ -204,6 +251,7 @@ impl Store {
             projects: vec![],
             path_flavor,
         };
+        ensure_keys(&*store.lock()?, path_flavor)?;
         store.refresh_projects()?;
         Ok(store)
     }
@@ -437,7 +485,8 @@ impl Store {
                         &k,
                         &root,
                         encode(&Candidate::from(c))?,
-                        &c.identity.path_hint
+                        &c.identity.path_hint,
+                        path_key(self.path_flavor, &c.identity.path_hint)
                     ]))?;
                     seen.insert(k);
                 }
@@ -473,32 +522,12 @@ impl Store {
     ) -> Result<usize> {
         self.transaction(|tx| {
             let flavor = self.path_flavor;
-            let mut roots = strings(tx, "SELECT path FROM roots", [])?;
-            roots.sort_by_key(|root| std::cmp::Reverse(flavor.normalize(root).len()));
+            let subtree = Contains::new(path, flavor);
             let mut seen = HashSet::with_capacity(candidates.len());
-            let mut changed = 0usize;
-            {
-                let mut up = sql(tx.prepare_cached(UPSERT_CANDIDATE))?;
-                for candidate in candidates {
-                    if !within(&candidate.identity.path_hint, path, flavor) {
-                        return Err("Candidate outside published subtree".into());
-                    }
-                    let root = roots
-                        .iter()
-                        .find(|root| within(&candidate.identity.path_hint, root, flavor))
-                        .ok_or("Candidate outside managed roots")?;
-                    let k = key(&candidate.identity);
-                    changed += sql(up.execute(params![
-                        &k,
-                        root,
-                        encode(&Candidate::from(candidate))?,
-                        &candidate.identity.path_hint
-                    ]))?;
-                    seen.insert(k);
-                }
-            }
-            let deleted = delete_where(tx, "candidates", |k, hint| {
-                within(hint, path, flavor) && !seen.contains(k)
+            let changed =
+                upsert_candidates_in(tx, flavor, candidates, Some(&subtree), Some(&mut seen))?;
+            let deleted = delete_subtree(tx, "candidates", flavor, path, |k, hint| {
+                !seen.contains(k) && subtree.path(hint)
             })?;
             let total = changed + deleted;
             if total > 0 {
@@ -510,6 +539,18 @@ impl Store {
                 )?;
             }
             Ok(total)
+        })
+    }
+    /// Inserts or rewrites changed candidate rows (each mapped to its longest managed root) without
+    /// retiring any other row. Returns the number of inserted + changed rows; an audit record is
+    /// written only when that is nonzero.
+    pub fn upsert_candidates(&self, candidates: &[RuleCandidate], at: f64) -> Result<usize> {
+        self.transaction(|tx| {
+            let changed = upsert_candidates_in(tx, self.path_flavor, candidates, None, None)?;
+            if changed > 0 {
+                record(tx, at, "candidatesUpserted", &encode(&candidates.len())?)?;
+            }
+            Ok(changed)
         })
     }
     pub fn candidate_count(&self) -> Result<u64> {
@@ -934,6 +975,84 @@ fn replace_roots(tx: &Transaction<'_>, roots: &[String], flavor: PathFlavor) -> 
     }
     Ok(())
 }
+/// Range-bounded variant of `delete_where` for tables with a `path_key` column.
+/// Like `delete_where`, but only rows whose `path_key` equals the key of `base` or lies below it are examined
+/// (an index range scan); `hit` still decides exactly, so results equal the full scan's.
+fn delete_subtree(
+    tx: &Transaction<'_>,
+    table: &str,
+    flavor: PathFlavor,
+    base: &str,
+    mut hit: impl FnMut(&str, &str) -> bool,
+) -> Result<usize> {
+    let key = path_key(flavor, base);
+    let stem = key.trim_end_matches('/');
+    let (prefix, upper) = (format!("{stem}/"), format!("{stem}0"));
+    let doomed: Vec<String> = {
+        let mut s = sql(tx.prepare_cached(&format!(
+            "SELECT identity_key,path_hint FROM {table} WHERE path_key=?1 OR (path_key>=?2 AND path_key<?3)"
+        )))?;
+        let rows = sql(s.query_map(params![key, prefix, upper], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        }))?;
+        let mut doomed = vec![];
+        for row in rows {
+            let (k, hint) = sql(row)?;
+            if hit(&k, &hint) {
+                doomed.push(k);
+            }
+        }
+        doomed
+    };
+    let mut del = sql(tx.prepare_cached(&format!("DELETE FROM {table} WHERE identity_key=?")))?;
+    for k in &doomed {
+        sql(del.execute([k]))?;
+    }
+    Ok(doomed.len())
+}
+/// Flavor-specific comparison key of a path hint (see schema V7). Descendants of `base` have keys in
+/// `[stem/, stem0)` where `stem` is `base`'s key without trailing slashes.
+fn path_key(flavor: PathFlavor, path: &str) -> String {
+    match flavor {
+        PathFlavor::Windows => WindowsKey::new(path).as_str().to_owned(),
+        PathFlavor::Posix => tinyprune_core::swiftstr::nfc(&flavor.normalize(path)),
+    }
+}
+/// Re-keys every candidate and observation row when the store is opened with a different flavor than the one
+/// the keys were computed for, or when rows without a key exist (migration from schema 6).
+fn ensure_keys(c: &Connection, flavor: PathFlavor) -> Result<()> {
+    let want = i64::from(flavor == PathFlavor::Windows);
+    let have: Option<i64> = sql(c
+        .query_row("SELECT flavor FROM key_meta WHERE id=1", [], |r| r.get(0))
+        .optional())?;
+    let unkeyed: bool = sql(c.query_row(
+        "SELECT EXISTS(SELECT 1 FROM candidates WHERE path_key='') OR EXISTS(SELECT 1 FROM observations WHERE path_key='')",
+        [],
+        |r| r.get(0),
+    ))?;
+    if have == Some(want) && !unkeyed {
+        return Ok(());
+    }
+    let tx = sql(c.unchecked_transaction())?;
+    for table in ["candidates", "observations"] {
+        let rows: Vec<(String, String)> = {
+            let mut s = sql(tx.prepare(&format!("SELECT identity_key,path_hint FROM {table}")))?;
+            let rows = sql(s.query_map([], |r| Ok((r.get(0)?, r.get(1)?))))?;
+            rows.map(sql).collect::<Result<_>>()?
+        };
+        let mut up = sql(tx.prepare(&format!(
+            "UPDATE {table} SET path_key=?2 WHERE identity_key=?1"
+        )))?;
+        for (k, hint) in rows {
+            sql(up.execute(params![k, path_key(flavor, &hint)]))?;
+        }
+    }
+    sql(tx.execute(
+        "INSERT INTO key_meta(id,flavor) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET flavor=excluded.flavor",
+        [want],
+    ))?;
+    sql(tx.commit())
+}
 /// Deletes rows of a table keyed by `identity_key` with a `path_hint` column, selected by `hit(key, hint)`.
 /// Scans only those two columns (covering index for candidates), never decoding payload JSON.
 fn delete_where(
@@ -958,6 +1077,74 @@ fn delete_where(
         sql(del.execute([k]))?;
     }
     Ok(doomed.len())
+}
+/// Upserts candidate rows under the longest managed root containing each path. With a `subtree`, a
+/// candidate outside it is an error; `seen` collects the identity keys written. Returns changed rows.
+fn upsert_candidates_in(
+    tx: &Transaction<'_>,
+    flavor: PathFlavor,
+    candidates: &[RuleCandidate],
+    subtree: Option<&Contains<'_>>,
+    mut seen: Option<&mut HashSet<String>>,
+) -> Result<usize> {
+    let mut roots: Vec<(String, usize)> = strings(tx, "SELECT path FROM roots", [])?
+        .into_iter()
+        .map(|root| {
+            let normalized_len = flavor.normalize(&root).len();
+            (root, normalized_len)
+        })
+        .collect();
+    roots.sort_by_key(|(_, normalized_len)| std::cmp::Reverse(*normalized_len));
+    let scopes: Vec<Contains<'_>> = roots
+        .iter()
+        .map(|(root, _)| Contains::new(root, flavor))
+        .collect();
+    let mut changed = 0usize;
+    let mut up = sql(tx.prepare_cached(UPSERT_CANDIDATE))?;
+    for candidate in candidates {
+        let hint = &candidate.identity.path_hint;
+        let hint_key = (flavor == PathFlavor::Windows).then(|| WindowsKey::new(hint));
+        if subtree.is_some_and(|subtree| !subtree.holds(hint, hint_key.as_ref())) {
+            return Err("Candidate outside published subtree".into());
+        }
+        let root = scopes
+            .iter()
+            .find(|scope| scope.holds(hint, hint_key.as_ref()))
+            .ok_or("Candidate outside managed roots")?
+            .root;
+        let k = key(&candidate.identity);
+        changed += sql(up.execute(params![
+            &k,
+            root,
+            encode(&Candidate::from(candidate))?,
+            hint,
+            path_key(flavor, hint)
+        ]))?;
+        if let Some(seen) = seen.as_deref_mut() {
+            seen.insert(k);
+        }
+    }
+    Ok(changed)
+}
+/// Upserts deadline rows (auditing only new or changed ones) and returns their identity keys.
+fn upsert_deadlines_in(
+    tx: &Transaction<'_>,
+    root: &str,
+    deadlines: &[TrashRequest],
+) -> Result<HashSet<String>> {
+    let mut seen = HashSet::with_capacity(deadlines.len());
+    let mut up = sql(tx.prepare_cached(UPSERT_DEADLINE))?;
+    let mut audit = sql(tx.prepare_cached(INSERT_AUDIT))?;
+    for r in deadlines {
+        finite(r.scheduled_at)?;
+        let k = key(&r.candidate_identity);
+        let p = encode(&Request::from(r))?;
+        if sql(up.execute(params![&k, root, r.scheduled_at, &p]))? > 0 {
+            sql(audit.execute(params![r.scheduled_at, "deadlineScheduled", &p]))?;
+        }
+        seen.insert(k);
+    }
+    Ok(seen)
 }
 fn record(tx: &Transaction<'_>, at: f64, kind: &str, payload: &str) -> Result<i64> {
     finite(at)?;
@@ -1015,10 +1202,10 @@ fn append_event(tx: &Transaction<'_>, e: &AuditEvent, flavor: PathFlavor) -> Res
             let volume_prefix = format!("{}:", identity.volume);
             // Candidate deletion cascades to current_decisions via trigger; also drop the moved
             // identity's decision explicitly in case no candidate row exists.
-            delete_where(tx, "candidates", |k, hint| {
-                k == moved
-                    || (k.starts_with(&volume_prefix)
-                        && flavor.is_descendant(hint, &identity.path_hint))
+            let below = Contains::new(&identity.path_hint, flavor);
+            sql(tx.execute("DELETE FROM candidates WHERE identity_key=?", [&moved]))?;
+            delete_subtree(tx, "candidates", flavor, &identity.path_hint, |k, hint| {
+                k.starts_with(&volume_prefix) && below.strictly_below(hint)
             })?;
             sql(tx.execute(
                 "DELETE FROM current_decisions WHERE identity_key=?",
@@ -1132,7 +1319,7 @@ impl ObservationStore for Store {
         self.transaction(|tx| {
             let old=sql(tx.query_row("SELECT identity,first,last FROM observations WHERE identity_key=?",[&k],|r|Ok((r.get::<_,String>(0)?,r.get::<_,f64>(1)?,r.get::<_,f64>(2)?))).optional())?;
             let (first,last)=match old { Some((p,first,last)) if decode::<Identity>(&p)?.decode()?==o.identity=>(first.min(o.first),last.max(o.last)),_=>(o.first,o.last) };
-            sql(tx.execute("INSERT INTO observations VALUES(?1,?2,?3,?4,?5) ON CONFLICT(identity_key) DO UPDATE SET path_hint=excluded.path_hint,identity=excluded.identity,first=excluded.first,last=excluded.last",params![&k,o.identity.path_hint,identity_json,first,last]))?; Ok(())
+            sql(tx.execute("INSERT INTO observations(identity_key,path_hint,identity,first,last,path_key) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(identity_key) DO UPDATE SET path_hint=excluded.path_hint,path_key=excluded.path_key,identity=excluded.identity,first=excluded.first,last=excluded.last",params![&k,o.identity.path_hint,identity_json,first,last,path_key(self.path_flavor,&o.identity.path_hint)]))?; Ok(())
         })
     }
     fn projects(&self) -> Result<&[Project]> {
@@ -1142,7 +1329,10 @@ impl ObservationStore for Store {
         let flavor = self.path_flavor;
         self.transaction(|tx| {
             let old=strings(tx,"SELECT identity FROM projects",[])?;
-            for p in old { let identity=decode::<Identity>(&p)?.decode()?; if within(&identity.path_hint,root,flavor)&&!projects.iter().any(|p|p.identity==identity) { sql(tx.execute("DELETE FROM projects WHERE identity_key=?",[key(&identity)]))?; } }
+            let scope = Contains::new(root, flavor);
+            let mut kept: std::collections::HashMap<String, Vec<&FilesystemIdentity>> = std::collections::HashMap::new();
+            for p in &projects { kept.entry(key(&p.identity)).or_default().push(&p.identity); }
+            for p in old { let identity=decode::<Identity>(&p)?.decode()?; let k=key(&identity); if scope.path(&identity.path_hint)&&!kept.get(&k).is_some_and(|same|same.iter().any(|i|**i==identity)) { sql(tx.execute("DELETE FROM projects WHERE identity_key=?",[k]))?; } }
             for p in &projects { finite(p.activity)?; let previous=sql(tx.query_row("SELECT identity,activity FROM projects WHERE identity_key=?",[key(&p.identity)],|r|Ok((r.get::<_,String>(0)?,r.get::<_,f64>(1)?))).optional())?; let activity=match previous { Some((i,a)) if decode::<Identity>(&i)?.decode()?==p.identity=>a.max(p.activity),_=>p.activity }; sql(tx.execute("INSERT INTO projects VALUES(?1,?2,?3,?4) ON CONFLICT(identity_key) DO UPDATE SET path_hint=excluded.path_hint,identity=excluded.identity,activity=excluded.activity",params![key(&p.identity),p.identity.path_hint,encode(&Identity::from(&p.identity))?,activity]))?; }
             Ok(())
         })?;
@@ -1151,8 +1341,10 @@ impl ObservationStore for Store {
     fn remove_below(&mut self, path: &str) -> Result<()> {
         let flavor = self.path_flavor;
         self.transaction(|tx| {
-            for table in ["observations", "projects", "candidates"] {
-                delete_where(tx, table, |_, hint| within(hint, path, flavor))?;
+            let scope = Contains::new(path, flavor);
+            delete_where(tx, "projects", |_, hint| scope.path(hint))?;
+            for table in ["observations", "candidates"] {
+                delete_subtree(tx, table, flavor, path, |_, hint| scope.path(hint))?;
             }
             Ok(())
         })?;
@@ -1175,20 +1367,7 @@ impl AgentStore for Store {
     fn replace_deadlines(&mut self, root: &str, deadlines: &[TrashRequest]) -> Result<()> {
         self.transaction(|tx| {
             let root = stored_root(tx, root, self.path_flavor)?;
-            let mut seen = HashSet::with_capacity(deadlines.len());
-            {
-                let mut up = sql(tx.prepare_cached(UPSERT_DEADLINE))?;
-                let mut audit = sql(tx.prepare_cached(INSERT_AUDIT))?;
-                for r in deadlines {
-                    finite(r.scheduled_at)?;
-                    let k = key(&r.candidate_identity);
-                    let p = encode(&Request::from(r))?;
-                    if sql(up.execute(params![&k, &root, r.scheduled_at, &p]))? > 0 {
-                        sql(audit.execute(params![r.scheduled_at, "deadlineScheduled", &p]))?;
-                    }
-                    seen.insert(k);
-                }
-            }
+            let seen = upsert_deadlines_in(tx, &root, deadlines)?;
             let existing = strings(
                 tx,
                 "SELECT identity_key FROM deadlines WHERE root=?",
@@ -1197,6 +1376,27 @@ impl AgentStore for Store {
             let mut del = sql(tx.prepare_cached("DELETE FROM deadlines WHERE identity_key=?"))?;
             for k in existing.iter().filter(|k| !seen.contains(*k)) {
                 sql(del.execute([k]))?;
+            }
+            Ok(())
+        })
+    }
+    /// Incremental form: upserts `deadlines`, then deletes the deadline of every `evaluated` identity
+    /// that has none in `deadlines`. Other rows are never read or touched (no scan of the root).
+    fn update_deadlines(
+        &mut self,
+        root: &str,
+        evaluated: &[FilesystemIdentity],
+        deadlines: &[TrashRequest],
+    ) -> Result<()> {
+        self.transaction(|tx| {
+            let root = stored_root(tx, root, self.path_flavor)?;
+            let seen = upsert_deadlines_in(tx, &root, deadlines)?;
+            let mut del = sql(tx.prepare_cached("DELETE FROM deadlines WHERE identity_key=?"))?;
+            for identity in evaluated {
+                let k = key(identity);
+                if !seen.contains(&k) {
+                    sql(del.execute([&k]))?;
+                }
             }
             Ok(())
         })

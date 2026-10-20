@@ -10,6 +10,7 @@ struct Store {
     observations: Vec<Observation>,
     projects: Vec<Project>,
     deadlines: Vec<TrashRequest>,
+    updates: usize,
 }
 impl ObservationStore for Store {
     fn observation(&self, identity: &FilesystemIdentity) -> Result<Option<Observation>, String> {
@@ -45,6 +46,18 @@ impl AgentStore for Store {
     fn replace_deadlines(&mut self, root: &str, deadlines: &[TrashRequest]) -> Result<(), String> {
         self.deadlines
             .retain(|r| !within(&r.candidate_identity.path_hint, root));
+        self.deadlines.extend_from_slice(deadlines);
+        Ok(())
+    }
+    fn update_deadlines(
+        &mut self,
+        _: &str,
+        evaluated: &[FilesystemIdentity],
+        deadlines: &[TrashRequest],
+    ) -> Result<(), String> {
+        self.updates += 1;
+        self.deadlines
+            .retain(|r| !evaluated.contains(&r.candidate_identity));
         self.deadlines.extend_from_slice(deadlines);
         Ok(())
     }
@@ -402,7 +415,7 @@ fn per_tick_execution_budget_and_targeted_event_scan() {
 }
 
 #[test]
-fn absent_event_paths_reconcile_before_removing_schedules() {
+fn absent_event_paths_leave_the_snapshot_without_enumerating_them() {
     struct RejectMissingIndex(Index);
     impl IndexSource for RejectMissingIndex {
         fn available(&mut self, root: &str) -> Result<bool, String> {
@@ -459,7 +472,8 @@ fn absent_event_paths_reconcile_before_removing_schedules() {
         agent.events = ScriptedEventSource::new([events]);
         let report = agent.tick(10.0).unwrap();
         assert!(!report.pending_work);
-        assert_eq!(agent.index.0.starts.last().unwrap(), "/root");
+        // Only the initial root pass enumerated anything: an absent target is a removal, not a traversal.
+        assert_eq!(agent.index.0.starts, vec!["/root".to_string()]);
         assert_eq!(agent.store.deadlines.len(), 1);
         assert_eq!(
             agent.store.deadlines[0].candidate_identity.path_hint,
@@ -629,4 +643,146 @@ fn real_unix_tree_moves_expired_file_to_injected_trash() {
         .events
         .iter()
         .any(|e| e.kind == AuditKind::MovedToTrash));
+}
+
+fn deadline<'a>(agent: &'a TestAgent, path: &str) -> Option<&'a TrashRequest> {
+    agent
+        .store
+        .deadlines
+        .iter()
+        .find(|r| r.candidate_identity.path_hint == path)
+}
+
+#[test]
+fn one_modified_file_is_rescheduled_without_a_full_pass() {
+    let files: Vec<_> = (0..50u8)
+        .map(|i| candidate(&format!("/root/f{i}"), i + 1))
+        .collect();
+    let mut agent = agent(files);
+    agent.tick(0.0).unwrap();
+    assert_eq!(agent.store.deadlines.len(), 50);
+    agent.files.tree.borrow_mut()[7].timestamps.modified = Some(5.0);
+    agent.events = ScriptedEventSource::new([vec![raw("/root/f7", RawKind::Modified)]]);
+    let report = agent.tick(1.0).unwrap();
+    assert_eq!(report.indexed, 1);
+    assert_eq!(
+        agent.index.starts,
+        vec!["/root".to_string(), "/root/f7".to_string()]
+    );
+    assert_eq!(agent.store.updates, 1);
+    assert_eq!(deadline(&agent, "/root/f7").unwrap().scheduled_at, 15.0);
+    assert_eq!(deadline(&agent, "/root/f8").unwrap().scheduled_at, 10.0);
+    assert_eq!(agent.store.deadlines.len(), 50);
+    assert_eq!(agent.queued(), 50);
+}
+
+#[test]
+fn burst_of_events_is_one_coalesced_pass() {
+    let mut agent = agent(vec![candidate("/root/base", 1)]);
+    agent.tick(0.0).unwrap();
+    let mut events = vec![];
+    for i in 0..10u8 {
+        agent
+            .files
+            .tree
+            .borrow_mut()
+            .push(candidate(&format!("/root/new{i}"), 10 + i));
+        events.push(raw(&format!("/root/new{i}"), RawKind::Created));
+    }
+    // A second burst arrives while the first pass is still waiting for its root.
+    agent.index.available = false;
+    agent.events = ScriptedEventSource::new([events[..6].to_vec(), events[6..].to_vec()]);
+    assert!(agent.tick(1.0).unwrap().pending_work);
+    assert!(agent.tick(1.0).unwrap().pending_work);
+    assert_eq!(agent.jobs.len(), 1, "unstarted deltas for one root merge");
+    agent.index.available = true;
+    for _ in 0..12 {
+        agent.tick(1.0).unwrap();
+    }
+    assert_eq!(agent.store.updates, 1);
+    assert_eq!(agent.store.deadlines.len(), 11);
+}
+
+#[test]
+fn policy_change_recovers_with_a_full_pass() {
+    let files: Vec<_> = (0..3u8)
+        .map(|i| candidate(&format!("/root/f{i}"), i + 1))
+        .collect();
+    let mut agent = agent(files);
+    agent.tick(0.0).unwrap();
+    agent.policy.0.rules[0].lifetime = RuleDuration(20.0);
+    agent.events = ScriptedEventSource::new([vec![raw("/root/f0", RawKind::Modified)]]);
+    agent.tick(1.0).unwrap();
+    assert_eq!(agent.index.starts.last().unwrap(), "/root");
+    assert!(agent.store.deadlines.iter().all(|r| r.scheduled_at == 20.0));
+    assert_eq!(agent.store.updates, 0);
+}
+
+#[test]
+fn keep_descendant_events_flip_the_ancestor_schedule() {
+    let mut folder = candidate("/root/folder", 1);
+    folder.kind = ItemKind::Directory;
+    let mut agent = agent(vec![folder]);
+    agent.policy.0.overrides.push(ItemPolicyOverride::new(
+        Uuid(9),
+        None,
+        "/root/folder/keep",
+        ItemOverridePolicy::Keep {
+            protect_descendants: true,
+        },
+    ));
+    agent.tick(0.0).unwrap();
+    assert!(deadline(&agent, "/root/folder").is_some());
+    agent
+        .files
+        .tree
+        .borrow_mut()
+        .push(candidate("/root/folder/keep", 2));
+    agent.events = ScriptedEventSource::new([vec![raw("/root/folder/keep", RawKind::Created)]]);
+    agent.tick(1.0).unwrap();
+    assert!(
+        agent.store.deadlines.is_empty(),
+        "a Keep descendant suppresses its folder"
+    );
+    agent
+        .files
+        .tree
+        .borrow_mut()
+        .retain(|c| c.identity.path_hint != "/root/folder/keep");
+    agent.events = ScriptedEventSource::new([vec![raw("/root/folder/keep", RawKind::Removed)]]);
+    agent.tick(2.0).unwrap();
+    assert!(deadline(&agent, "/root/folder").is_some());
+    assert_eq!(
+        agent.index.starts,
+        vec!["/root".to_string(), "/root/folder/keep".to_string()]
+    );
+}
+
+#[test]
+fn directory_rename_keeps_first_observed_for_descendants() {
+    let mut dir = candidate("/root/old", 1);
+    dir.kind = ItemKind::Directory;
+    let mut agent = agent(vec![dir, candidate("/root/old/child", 2)]);
+    agent.policy.0.rules[0].expiry_basis = ExpiryBasis::FirstObserved;
+    agent.tick(0.0).unwrap();
+    {
+        let mut tree = agent.files.tree.borrow_mut();
+        for c in tree.iter_mut() {
+            c.identity.path_hint = c.identity.path_hint.replace("/root/old", "/root/new");
+            c.name = c.identity.path_hint.rsplit('/').next().unwrap().into();
+        }
+    }
+    agent.events = ScriptedEventSource::new([vec![
+        raw("/root/old", RawKind::RenameFrom(7)),
+        raw("/root/new", RawKind::RenameTo(7)),
+    ]]);
+    agent.tick(5.0).unwrap();
+    assert_eq!(agent.store.deadlines.len(), 2);
+    assert!(agent.store.deadlines.iter().all(|r| r.scheduled_at == 10.0));
+    assert!(agent
+        .store
+        .observations
+        .iter()
+        .all(|o| o.identity.path_hint.starts_with("/root/new") && o.first == 0.0));
+    assert_eq!(agent.store.observations.len(), 2);
 }

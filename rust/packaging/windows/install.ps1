@@ -11,19 +11,21 @@
 .PARAMETER Start     Start the task now (default: register only; it runs at next logon)
 .PARAMETER NoTask    Do not register the Scheduled Task
 .PARAMETER AddToPath Append <Prefix>\bin to the user PATH (HKCU only)
+.PARAMETER AllowElevated Permit running from an elevated shell (for CI runners, whose default user is an administrator). The task is still registered with a limited token.
 #>
 [CmdletBinding()]
 param(
   [string]$Prefix = (Join-Path $env:LOCALAPPDATA 'Programs\TinyPrune'),
   [switch]$Start,
   [switch]$NoTask,
-  [switch]$AddToPath
+  [switch]$AddToPath,
+  [switch]$AllowElevated
 )
 $ErrorActionPreference = 'Stop'
 $TaskName = 'TinyPrune Agent (dev)'
 
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-if ((New-Object Security.Principal.WindowsPrincipal $identity).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+if (-not $AllowElevated -and (New-Object Security.Principal.WindowsPrincipal $identity).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
   throw 'Refusing to run elevated: this installs per-user files only. Run from a normal (non-admin) PowerShell.'
 }
 if ($Start -and $NoTask) { throw '-Start conflicts with -NoTask' }

@@ -1,0 +1,39 @@
+[package]
+name = "tinyprune-update"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Unreleased TinyPrune Rust-runtime updater: signed feed, verified staged install, Trash/update interlock"
+
+[lib]
+name = "tinyprune_update"
+
+# `interlock` is dependency-free and always built: the daemon depends on this crate with
+# `default-features = false` so it never links an HTTP/TLS stack (its systemd unit is AF_UNIX-only).
+# Everything else (feed, download, extraction, install, binaries) needs `client`.
+[features]
+default = ["client"]
+client = ["dep:ureq", "dep:ring", "dep:base64", "dep:flate2", "dep:tar", "dep:zip", "dep:serde", "dep:serde_json", "dep:tinyprune-ipc"]
+# NEVER enable for released artifacts: allows a runtime feed URL / public key override and
+# plain-HTTP loopback feeds so the Docker end-to-end test can use a local server.
+test-overrides = ["client"]
+
+[[bin]]
+name = "tinyprune-launcher"
+path = "src/bin/launcher.rs"
+
+[[bin]]
+name = "tinyprune-feed"
+path = "src/bin/feed.rs"
+required-features = ["client"]
+
+[dependencies]
+tinyprune-ipc = { path = "../tinyprune-ipc", optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+ureq = { version = "3", default-features = false, features = ["rustls"], optional = true }
+ring = { version = "0.17", optional = true }
+base64 = { version = "0.23", optional = true }
+flate2 = { version = "1", optional = true }
+tar = { version = "0.4", default-features = false, optional = true }
+zip = { version = "9", default-features = false, features = ["deflate-flate2"], optional = true }

@@ -41,7 +41,7 @@ else
   rmdir "$pkg/share/applications"
 fi
 install -m 0644 "$here/tinyprune-agentd.service" "$pkg/share/systemd/user/"
-install -m 0755 "$here/install.sh" "$here/uninstall.sh" "$pkg/"
+install -m 0755 "$here/install.sh" "$here/uninstall.sh" "$here/install-managed.sh" "$here/uninstall-managed.sh" "$pkg/"
 install -m 0644 "$root/LICENSE" "$pkg/LICENSE"
 printf '%s\n' "$stamp" >"$pkg/VERSION"
 cat >"$pkg/README.txt" <<'EOF'
@@ -49,6 +49,8 @@ TinyPrune development build. UNRELEASED engineering artifact: Linux is not a
 supported platform; the macOS app is the only released TinyPrune.
 Install (user scope, no root):  ./install.sh [--prefix DIR] [--enable-service]
 Remove:                         ./uninstall.sh [--purge]
+Updatable layout (versions/ + current symlink, `tinyprune update`):
+                                ./install-managed.sh [--enable-service]   /   ./uninstall-managed.sh [--purge]
 Check:                          tinyprune doctor
 EOF
 

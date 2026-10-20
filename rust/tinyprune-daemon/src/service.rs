@@ -79,6 +79,8 @@ pub struct Service {
     waiters: AtomicUsize,
     shared: Arc<index::Shared>,
     decisions: Mutex<index::Decisions>,
+    /// Trash/update interlock (ADR 0012). Held by every Trash operation; the updater quiesces it.
+    interlock: Arc<tinyprune_update::interlock::Interlock>,
 }
 /// Registers a request that is waiting for the engine so the tick thread yields to it.
 struct Waiting<'a>(&'a AtomicUsize);
@@ -137,6 +139,8 @@ impl Service {
             index,
         );
         engine.limits.index_entries = NonZeroUsize::new(INDEX_BATCH).expect("nonzero");
+        let interlock = tinyprune_update::interlock::Interlock::new();
+        engine.update_interlock = Some(interlock.clone());
         Ok(Self {
             state: Mutex::new(State {
                 engine,
@@ -151,6 +155,56 @@ impl Service {
             waiters: AtomicUsize::new(0),
             shared,
             decisions: Mutex::new(index::Decisions::default()),
+            interlock,
+        })
+    }
+    /// The interlock the agent engine must consult before every Trash operation.
+    pub fn interlock(&self) -> &Arc<tinyprune_update::interlock::Interlock> {
+        &self.interlock
+    }
+    /// Update interlock requests never touch the engine, so they cannot wait behind a scan turn.
+    fn update_interlock(&self, request: &d::Request) -> Option<d::Response> {
+        use tinyprune_update::interlock::{Phase, QuiesceError};
+        let status = |s: tinyprune_update::interlock::Status| {
+            d::Response::UpdateStatus(d::UpdateStatus {
+                phase: match s.phase {
+                    Phase::Idle => d::UpdatePhase::Idle,
+                    Phase::Draining => d::UpdatePhase::Draining,
+                    Phase::Quiesced => d::UpdatePhase::Quiesced,
+                },
+                target: s.target,
+                trash_in_flight: s.trash_in_flight as u64,
+                lease_remaining_seconds: s.lease_remaining.map(|d| d.as_secs_f64()),
+            })
+        };
+        let failure = |e: QuiesceError| {
+            d::Response::Failure(d::ServiceError {
+                code: match e {
+                    QuiesceError::AlreadyQuiescing => d::ErrorCode::Busy,
+                    _ => d::ErrorCode::InvalidRequest,
+                },
+                message: e.to_string(),
+            })
+        };
+        Some(match request {
+            d::Request::LoadUpdateStatus => status(self.interlock.status()),
+            d::Request::QuiesceForUpdate {
+                token,
+                target,
+                lease_seconds,
+            } => match self.interlock.request_quiesce(
+                token,
+                target,
+                Duration::from_secs(u64::from(*lease_seconds)),
+            ) {
+                Ok(s) => status(s),
+                Err(e) => failure(e),
+            },
+            d::Request::ReleaseUpdateQuiesce { token } => match self.interlock.release(token) {
+                Ok(()) => status(self.interlock.status()),
+                Err(e) => failure(e),
+            },
+            _ => return None,
         })
     }
     /// True while a request waits for the engine lock; the tick thread yields to it.
@@ -361,6 +415,9 @@ impl Service {
         if let Some(answer) = self.read_only(&request) {
             return answer;
         }
+        if let Some(answer) = self.update_interlock(&request) {
+            return Ok(answer);
+        }
         let waiting = Waiting::new(&self.waiters);
         let mut state = self.state.lock().map_err(|_| "Runtime mutex poisoned")?;
         drop(waiting);
@@ -387,7 +444,10 @@ impl Service {
             | d::Request::LoadActivity { .. }
             | d::Request::ExplainItem { .. }
             | d::Request::ItemSize { .. }
-            | d::Request::ExportConfig => unreachable!("answered before taking the engine"),
+            | d::Request::ExportConfig
+            | d::Request::QuiesceForUpdate { .. }
+            | d::Request::ReleaseUpdateQuiesce { .. }
+            | d::Request::LoadUpdateStatus => unreachable!("answered before taking the engine"),
             d::Request::ReplacePolicy(value) => {
                 expected = value.revision;
                 if value.rules.len() > 1024 || value.overrides.len() > 100_000 {

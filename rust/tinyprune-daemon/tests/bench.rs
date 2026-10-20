@@ -12,7 +12,7 @@ use std::{
     io::Write as _,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tinyprune_ipc::*;
 
@@ -133,11 +133,103 @@ fn cpu_seconds(pid: u32) -> Option<f64> {
         let (minutes, seconds) = text.trim().split_once(':')?; // M:SS.hh
         Some(minutes.parse::<f64>().ok()? * 60.0 + seconds.parse::<f64>().ok()?)
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(windows)]
+    {
+        let out = Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                &format!("(Get-Process -Id {pid}).TotalProcessorTime.TotalSeconds"),
+            ])
+            .output()
+            .ok()?;
+        String::from_utf8(out.stdout)
+            .ok()?
+            .trim()
+            .parse::<f64>()
+            .ok()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
         let _ = pid;
         None
     }
+}
+
+/// Waits until the agent used under 50 ms of CPU in each of three consecutive 500 ms intervals (at most 120 s).
+/// Without a CPU source it waits a fixed 8 s.
+fn wait_until_idle(pid: u32) {
+    let Some(mut last) = cpu_seconds(pid) else {
+        std::thread::sleep(Duration::from_secs(8));
+        return;
+    };
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let mut quiet = 0;
+    while quiet < 3 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(500));
+        let Some(now) = cpu_seconds(pid) else { return };
+        quiet = if now - last < 0.05 { quiet + 1 } else { 0 };
+        last = now;
+    }
+}
+
+fn epoch_ms() -> f64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0.0, |d| d.as_secs_f64() * 1000.0)
+}
+
+/// One finished daemon phase, from the JSON lines of `TINYPRUNE_PHASE_LOG` (see `tinyprune-daemon/src/phases.rs`).
+struct PhaseRecord {
+    phase: String,
+    ms: f64,
+    items: u64,
+    end_ms: f64,
+}
+
+fn read_phases(path: &Path) -> Vec<PhaseRecord> {
+    fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| {
+            let v: serde_json::Value = serde_json::from_str(line).ok()?;
+            Some(PhaseRecord {
+                phase: v["phase"].as_str()?.to_owned(),
+                ms: v["ms"].as_f64()?,
+                items: v["items"].as_u64()?,
+                end_ms: v["end_ms"].as_f64()?,
+            })
+        })
+        .collect()
+}
+
+/// Per-phase totals in order of first appearance; `origin_ms` is the wall-clock zero of the "ended at" column.
+fn phase_table(title: &str, records: &[PhaseRecord], origin_ms: f64) -> String {
+    let mut out = format!("### {title}\n\n");
+    if records.is_empty() {
+        return out + "no phase records were written\n\n";
+    }
+    out += "| Phase | passes | total | longest pass | items (all passes) | first pass ended at |\n|---|---|---|---|---|---|\n";
+    let mut names: Vec<&str> = Vec::new();
+    for r in records {
+        if !names.contains(&r.phase.as_str()) {
+            names.push(&r.phase);
+        }
+    }
+    for name in names {
+        let mine: Vec<&PhaseRecord> = records.iter().filter(|r| r.phase == name).collect();
+        let total: f64 = mine.iter().map(|r| r.ms).sum();
+        let longest = mine.iter().map(|r| r.ms).fold(0.0, f64::max);
+        let items: u64 = mine.iter().map(|r| r.items).sum();
+        out += &format!(
+            "| {name} | {} | {:.2} s | {:.2} s | {items} | +{:.1} s |\n",
+            mine.len(),
+            total / 1000.0,
+            longest / 1000.0,
+            (mine[0].end_ms - origin_ms) / 1000.0
+        );
+    }
+    out + "\n"
 }
 
 fn make_fixture(root: &Path, files: usize) -> usize {
@@ -165,6 +257,10 @@ impl Agent {
             .arg(endpoint)
             .arg("--reconcile-seconds")
             .arg(reconcile.to_string())
+            .env(
+                "TINYPRUNE_PHASE_LOG",
+                base.join(format!("phases-{reconcile}.jsonl")),
+            )
             .env("XDG_DATA_HOME", base.join("xdg"))
             .env("HOME", base.join("home"))
             .env("USERPROFILE", base.join("home"))
@@ -271,6 +367,7 @@ fn bench_100k_index_memory_latency_ipc() {
         state: RuleState::Active,
         match_mode: MatchMode::Scoped,
     };
+    let start_epoch_ms = epoch_ms();
     let start = Instant::now();
     call(
         &mut c,
@@ -288,20 +385,41 @@ fn bench_100k_index_memory_latency_ipc() {
     );
     let limit = Duration::from_secs(600);
     let mut index_secs = f64::NAN;
+    let mut first_decision_secs = f64::NAN;
+    let cpu_start = cpu_seconds(agent.pid());
+    let mut cpu_at_index = None;
     loop {
         if index_secs.is_nan() && indexed(&mut c) >= expected_entries {
             index_secs = start.elapsed().as_secs_f64();
+            cpu_at_index = cpu_seconds(agent.pid());
         }
-        if !index_secs.is_nan() && upcoming_total(&mut c, 1) >= files as u64 {
+        let decisions = if index_secs.is_nan() {
+            0
+        } else {
+            upcoming_total(&mut c, 1)
+        };
+        if first_decision_secs.is_nan() && decisions > 0 {
+            first_decision_secs = start.elapsed().as_secs_f64();
+        }
+        if decisions >= files as u64 {
             break;
         }
-        assert!(
-            start.elapsed() < limit,
-            "index did not complete in {limit:?}"
-        );
+        if start.elapsed() >= limit {
+            // Show where the time went before failing: the phase log is the only evidence of a stuck run.
+            eprintln!(
+                "index {index_secs} s, first decision {first_decision_secs} s, {decisions} of {files} decisions\n{}",
+                phase_table(
+                    "Phase timing at timeout",
+                    &read_phases(&base.join("phases-3600.jsonl")),
+                    start_epoch_ms
+                )
+            );
+            panic!("index did not complete in {limit:?}");
+        }
         std::thread::sleep(Duration::from_millis(100));
     }
     let deadlines_secs = start.elapsed().as_secs_f64();
+    let cpu_at_done = cpu_seconds(agent.pid());
     let rss_peak_like = rss_mib(agent.pid());
 
     // idle soak: RSS and CPU
@@ -340,6 +458,7 @@ fn bench_100k_index_memory_latency_ipc() {
     // ---- phase 2: restart on the persisted index + event-to-deadline latency ---------------------
     // Reconcile is 2 s here because macOS has no native watcher (periodic reconcile fallback, see the daemon
     // README); on Linux/Windows the native watcher delivers the event and the interval is not the limiting factor.
+    let phase2_epoch_ms = epoch_ms();
     let agent = Agent::start(&base, &endpoint, 2);
     let restart = Instant::now();
     let mut c = client(&endpoint);
@@ -351,8 +470,9 @@ fn bench_100k_index_memory_latency_ipc() {
         std::thread::sleep(Duration::from_millis(50));
     }
     let restart_ready_secs = restart.elapsed().as_secs_f64();
-    // let the first reconcile pass settle, then create one file and wait for its deadline to appear
-    std::thread::sleep(Duration::from_secs(8));
+    // Let the startup pass settle (agent CPU idle for three consecutive 500 ms reads, at most 120 s), then create one
+    // file and wait for its deadline to appear. Where CPU time is unavailable, fall back to a fixed wait.
+    wait_until_idle(agent.pid());
     let before = upcoming_total(&mut c, 1);
     fs::File::create(root.join("group-0000").join("event-new.dat")).unwrap();
     let event = Instant::now();
@@ -408,14 +528,44 @@ fn bench_100k_index_memory_latency_ipc() {
     table += &format!("| IPC ExplainItem | {explain_ms:.1} ms | n/a | n/a |\n");
     let stall = MAX_STALL_MS.load(std::sync::atomic::Ordering::Relaxed) as f64 / 1000.0;
     table += &format!("| longest IPC stall (any request, during 100k scan/reconcile) | {stall:.1} s | n/a | n/a |\n");
-    println!("\n{table}");
+    let cpu_note = |a: Option<f64>, b: Option<f64>| match a.zip(b) {
+        Some((a, b)) => format!("{:.1} s", (b - a).max(0.0)),
+        None => "not measured".into(),
+    };
+    let mut milestones = String::from("### Rust daemon milestones, first index (seconds after SaveRule)\n\n| Milestone | Value |\n|---|---|\n");
+    milestones += &format!("| all {expected_entries} candidates published | {index_secs:.2} s |\n");
+    milestones += &format!("| first current decision visible | {first_decision_secs:.2} s |\n");
+    milestones += &format!("| all {files} decisions visible | {deadlines_secs:.2} s |\n");
+    milestones += &format!(
+        "| agent CPU until candidates published | {} |\n",
+        cpu_note(cpu_start, cpu_at_index)
+    );
+    milestones += &format!(
+        "| agent CPU from published to all decisions | {} |\n",
+        cpu_note(cpu_at_index, cpu_at_done)
+    );
+    milestones += "\nPhases: enumerate = filesystem metadata traversal; publish = candidate rows to SQLite; record = change fingerprints; evaluate = agent snapshot merge + hydration + rule evaluation (scheduler scan) up to the deadline write; deadlines = deadline rows to SQLite; explain = per-item hydration + resolution + explanation; decisions_store = decision rows to SQLite.\n";
+    let phase_report = format!(
+        "{}{}",
+        phase_table(
+            "Rust daemon phase timing, first index of the rule (phase 1; passes after the first mean repeated full evaluations)",
+            &read_phases(&base.join("phases-3600.jsonl")),
+            start_epoch_ms
+        ),
+        phase_table(
+            "Rust daemon phase timing, restart + 2 s reconcile + one new file (phase 2, since agent start)",
+            &read_phases(&base.join("phases-2.jsonl")),
+            phase2_epoch_ms
+        )
+    );
+    println!("\n{table}\n{milestones}\n{phase_report}");
     if let Some(path) = std::env::var_os("TINYPRUNE_BENCH_OUT") {
         let mut f = fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(path)
             .unwrap();
-        writeln!(f, "{table}").unwrap();
+        writeln!(f, "{table}\n{milestones}\n{phase_report}").unwrap();
     }
     assert!(
         !latency_ms.is_nan(),

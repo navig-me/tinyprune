@@ -2,6 +2,7 @@
 mod codec;
 mod events;
 mod index;
+mod phases;
 #[cfg_attr(any(target_os = "linux", windows), allow(dead_code))]
 mod poll;
 mod preview;
@@ -334,11 +335,36 @@ impl Daemon {
     }
 }
 
+/// Windows-only containment index over one `store.projects()` snapshot: the projects containing a path are found
+/// by walking the path's ancestors instead of testing every project for every candidate. It describes one exact
+/// slice and is ignored when the project count no longer matches.
+pub(crate) struct ProjectIndex(tinyprune_core::path::ContainerIndex);
+impl ProjectIndex {
+    pub(crate) fn new(projects: &[tinyprune_core::scheduler::Project]) -> Option<Self> {
+        (codec::flavor() == tinyprune_core::path::PathFlavor::Windows).then(|| {
+            Self(tinyprune_core::path::ContainerIndex::new(
+                projects
+                    .iter()
+                    .map(|p| tinyprune_core::path::WindowsKey::new(&p.identity.path_hint)),
+            ))
+        })
+    }
+}
+
 fn explain(
     candidate: &RuleCandidate,
     policy: &PolicySnapshot,
     store: &Store,
     now: f64,
+) -> Result<ipc::Explanation, String> {
+    explain_with(candidate, policy, store, now, None)
+}
+fn explain_with(
+    candidate: &RuleCandidate,
+    policy: &PolicySnapshot,
+    store: &Store,
+    now: f64,
+    projects_index: Option<&ProjectIndex>,
 ) -> Result<ipc::Explanation, String> {
     let mut candidate = candidate.clone();
     // Observation dates matter only to rules measured from them; skip the lookup otherwise.
@@ -357,15 +383,30 @@ fn explain(
             candidate.timestamps.observed_activity = Some(now);
         }
     }
-    let project = store
-        .projects()?
-        .iter()
-        .filter(|p| {
-            codec::same_path(&candidate.identity.path_hint, &p.identity.path_hint)
-                || codec::flavor()
-                    .is_descendant(&candidate.identity.path_hint, &p.identity.path_hint)
-        })
-        .max_by_key(|p| p.identity.path_hint.len());
+    let projects = store.projects()?;
+    let slot = match projects_index.filter(|index| index.0.len() == projects.len()) {
+        Some(index) => {
+            let mut containing = Vec::new();
+            index.0.containing(
+                &tinyprune_core::path::WindowsKey::new(&candidate.identity.path_hint),
+                &mut containing,
+            );
+            containing
+                .into_iter()
+                .max_by_key(|&slot| projects[slot].identity.path_hint.len())
+        }
+        None => projects
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| {
+                codec::same_path(&candidate.identity.path_hint, &p.identity.path_hint)
+                    || codec::flavor()
+                        .is_descendant(&candidate.identity.path_hint, &p.identity.path_hint)
+            })
+            .max_by_key(|(_, p)| p.identity.path_hint.len())
+            .map(|(slot, _)| slot),
+    };
+    let project = slot.map(|slot| &projects[slot]);
     candidate.timestamps.project_activity = project.map(|p| p.activity);
     let resolution = resolve::resolve(
         &candidate,

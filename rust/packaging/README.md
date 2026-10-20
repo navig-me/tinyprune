@@ -59,6 +59,8 @@ rust/packaging/linux/test-install.sh [--bin-dir rust/target/release]
 
 `test-install.sh` builds a package, verifies the checksum and VERSION stamp, then in a temp `HOME` with a fake `systemctl` shim checks: default install (no enable), unit placeholder substitution, `--enable-service`, uninstall preserving data and unrelated files, `--purge`, symlink refusal, `--prefix`/`XDG_*` overrides and bad-argument rejection. It runs in CI on Linux against the real binaries.
 
+`docker-test.sh [--archive FILE]` is the real acceptance test: it builds (or takes) the tarball, then in a fresh Ubuntu 24.04 container with systemd as PID 1 (`--privileged --cgroupns=host`, `loginctl enable-linger`) and a non-root user runs `install.sh --enable-service`, `systemd-analyze verify`, `desktop-file-validate`, starts the agent through `systemctl --user`, adds roots and rules through the CLI, checks the Trash result (home Trash `.trashinfo` encoding for a path with spaces, `%` and Unicode, a standard `trash-restore`, a tmpfs mount's `.Trash-$uid` fallback with a relative `Path=`, and refusal without copy/delete when the same-device Trash is unwritable), `systemctl --user stop` (SIGINT, exit 0, socket removed), restart after `kill -KILL`, then `uninstall.sh` (keeps data) and `--purge`. If a real user manager cannot start it falls back to the unit verification plus running ExecStart directly (and says so); the restart-on-failure check is skipped there.
+
 ## Windows
 
 ```powershell
@@ -86,8 +88,8 @@ Matrix `ubuntu-24.04`, `windows-2022`, `macos-14`. Each: pinned toolchain from `
 
 ## What is NOT verified
 
-- Linux scripts: shellcheck-clean and `test-install.sh` passed **on macOS only** (BSD `sed`/`install`/`tar`), with a fake `systemctl`. Never run on Linux or under real systemd; the unit file was not checked with `systemd-analyze verify`.
-- Windows scripts: `pwsh` is not available on this machine, so they were **not even parse-checked** and never executed. Scheduled Task parameters are unexercised.
+- Linux scripts: the Docker test above ran locally (Docker Desktop, aarch64 Ubuntu 24.04, systemd 255) and passed with a real `systemd --user`; it is also a step in `rust-artifacts.yml` (not yet run on GitHub, x86_64). The desktop entry is validated from the template, not from an archive, because the headless archive has no UI. Not covered: distro variety, SELinux/AppArmor, `.Trash` (shared sticky directory) handling, and x86_64 locally.
+- Windows scripts: the workflow now runs install, task start, `tinyprune status`, root/rule creation, uninstall and `-Purge` on `windows-2022`, but it has never run; the scripts were not executed by the author. `install.ps1 -AllowElevated` exists solely because hosted runners run as an administrator; whether an Interactive-logon task starts there is untested.
 - The workflow was validated with `actionlint` and YAML parsing only; it has not run on GitHub. The apt package list for the UI, the Windows UI build (the UI has only `icons/icon.png`; `tauri-build` on Windows typically requires `icons/icon.ico`) and Linux UI link are unverified.
 - Tauri bundling, `.deb`, AppImage, MSI: not attempted.
 - Archives are unsigned and unreproducible beyond a stable VERSION stamp (tar/zip metadata is not normalised on Windows).

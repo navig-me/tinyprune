@@ -6,7 +6,8 @@ use std::time::Duration;
 use tinyprune_core::resolve::{Disposition, Resolution};
 use tinyprune_core::rule::*;
 use tinyprune_core::scheduler::{
-    self, ActivityEvent, MetadataSource, ObservationStore, ScanPolicy,
+    self, ActivityEvent, Decision, Delta, MetadataSource, ObservationStore, ScanPolicy,
+    SnapshotIndex,
 };
 use tinyprune_core::trash::*;
 use tinyprune_core::uuid::Uuid;
@@ -18,6 +19,17 @@ pub trait IndexSource {
     fn available(&mut self, root: &str) -> Result<bool, String>;
     fn begin(&mut self, path: &str) -> Result<(), String>;
     fn next_batch(&mut self, limit: NonZeroUsize) -> Result<IndexBatch, String>;
+    /// Called when an incremental pass learned of paths that left the snapshot (`removed`, whole subtrees)
+    /// and of single items whose own metadata changed (`refreshed`) without a subtree enumeration, so an
+    /// embedder that mirrors the snapshot can mirror these too. Enumerated subtrees were already reported
+    /// by `next_batch`. Embedders without a mirror need not implement it.
+    fn publish_delta(
+        &mut self,
+        _removed: &[String],
+        _refreshed: &[RuleCandidate],
+    ) -> Result<(), String> {
+        Ok(())
+    }
 }
 #[derive(Default)]
 pub struct IndexBatch {
@@ -29,6 +41,14 @@ pub struct IndexBatch {
 pub trait AgentStore: ObservationStore {
     fn load_deadlines(&mut self) -> Result<Vec<TrashRequest>, String>;
     fn replace_deadlines(&mut self, root: &str, deadlines: &[TrashRequest]) -> Result<(), String>;
+    /// Incremental form of `replace_deadlines`: afterwards `deadlines` are scheduled and no `evaluated`
+    /// identity has any other deadline. Deadlines of identities that are not named stay untouched.
+    fn update_deadlines(
+        &mut self,
+        root: &str,
+        evaluated: &[FilesystemIdentity],
+        deadlines: &[TrashRequest],
+    ) -> Result<(), String>;
     fn remove_deadline(&mut self, request: &TrashRequest) -> Result<(), String>;
 }
 /// A dangling attempt is ambiguous: recovery records a safety skip, never invents a
@@ -100,13 +120,161 @@ struct Entry {
     request: TrashRequest,
     failures: u32,
 }
+/// Hints of one event batch for one root, resolved against the filesystem.
+#[derive(Default)]
+struct Hints {
+    scan: Vec<String>,
+    removed: Vec<String>,
+    parents: Vec<String>,
+    events: Vec<ActivityEvent>,
+}
 struct Job {
     root: String,
-    path: String,
     removed: Vec<String>,
     events: Vec<ActivityEvent>,
+    /// Existing subtrees still to enumerate for an incremental pass; `None` is a complete pass over the root.
+    pending: Option<VecDeque<String>>,
+    scanned: Vec<(String, Vec<RuleCandidate>)>,
+    refreshed: Vec<RuleCandidate>,
+    /// Subtree being enumerated (incremental passes only).
+    current: Option<String>,
     candidates: Vec<RuleCandidate>,
     started: bool,
+    /// Whether the cached snapshot was checked against the current policy.
+    validated: bool,
+}
+impl Job {
+    fn full(root: String, removed: Vec<String>, events: Vec<ActivityEvent>) -> Self {
+        Self {
+            root,
+            removed,
+            events,
+            pending: None,
+            scanned: Vec::new(),
+            refreshed: Vec::new(),
+            current: None,
+            candidates: Vec::new(),
+            started: false,
+            validated: false,
+        }
+    }
+    fn delta(
+        root: String,
+        scan: Vec<String>,
+        removed: Vec<String>,
+        refreshed: Vec<RuleCandidate>,
+        events: Vec<ActivityEvent>,
+    ) -> Self {
+        Self {
+            pending: Some(scan.into()),
+            refreshed,
+            ..Self::full(root, removed, events)
+        }
+    }
+    fn mergeable(&self, root: &str, flavor: PathFlavor) -> bool {
+        self.pending.is_some()
+            && !self.started
+            && self.current.is_none()
+            && self.scanned.is_empty()
+            && same_path(&self.root, root, flavor)
+    }
+    /// Folds a later delta into this unstarted one. A later removal supersedes earlier scans below it and
+    /// a later scan supersedes earlier parent refreshes it covers, so the merged job equals running both.
+    fn merge(&mut self, later: Job, flavor: PathFlavor) {
+        let pending = self.pending.get_or_insert_with(VecDeque::new);
+        pending.retain(|path| {
+            !later
+                .removed
+                .iter()
+                .any(|gone| contains(path, gone, flavor))
+        });
+        for path in later.pending.unwrap_or_default() {
+            if !pending.iter().any(|base| contains(&path, base, flavor)) {
+                pending.retain(|existing| !contains(existing, &path, flavor));
+                pending.push_back(path);
+            }
+        }
+        for path in later.removed {
+            if !self
+                .removed
+                .iter()
+                .any(|base| contains(&path, base, flavor))
+            {
+                self.removed.push(path);
+            }
+        }
+        let covered = |candidate: &RuleCandidate| {
+            pending
+                .iter()
+                .any(|base| contains(&candidate.identity.path_hint, base, flavor))
+        };
+        self.refreshed.retain(|existing| {
+            !covered(existing)
+                && !later.refreshed.iter().any(|fresh| {
+                    same_path(
+                        &fresh.identity.path_hint,
+                        &existing.identity.path_hint,
+                        flavor,
+                    )
+                })
+        });
+        self.refreshed
+            .extend(later.refreshed.into_iter().filter(|fresh| !covered(fresh)));
+        self.events.extend(later.events);
+    }
+}
+fn contains(path: &str, base: &str, flavor: PathFlavor) -> bool {
+    same_path(path, base, flavor) || flavor.is_descendant(path, base)
+}
+fn parent_of(path: &str) -> String {
+    path.rsplit_once(['/', '\\']).map_or_else(
+        || path.to_owned(),
+        |(parent, _)| {
+            if parent.is_empty() {
+                "/".to_owned()
+            } else {
+                parent.to_owned()
+            }
+        },
+    )
+}
+fn schedule(
+    decision: Decision,
+    identity: &FilesystemIdentity,
+    report: &mut TickReport,
+) -> Option<TrashRequest> {
+    if decision.protected_descendant {
+        return None;
+    }
+    let (source, scheduled_at, disposition) = match decision.resolution {
+        Resolution::Scheduled(e) => (
+            e.custom_override_id.map_or(
+                ScheduledSource::Rule(e.rule_id),
+                ScheduledSource::CustomOverride,
+            ),
+            e.scheduled_at,
+            e.disposition,
+        ),
+        Resolution::CustomExpiry {
+            override_id,
+            expires_at,
+            disposition,
+        } => (
+            ScheduledSource::CustomOverride(override_id),
+            expires_at,
+            disposition,
+        ),
+        _ => return None,
+    };
+    if disposition == Disposition::Preview {
+        report.previewed += 1;
+        return None;
+    }
+    scheduled_at.is_finite().then(|| TrashRequest {
+        candidate_identity: identity.clone(),
+        source,
+        scheduled_at,
+    })
 }
 struct Snapshot(Vec<RuleCandidate>);
 impl MetadataSource for Snapshot {
@@ -120,10 +288,26 @@ impl Clock for At {
         self.0
     }
 }
-struct Permit;
+/// Per-execution Trash gate. While an update lease is live `acquire_trash_permit` is `Ok(false)`, which the
+/// coordinator records as a safety skip and a transient block. The guard it takes is held until this value
+/// is dropped, i.e. after the filesystem move and audit, so the updater can never quiesce mid-move.
+struct Permit {
+    interlock: Option<std::sync::Arc<tinyprune_update::interlock::Interlock>>,
+    /// Never read: held only so its `Drop` ends the interlock hold after the move.
+    _guard: Option<tinyprune_update::interlock::TrashGuard>,
+}
 impl UpdateGate for Permit {
     fn acquire_trash_permit(&mut self) -> Result<bool, String> {
-        Ok(true)
+        let Some(interlock) = &self.interlock else {
+            return Ok(true);
+        };
+        match interlock.begin_trash() {
+            Ok(guard) => {
+                self._guard = Some(guard);
+                Ok(true)
+            }
+            Err(_) => Ok(false),
+        }
     }
 }
 struct NoSizes;
@@ -175,9 +359,11 @@ pub struct Agent<F, P, S, A, E, I> {
     pub audit: A,
     pub events: E,
     pub index: I,
+    /// Trash/update interlock shared with the updater (ADR 0012). `None` = no updater (tests, library use).
+    pub update_interlock: Option<std::sync::Arc<tinyprune_update::interlock::Interlock>>,
     pub limits: Limits,
     jobs: VecDeque<Job>,
-    snapshots: BTreeMap<String, Snapshot>,
+    snapshots: BTreeMap<String, SnapshotIndex>,
     queue: BTreeMap<(Time, IdentityKey), Entry>,
     positions: BTreeMap<IdentityKey, Time>,
     initialized: bool,
@@ -200,6 +386,7 @@ impl<
             audit,
             events,
             index,
+            update_interlock: None,
             limits: Limits::default(),
             jobs: VecDeque::new(),
             snapshots: BTreeMap::new(),
@@ -229,26 +416,203 @@ impl<
         self.queue
             .insert((Time(at), identity), Entry { request, failures });
     }
-    fn job(
-        &mut self,
-        root: String,
-        path: String,
-        removed: Vec<String>,
-        events: Vec<ActivityEvent>,
-    ) {
-        self.jobs.push_back(Job {
-            root,
-            path,
-            removed,
-            events,
-            candidates: Vec::new(),
-            started: false,
-        });
+    fn delta_job(&mut self, root: String, hint: Hints, flavor: PathFlavor) -> Result<(), String> {
+        let prune = |mut paths: Vec<String>| {
+            paths.sort_by_key(|path| flavor.normalize(path));
+            let mut kept: Vec<String> = Vec::new();
+            for path in paths {
+                if !kept.iter().any(|base| contains(&path, base, flavor)) {
+                    kept.push(path);
+                }
+            }
+            kept
+        };
+        let scan = prune(hint.scan);
+        let removed = prune(hint.removed);
+        let mut refreshed = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for parent in hint.parents {
+            if !contains(&parent, &root, flavor)
+                || scan.iter().any(|base| contains(&parent, base, flavor))
+                || !seen.insert(flavor.normalize(&parent))
+            {
+                continue;
+            }
+            if let Some(candidate) = self.files.inspect(&parent)? {
+                refreshed.push(candidate);
+            }
+        }
+        let mut job = Job::delta(root, scan, removed, refreshed, hint.events);
+        // Bursts coalesce: a delta that has not started absorbs the next one for the same root.
+        if let Some(back) = self.jobs.back_mut() {
+            if back.mergeable(&job.root, flavor) {
+                back.merge(job, flavor);
+                return Ok(());
+            }
+        }
+        job.validated = false;
+        self.jobs.push_back(job);
+        Ok(())
     }
     /// Request bounded recovery after policy changes or wake. Polling/replay always
     /// completes before cleanup, including across multiple event-source polls.
     pub fn reconcile(&mut self, root: &str) {
-        self.job(root.into(), root.into(), vec![], vec![]);
+        self.jobs.push_back(Job::full(root.into(), vec![], vec![]));
+    }
+    /// Replaces the scheduled requests of `obsolete` queue entries with `requests`, keeping retry state
+    /// while identity and deadline agree.
+    fn requeue(&mut self, obsolete: Vec<(Time, IdentityKey)>, requests: Vec<TrashRequest>) {
+        let mut old = BTreeMap::new();
+        for k in obsolete {
+            if let Some(e) = self.queue.remove(&k) {
+                self.positions.remove(&k.1);
+                old.insert(k.1, (k.0, e));
+            }
+        }
+        for request in requests {
+            let prior = old
+                .remove(&key(&request.candidate_identity))
+                .filter(|(_, e)| {
+                    e.request.candidate_identity == request.candidate_identity
+                        && e.request.scheduled_at == request.scheduled_at
+                });
+            let (at, failures) =
+                prior.map_or((request.scheduled_at, 0), |(at, e)| (at.0, e.failures));
+            self.enqueue(request, at, failures);
+        }
+    }
+    /// One bounded turn of an indexing job: at most one enumeration batch, then (once complete) the
+    /// decision pass, either over the whole root or over the delta only.
+    fn step(
+        &mut self,
+        mut job: Job,
+        now: f64,
+        policy: &PolicySnapshot,
+        report: &mut TickReport,
+    ) -> Result<(), String> {
+        let flavor = policy.settings.path_flavor;
+        let root = job.root.clone();
+        let scan_policy = ScanPolicy {
+            root: &root,
+            rules: &policy.rules,
+            overrides: &policy.overrides,
+            settings: &policy.settings,
+        };
+        let usable = |agent: &Self| {
+            agent
+                .snapshots
+                .get(&root)
+                .is_some_and(|index| index.matches(&scan_policy))
+        };
+        // An incremental pass needs a snapshot built under the current policy; otherwise recover fully.
+        if job.pending.is_some() && !job.validated {
+            if usable(self) {
+                job.validated = true;
+            } else {
+                job = Job::full(root.clone(), job.removed, job.events);
+            }
+        }
+        let enumerate = |agent: &mut Self, job: &mut Job, report: &mut TickReport| {
+            let batch = agent.index.next_batch(agent.limits.index_entries)?;
+            if batch.candidates.len() > agent.limits.index_entries.get() {
+                return Err("IndexSource exceeded batch limit".to_string());
+            }
+            report.indexed += batch.candidates.len();
+            job.candidates.extend(batch.candidates);
+            Ok(batch.complete)
+        };
+        let finished = if job.pending.is_none() {
+            if !job.started {
+                self.index.begin(&root)?;
+                job.started = true;
+            }
+            enumerate(self, &mut job, report)?
+        } else {
+            while job.current.is_none() {
+                let Some(path) = job.pending.as_mut().and_then(VecDeque::pop_front) else {
+                    break;
+                };
+                // A target that vanished since the hint is a removal, never a failed enumeration.
+                if self.files.inspect(&path)?.is_none() {
+                    job.removed.push(path);
+                } else {
+                    self.index.begin(&path)?;
+                    job.current = Some(path);
+                }
+            }
+            if job.current.is_some() && enumerate(self, &mut job, report)? {
+                let path = job.current.take().expect("current path");
+                let candidates = std::mem::take(&mut job.candidates);
+                job.scanned.push((path, candidates));
+            }
+            job.current.is_none() && job.pending.as_ref().is_none_or(VecDeque::is_empty)
+        };
+        if !finished {
+            self.jobs.push_front(job);
+            return Ok(());
+        }
+        let mut requests = Vec::new();
+        if job.pending.is_none() {
+            let source = Snapshot(std::mem::take(&mut job.candidates));
+            let decisions = scheduler::scan(
+                &source,
+                &mut self.store,
+                &At(now),
+                &scan_policy,
+                &job.events,
+                &job.removed,
+            )?;
+            for (candidate, decision) in source.0.iter().zip(decisions) {
+                requests.extend(schedule(decision, &candidate.identity, report));
+            }
+            self.store.replace_deadlines(&root, &requests)?;
+            self.snapshots
+                .insert(root.clone(), SnapshotIndex::build(source.0, &scan_policy));
+            let within = |path: &str, base: &str| contains(path, base, flavor);
+            let obsolete = self
+                .queue
+                .iter()
+                .filter(|(_, e)| within(&e.request.candidate_identity.path_hint, &root))
+                .map(|(k, _)| k.clone())
+                .collect();
+            self.requeue(obsolete, requests);
+        } else {
+            if !usable(self) {
+                // The policy moved while enumerating: the delta is meaningless, recover fully.
+                self.jobs
+                    .push_front(Job::full(root.clone(), job.removed, job.events));
+                return Ok(());
+            }
+            self.index.publish_delta(&job.removed, &job.refreshed)?;
+            let index = self.snapshots.get_mut(&root).expect("usable snapshot");
+            let outcome = scheduler::scan_delta(
+                index,
+                &mut self.store,
+                &At(now),
+                &scan_policy,
+                Delta {
+                    rescanned: std::mem::take(&mut job.scanned),
+                    removed: &job.removed,
+                    refreshed: std::mem::take(&mut job.refreshed),
+                    events: &job.events,
+                },
+            )?;
+            let mut evaluated = outcome.replaced;
+            for (identity, decision) in outcome.decisions {
+                requests.extend(schedule(decision, &identity, report));
+                evaluated.push(identity);
+            }
+            self.store.update_deadlines(&root, &evaluated, &requests)?;
+            let obsolete = evaluated
+                .iter()
+                .filter_map(|identity| {
+                    let k = key(identity);
+                    self.positions.get(&k).map(|at| (*at, k))
+                })
+                .collect();
+            self.requeue(obsolete, requests);
+        }
+        Ok(())
     }
     pub fn tick(&mut self, now: f64) -> Result<TickReport, String> {
         let result = self.tick_inner(now);
@@ -300,6 +664,7 @@ impl<
                 self.reconcile(root);
             }
         }
+        let mut hints: BTreeMap<String, Hints> = BTreeMap::new();
         for event in batch.events {
             let root = event
                 .root
@@ -322,36 +687,47 @@ impl<
             if !within(&path, &root) {
                 continue;
             }
-            let removed = match event.kind {
-                EventKind::Removed => vec![path.clone()],
-                EventKind::Renamed { from, .. } => {
-                    vec![from.to_str().ok_or("non-UTF-8 rename source")?.to_owned()]
-                }
-                _ => vec![],
-            };
-            // Replay uses fresh metadata time, never wake wall time as activity.
+            let hint = hints.entry(root).or_default();
+            // A hint is resolved against the filesystem as it is now: an existing target is re-enumerated
+            // (its subtree only), an absent one (removals, our own Trash moves, stale create/modify hints)
+            // leaves the snapshot. Replay uses fresh metadata time, never wake wall time, as activity.
             let candidate = self.files.inspect(&path)?;
-            let events = candidate
-                .as_ref()
-                .and_then(|c| c.timestamps.modified)
-                .map(|at| ActivityEvent {
-                    path: path.clone(),
-                    at,
-                })
-                .into_iter()
-                .collect();
-            // Removal hints (including our own Trash moves) and stale create/modify hints
-            // can name an absent item. Enumerating it would turn an expected removal into
-            // a partial-scan failure. Reconcile the root instead; only a complete scan may
-            // remove schedules, and missing/inaccessible managed roots still defer cleanup.
-            let scan_path = if candidate.is_some() {
-                path
-            } else {
-                root.clone()
-            };
-            self.job(root, scan_path, removed, events);
+            if let EventKind::Renamed { from, .. } = &event.kind {
+                let from = from.to_str().ok_or("non-UTF-8 rename source")?.to_owned();
+                hint.parents.push(parent_of(&from));
+                // A source that exists again is re-enumerated by its own hint; deleting its rows
+                // would discard the observations of the item that replaced it.
+                if self.files.inspect(&from)?.is_none() {
+                    hint.removed.push(from);
+                }
+            }
+            // Entries created, removed or renamed (or vanished before we looked) change the metadata of
+            // their parent directory itself, which a complete pass would also observe.
+            let entries_changed = candidate.is_none()
+                || matches!(
+                    event.kind,
+                    EventKind::Created | EventKind::Removed | EventKind::Renamed { .. }
+                );
+            match candidate {
+                Some(candidate) => {
+                    if let Some(at) = candidate.timestamps.modified {
+                        hint.events.push(ActivityEvent {
+                            path: path.clone(),
+                            at,
+                        });
+                    }
+                    hint.scan.push(path.clone());
+                }
+                None => hint.removed.push(path.clone()),
+            }
+            if entries_changed {
+                hint.parents.push(parent_of(&path));
+            }
         }
-        if let Some(mut job) = self.jobs.pop_front() {
+        for (root, hint) in hints {
+            self.delta_job(root, hint, flavor)?;
+        }
+        if let Some(job) = self.jobs.pop_front() {
             if !policy
                 .managed_roots
                 .iter()
@@ -365,105 +741,7 @@ impl<
                 report.pending_work = true;
                 return Ok(report);
             }
-            if !job.started {
-                self.index.begin(&job.path)?;
-                job.started = true;
-            }
-            let batch = self.index.next_batch(self.limits.index_entries)?;
-            if batch.candidates.len() > self.limits.index_entries.get() {
-                return Err("IndexSource exceeded batch limit".into());
-            }
-            report.indexed = batch.candidates.len();
-            job.candidates.extend(batch.candidates);
-            if !batch.complete {
-                self.jobs.push_front(job);
-            } else {
-                let snapshot = self
-                    .snapshots
-                    .entry(job.root.clone())
-                    .or_insert_with(|| Snapshot(vec![]));
-                snapshot.0.retain(|c| {
-                    !within(&c.identity.path_hint, &job.path)
-                        && !job.removed.iter().any(|p| within(&c.identity.path_hint, p))
-                });
-                snapshot.0.extend(job.candidates);
-                let decisions = scheduler::scan(
-                    snapshot,
-                    &mut self.store,
-                    &At(now),
-                    &ScanPolicy {
-                        root: &job.root,
-                        rules: &policy.rules,
-                        overrides: &policy.overrides,
-                        settings: &policy.settings,
-                    },
-                    &job.events,
-                    &job.removed,
-                )?;
-                let mut requests = Vec::new();
-                for (candidate, decision) in snapshot.0.iter().zip(decisions) {
-                    if decision.protected_descendant {
-                        continue;
-                    }
-                    let (source, scheduled_at, disposition) = match decision.resolution {
-                        Resolution::Scheduled(e) => (
-                            e.custom_override_id.map_or(
-                                ScheduledSource::Rule(e.rule_id),
-                                ScheduledSource::CustomOverride,
-                            ),
-                            e.scheduled_at,
-                            e.disposition,
-                        ),
-                        Resolution::CustomExpiry {
-                            override_id,
-                            expires_at,
-                            disposition,
-                        } => (
-                            ScheduledSource::CustomOverride(override_id),
-                            expires_at,
-                            disposition,
-                        ),
-                        _ => continue,
-                    };
-                    if disposition == Disposition::Preview {
-                        report.previewed += 1;
-                        continue;
-                    }
-                    if scheduled_at.is_finite() {
-                        requests.push(TrashRequest {
-                            candidate_identity: candidate.identity.clone(),
-                            source,
-                            scheduled_at,
-                        });
-                    }
-                }
-                self.store.replace_deadlines(&job.root, &requests)?;
-                let obsolete: Vec<_> = self
-                    .queue
-                    .iter()
-                    .filter(|(_, e)| within(&e.request.candidate_identity.path_hint, &job.root))
-                    .map(|(k, _)| k.clone())
-                    .collect();
-                // Preserve retry state when identity and deadline have not changed.
-                let mut old = BTreeMap::new();
-                for k in obsolete {
-                    if let Some(e) = self.queue.remove(&k) {
-                        self.positions.remove(&k.1);
-                        old.insert(k.1, (k.0, e));
-                    }
-                }
-                for request in requests {
-                    let prior = old
-                        .remove(&key(&request.candidate_identity))
-                        .filter(|(_, e)| {
-                            e.request.candidate_identity == request.candidate_identity
-                                && e.request.scheduled_at == request.scheduled_at
-                        });
-                    let (at, failures) =
-                        prior.map_or((request.scheduled_at, 0), |(at, e)| (at.0, e.failures));
-                    self.enqueue(request, at, failures);
-                }
-            }
+            self.step(job, now, &policy, &mut report)?;
         }
         report.pending_work = batch.pending_work || !self.jobs.is_empty();
         if report.pending_work || policy.globally_paused {
@@ -499,7 +777,10 @@ impl<
                 files: &mut self.files,
                 audit: &mut self.audit,
                 clock: &At(now),
-                gate: &mut Permit,
+                gate: &mut Permit {
+                    interlock: self.update_interlock.clone(),
+                    _guard: None,
+                },
                 hydrator: Some(&mut hydrator),
                 sizes: &mut NoSizes,
                 walk_limits: DescendantWalkLimits::default(),
@@ -511,12 +792,7 @@ impl<
                 Ok(Outcome::MovedToTrash { .. }) | Err(ExecutionError::MovedButAuditFailed { .. })
             ) {
                 for snapshot in self.snapshots.values_mut() {
-                    snapshot.0.retain(|candidate| {
-                        !within(
-                            &candidate.identity.path_hint,
-                            &request.candidate_identity.path_hint,
-                        )
-                    });
+                    snapshot.remove_subtree(&request.candidate_identity.path_hint);
                 }
             }
             let (retry, base) = match result {
