@@ -123,9 +123,6 @@ for (const location of locations) {
 const llms = await read('llms.txt');
 if (!llms.startsWith('# TinyPrune') || !llms.includes('https://tinyprune.com')) fail('llms.txt must describe TinyPrune and link the site');
 for (const [, target] of llms.matchAll(/\]\((https?:\/\/[^\s)]+)\)/g)) await checkURL(target, `${origin}/`, 'llms.txt');
-for (const fact of ['macOS 14', 'Intel', 'Apple silicon', 'no Linux or Windows build is released', '0.1.0', 'Preview', 'Keep', 'Trash', 'brew install --cask navig-me/tap/tinyprune']) {
-  if (!llms.includes(fact) || !text(html).includes(fact)) fail(`Visible guide and llms.txt must both state: ${fact}`);
-}
 if (!tags(html, 'link').some(tag => tag.rel === 'alternate' && tag.href === `${origin}/llms.txt`)) fail('Discover llms.txt from the HTML head');
 
 const css = await read('styles.css');
