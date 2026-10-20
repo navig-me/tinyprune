@@ -7,7 +7,7 @@ This supplementary summary links to the same public, static HTML documentation p
 ## Key facts
 
 - Requires macOS 14 or later. Releases are universal (Intel and Apple silicon). Current early releases are not Developer ID signed or notarized; direct downloads require first-launch approval. Check [GitHub Releases](https://github.com/navig-me/tinyprune/releases) for the latest version.
-- The released product is the Swift macOS app, Finder extension and CLI. Rust cross-platform work is unreleased; no Linux or Windows build is released. Do not present development artifacts as supported downloads. See [cross-platform status](https://docs.tinyprune.com/#cross-platform) and the linked engineering status matrix for native verification limits.
+- This guide documents the Swift macOS app, Finder extension and CLI. The Rust workspace provides the cross-platform core and runtime for Linux and Windows. Check [GitHub Releases](https://github.com/navig-me/tinyprune/releases) for platform-specific downloads and installation requirements. See [cross-platform downloads and verification](https://docs.tinyprune.com/#cross-platform) and the linked engineering status matrix for native verification limits.
 - Items only move to the macOS Trash. TinyPrune never permanently deletes files. Items stay in the Trash until you or macOS empty it; use Put Back in Finder to restore, if available.
 - Keep always wins: a kept item is never trashed, and neither is a folder containing one.
 - Preview runs matching and scheduling without trashing anything. Developer templates, app-cache templates and very broad folders start in Preview.
@@ -59,5 +59,5 @@ All use modification age, produce ordinary editable Trash rules, and start in Pr
 - [CLI exit codes](https://docs.tinyprune.com/#exit-codes)
 - [Rule configuration commands](https://docs.tinyprune.com/#manage-rules-as-code)
 - [Updates](https://docs.tinyprune.com/#updates)
-- [Cross-platform status: unreleased development work](https://docs.tinyprune.com/#cross-platform)
+- [Cross-platform downloads and verification](https://docs.tinyprune.com/#cross-platform)
 - [FAQ](https://docs.tinyprune.com/#faq)

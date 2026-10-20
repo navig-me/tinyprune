@@ -4,7 +4,7 @@
 
 ## Product facts
 
-- Released app: macOS 14 or later, Intel and Apple silicon. No Windows or Linux build is released; the Rust cross-platform implementation is unreleased development.
+- The Swift macOS app requires macOS 14 or later, on Intel and Apple silicon. The Rust workspace provides the cross-platform core and runtime for Linux and Windows. Check [GitHub Releases](https://github.com/navig-me/tinyprune/releases) for platform-specific downloads and installation requirements, and the [platform verification guide](https://docs.tinyprune.com/#cross-platform) for recorded native checks.
 - Price: free, open source under the MIT license; no subscription.
 - Normal cleanup moves files to Trash, never permanent deletion.
 - Keep takes precedence over other rules and protects folders containing kept items. Keep matches by item identity and falls back to the recorded path.

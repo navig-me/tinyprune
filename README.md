@@ -6,7 +6,7 @@
 
 TinyPrune is a free, MIT-licensed macOS app for automatic file cleanup with expiry rules. Choose folders, preview which downloads, screenshots or developer artifacts will expire, and protect important items with Keep. Eligible items move to **macOS Trash**, never permanent deletion.
 
-**Available for macOS 14+ on Intel and Apple silicon.** Linux and Windows work is in development and unreleased; see [cross-platform status](#cross-platform-core-in-development).
+**macOS 14+ on Intel and Apple silicon.** For Windows and Linux builds, platform-specific installation details, and release notes, see [GitHub Releases](https://github.com/navig-me/tinyprune/releases) and the [cross-platform core](#cross-platform-core).
 
 <p align="center"><a href="https://tinyprune.com"><picture><source media="(prefers-color-scheme: dark)" srcset="website/assets/screens/preview-dark.png"><img src="website/assets/screens/preview-light.png" alt="TinyPrune Preview showing which files match a rule, when they expire and why" width="900"></picture></a></p>
 
@@ -83,11 +83,11 @@ open .build/package/TinyPrune.app
 
 Tests: see [AGENTS.md](AGENTS.md#running-tests). Architecture and release process: [PLAN.md](PLAN.md), [ADRs/](ADRs), [.github/DEPLOYMENT.md](.github/DEPLOYMENT.md).
 
-## Cross-platform core (in development)
+## Cross-platform core
 
-TinyPrune remains a macOS-only product. The Rust effort is internal and unreleased: **no Linux or Windows build is released**, no installer exists, and the macOS app described above is the unchanged Swift implementation. Swift remains the behavioral reference; shared golden fixtures pin parity ([ADR 0010](ADRs/0010-cross-platform-core-and-golden-fixtures.md)). The Rust runtime decisions are in [ADR 0011](ADRs/0011-rust-runtime-store-scan-ipc-daemon-cli-ui.md).
+The macOS app described above uses Swift. The Rust workspace provides the cross-platform core and runtime for Linux and Windows. See [GitHub Releases](https://github.com/navig-me/tinyprune/releases) for platform-specific downloads and installation requirements. Swift remains the behavioral reference; shared golden fixtures pin parity ([ADR 0010](ADRs/0010-cross-platform-core-and-golden-fixtures.md)). The Rust runtime decisions are in [ADR 0011](ADRs/0011-rust-runtime-store-scan-ipc-daemon-cli-ui.md).
 
-The Rust workspace in [`rust/`](rust/README.md) has crates `core`, `unix`, `windows`, `watch` (Linux inotify, Windows `ReadDirectoryChangesW`), `agent`, `store` (SQLite), `scan`, `ipc` (length-prefixed JSON over a Unix socket or named pipe; not Swift-XPC compatible), `daemon` (`tinyprune-agentd`) and `cli` (`tinyprune`), plus a Tauri UI in a separate workspace (`rust/ui`). All of it is development work.
+The Rust workspace in [`rust/`](rust/README.md) has crates `core`, `unix`, `windows`, `watch` (Linux inotify, Windows `ReadDirectoryChangesW`), `agent`, `store` (SQLite), `scan`, `ipc` (length-prefixed JSON over a Unix socket or named pipe; not Swift-XPC compatible), `daemon` (`tinyprune-agentd`) and `cli` (`tinyprune`), plus a Tauri UI in a separate workspace (`rust/ui`).
 
 | Component | Linux | Windows | macOS (Rust) |
 |---|---|---|---|
@@ -97,7 +97,7 @@ The Rust workspace in [`rust/`](rust/README.md) has crates `core`, `unix`, `wind
 | Agent engine | tests run in CI | tests run in CI | tests run |
 | Store, scan, IPC, daemon, CLI | never executed | never executed (named pipes cross-checked only) | tests run on the development Mac |
 | UI | never run | never run | frontend tests only (9 Node tests); no webview run |
-| Installers/packaging | unsigned development archive scripts, never run on Linux/systemd; nothing shipped | unsigned development archive scripts, never run or parse-checked; nothing shipped | not applicable |
+| Installers/packaging | archive scripts not executed on Linux/systemd in the recorded verification | archive scripts not executed or parse-checked in the recorded verification | not applicable |
 
 “Tests run in CI” means they passed on the pull request's last pushed commit; store, scan, IPC, daemon, CLI, UI and the Windows watcher were added after it and have no CI result yet. The working tree's `ci.yml` additionally configures, but has not yet run on GitHub, a release build plus an end-to-end smoke of the real `tinyprune-agentd` and `tinyprune` binaries (`rust/tests-e2e`), a non-gating 100k-entry benchmark, and a Linux job running the UI's frontend tests and a Tauri compile check. Restart-stable item identity (volume UUID/serial, inode or file ID, creation time) is implemented and tested on the development Mac only. Measured on the development Mac only: `tinyprune-scan` traversed 50,101 entries at 35,761 entries/s; nothing was measured on Linux or Windows. Not verified: real inotify events, the Windows watcher, named pipes, Linux/Windows UI, installers, performance on those systems, and accessibility (no audit, no screen reader run). The full matrix and caveats are in [rust/README.md](rust/README.md#status-matrix).
 

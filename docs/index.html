@@ -75,10 +75,10 @@
               <li><a href="#install">Install and approve the background agent</a>, then <a href="#preview">review your first rule in Preview</a>.</li>
               <li><a href="#templates">Choose a cleanup template</a> for Downloads, developer output, caches, or agent logs.</li>
               <li><a href="#rules">Understand matching and Keep</a>, or <a href="#cli">use the command line and rule configuration</a>.</li>
-              <li><a href="#safety">Understand safety and restoring from Trash</a>, <a href="#updates">updates</a>, and <a href="#cross-platform">unreleased platform work</a>.</li>
+              <li><a href="#safety">Understand safety and restoring from Trash</a>, <a href="#updates">updates</a>, and <a href="#cross-platform">platform-specific downloads and verification</a>.</li>
             </ul>
           </nav>
-          <p>This guide covers the Swift macOS app, Finder extension, and CLI. No Linux or Windows build is released. <a href="https://docs.tinyprune.com/llms.txt">Plain-text facts and documentation links</a> are available for readers and tools; the full guide below is readable without JavaScript.</p>
+          <p>This guide covers the Swift macOS app, Finder extension, and CLI. For Windows and Linux downloads and installation requirements, see <a href="https://github.com/navig-me/tinyprune/releases">GitHub Releases</a> and the <a href="#cross-platform">cross-platform section</a>. <a href="https://docs.tinyprune.com/llms.txt">Plain-text facts and documentation links</a> are available for readers and tools; the full guide below is readable without JavaScript.</p>
           <p class="sample-link"><a href="https://tinyprune.com#how-it-works">Try the interactive sample on tinyprune.com <svg class="icon" aria-hidden="true"><use href="assets/icons.svg#arrow-right"></use></svg></a></p>
         </div>
         <section id="install">
@@ -214,8 +214,8 @@ tinyprune config export</code></pre>
           <p>For implementation details, read the <a href="https://github.com/navig-me/tinyprune/blob/main/AGENTS.md">contributor guide</a> and <a href="https://github.com/navig-me/tinyprune/blob/main/PLAN.md">release plan</a>. Report problems or suggest improvements on <a href="https://github.com/navig-me/tinyprune/issues">GitHub</a>.</p>
         </section>
         <section id="cross-platform">
-          <h2 id="cross-platform-title">Cross-platform status (in development)</h2>
-          <p>TinyPrune remains a macOS-only product, and the macOS app is the Swift implementation. Linux and Windows work is an unreleased engineering effort: <strong>no Linux or Windows build is released</strong> and there is no installer.</p>
+          <h2 id="cross-platform-title">Cross-platform downloads and verification</h2>
+          <p>The macOS app uses Swift; the Rust workspace provides the cross-platform core and runtime for Linux and Windows. Check <a href="https://github.com/navig-me/tinyprune/releases">GitHub Releases</a> for platform-specific downloads, installation requirements, and release notes. The verification matrix below records checks actually performed; release availability and native verification are separate facts.</p>
           <p>The Rust workspace has crates <code>core</code>, <code>unix</code>, <code>windows</code>, <code>watch</code>, <code>agent</code>, <code>store</code>, <code>scan</code>, <code>ipc</code>, <code>daemon</code> (<code>tinyprune-agentd</code>) and <code>cli</code> (<code>tinyprune</code>), plus a Tauri UI in a separate workspace. Swift is the reference for 577 golden cases across 13 JSONL files. The IPC protocol is length-prefixed JSON over a Unix socket or Windows named pipe and is not compatible with the macOS XPC protocol.</p>
           <div class="table-wrap" tabindex="0" role="region" aria-label="Rust component verification status"><table><thead><tr><th scope="col">Component</th><th scope="col">Linux</th><th scope="col">Windows</th><th scope="col">macOS (Rust)</th></tr></thead><tbody>
             <tr><td>Core, 577 golden cases</td><td>Tests run in CI</td><td>Tests run in CI</td><td>Tests run in CI and locally</td></tr>
@@ -224,7 +224,7 @@ tinyprune config export</code></pre>
             <tr><td>Agent engine</td><td>Tests run in CI</td><td>Tests run in CI</td><td>Tests run</td></tr>
             <tr><td>Store, scan, IPC, daemon, CLI</td><td>Never executed</td><td>Never executed (named pipes cross-checked only)</td><td>Tests run on the development Mac</td></tr>
             <tr><td>UI</td><td>Never run</td><td>Never run</td><td>9 Node frontend tests; no webview run</td></tr>
-            <tr><td>Installers and packaging</td><td>Unsigned development archive scripts, never run on Linux or systemd; nothing shipped</td><td>Unsigned development archive scripts, never run or parse-checked; nothing shipped</td><td>Not applicable</td></tr>
+            <tr><td>Installers and packaging</td><td>Archive scripts not executed on Linux or systemd in the recorded verification</td><td>Archive scripts not executed or parse-checked in the recorded verification</td><td>Not applicable</td></tr>
           </tbody></table></div>
           <p>“Tests run in CI” means they passed on the pull request's last pushed commit. The store, scan, IPC, daemon, CLI, UI and the Windows watcher were added afterwards and have no CI result yet. An end-to-end smoke of the real agent and CLI, a non-gating benchmark and a UI check are configured in CI but have not yet run on GitHub. Restart-stable item identity is implemented and tested on the development Mac only. The only measurement is on one development Mac: <code>tinyprune-scan</code> traversed 50,101 entries at 35,761 entries per second. Not verified: real inotify events, the Windows watcher, named pipes, Linux and Windows UI, installers, performance on those systems, and accessibility (no audit and no screen reader run).</p>
           <p>Known limits: the Rust daemon's config import and export are POSIX-only, so Windows returns an error. macOS has no native Rust watcher. POSIX rename and Windows Shell cannot atomically condition a move on identity. Items on volumes without a durable id, on filesystems without creation time, or on cloned volumes are re-observed after a restart. The same safety invariants apply: Trash only, metadata only, Keep wins, re-check before Trash, the store schedules but never authorizes, and Preview never trashes. The core's <code>platform_hidden</code> flag and explicit Windows <code>PathFlavor</code> have Rust-only tests and leave the 577 golden cases unchanged.</p>
