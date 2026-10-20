@@ -90,7 +90,7 @@ jobs:
           $dist = Join-Path $env:GITHUB_WORKSPACE 'dist'
           $pkgArgs = @('-BinDir', 'target\release', '-OutDir', $dist)
           if ('${{ steps.ui.outcome }}' -eq 'success') { $pkgArgs += @('-UiBin', 'ui\target\release\tinyprune-ui.exe') }
-          & packaging\windows\package.ps1 @args
+          & packaging\windows\package.ps1 @pkgArgs
           # Parse-check the install scripts on a real PowerShell.
           foreach ($s in 'install.ps1', 'uninstall.ps1') {
             $errors = $null
