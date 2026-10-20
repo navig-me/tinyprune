@@ -41,7 +41,20 @@ swift Scripts/package-app.swift
 open .build/package/TinyPrune.app
 ```
 
-Tests: see [CLAUDE.md](CLAUDE.md#running-tests). Architecture and release process: [PLAN.md](PLAN.md), [ADRs/](ADRs), [.github/DEPLOYMENT.md](.github/DEPLOYMENT.md).
+Tests: see [AGENTS.md](AGENTS.md#running-tests). Architecture and release process: [PLAN.md](PLAN.md), [ADRs/](ADRs), [.github/DEPLOYMENT.md](.github/DEPLOYMENT.md).
+
+## Cross-platform core (in development)
+
+TinyPrune remains a macOS-only product. The Rust effort is internal and unreleased: **no Linux or Windows build is released**. Swift remains the behavioral reference; shared golden fixtures pin parity ([ADR 0010](ADRs/0010-cross-platform-core-and-golden-fixtures.md)).
+
+| Status | Work |
+|---|---|
+| Implemented | Rust domain decisions, config codec, synchronous trait-based Trash coordinator, and scheduler scan decisions with injected `Clock`, `MetadataSource`, and `ObservationStore`; 577 golden cases across 13 JSONL files, including templates, broadness, roots, plans, and schedule |
+| Implemented, limited verification | `tinyprune-unix` FileAccess and freedesktop Trash (tested on macOS); `tinyprune-watch` inotify EventSource (cross-compile-checked only, never executed); `tinyprune-windows` Recycle Bin/IFileOperation adapter (compile-checked only, never executed) |
+| Implemented, with limits | `tinyprune-agent` synchronous deterministic engine: bounded indexing, event handling, execution, cancellation/resume, deadline queue, per-item backoff, and restart recovery; 12 tests including a real Unix temporary-tree Trash move |
+| Not started | Durable Rust stores, production metadata enumerator, daemon/IPC, UIs and packaging; native Windows/Linux execution |
+
+The Rust engine is not a standalone daemon. Embedding must supply durable stores, a production metadata enumerator, daemon/IPC hosting, and pausing during update installation. Index enumeration and per-tick event/execution work are bounded; full snapshot decision evaluation and retained metadata grow with root size. The core adds a `platform_hidden` candidate flag and explicit Windows `PathFlavor`, covered by Rust-only tests with no Swift counterpart. Default `Posix` behavior leaves the 577 shared golden cases unchanged; the config codec remains POSIX. POSIX rename and Windows Shell cannot atomically condition a move on identity; the crate READMEs document these race boundaries. The existing `rust-core` CI matrix runs workspace tests and Clippy on Ubuntu/Windows/macOS, including target-applicable crate tests; configured CI is not evidence of native execution. See [rust/README.md](rust/README.md) for boundaries and contributor commands.
 
 ## License
 

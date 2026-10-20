@@ -19,6 +19,10 @@ It does not require an account.
 
 It does not need to inspect file contents for normal operation.
 
+## Cross-platform status
+
+The Rust workspace is an in-development, unreleased engineering effort ([ADR 0010](ADRs/0010-cross-platform-core-and-golden-fixtures.md)). It does not change this macOS product contract. No Linux or Windows build is released. Its shared Swift-reference contract has 577 golden cases across 13 JSONL files, including templates, broadness, roots, plans, and schedule. The core now includes scheduler scan decisions with injected Clock/MetadataSource/ObservationStore; `tinyprune-unix` supplies FileAccess/freedesktop Trash (tested on macOS), `tinyprune-watch` supplies inotify EventSource (cross-compile-checked only, never executed), and `tinyprune-windows` supplies Recycle Bin/IFileOperation access (compile-checked only, never executed). Agent run loop, IPC, Linux/Windows UI and packaging, and real-OS watcher/Windows execution are not started. Scheduler scope excludes watcher transport, batching/cancellation, retry/backoff, and the run loop. Windows direct-item hidden attributes and POSIX-oriented core path normalization need agent integration; POSIX/Shell identity-conditional move limits are documented in crate READMEs. Workspace CI and fixture parity are not end-to-end platform support.
+
 ---
 
 # 1. Product concept

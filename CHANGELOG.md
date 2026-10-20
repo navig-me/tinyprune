@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Internal engineering only, with no user-facing product change: expand the Swift-reference golden contract to 577 cases in 13 files, including templates, broadness, roots, plans, and schedule. Add Rust scheduler scan decisions with injected Clock/MetadataSource/ObservationStore, `tinyprune-unix` FileAccess and freedesktop Trash (tested on macOS), `tinyprune-watch` inotify EventSource (cross-compile-checked only, never executed), and `tinyprune-windows` Recycle Bin/IFileOperation access (compile-checked only, never executed). The existing `rust-core` CI job runs workspace tests and Clippy on Ubuntu, Windows, and macOS, including applicable new crates; configured CI is not native execution evidence.
+- Add `tinyprune-agent`, a synchronous deterministic engine for bounded indexing, events, execution, cancellation/resume, deadline queuing, per-item backoff, and restart recovery, with 12 tests including a real Unix temporary-tree Trash move. Full snapshot decision evaluation and retained metadata still grow with root size. Embedding must supply durable stores, a production metadata enumerator, daemon/IPC hosting, and pausing during update installation.
+- Add the core's additive `platform_hidden` candidate flag and explicit Windows `PathFlavor`, covered by Rust-only tests with no Swift counterpart. Default `Posix` leaves the 577 shared golden cases unchanged; the config codec remains POSIX.
+- Cross-platform work remains in development and unreleased; no Linux or Windows build is released. Durable Rust stores, the production enumerator, daemon/IPC, UIs, packaging, and native Windows/Linux execution are not started. POSIX rename and Windows Shell cannot atomically condition moves on identity (see the crate READMEs).
+
 ## 0.1.13 - 2026-10-13
 
 - Preserve first-observed deadlines through parent-folder renames and restarts. Replayed filesystem hints reconcile durable timestamps and metadata rather than restarting inactivity timers at replay time.

@@ -1,0 +1,40 @@
+{"name":"star matches within a segment","op":"glob","input":{"pattern":"*.zip","relativePath":"new.zip"},"expected":{"matches":true}}
+{"name":"slashless pattern matches basename at any depth","op":"glob","input":{"pattern":"*.zip","relativePath":"archive/old.zip"},"expected":{"matches":true}}
+{"name":"slashless pattern tests name not path","op":"glob","input":{"pattern":"*.zip","relativePath":"a.zip/readme"},"expected":{"matches":false}}
+{"name":"star does not cross slash in anchored pattern","op":"glob","input":{"pattern":"src/*.c","relativePath":"src/x/a.c"},"expected":{"matches":false}}
+{"name":"anchored star single level","op":"glob","input":{"pattern":"src/*.c","relativePath":"src/a.c"},"expected":{"matches":true}}
+{"name":"double star slash matches zero directories","op":"glob","input":{"pattern":"**/node_modules","relativePath":"node_modules"},"expected":{"matches":true}}
+{"name":"double star slash matches nested","op":"glob","input":{"pattern":"**/node_modules","relativePath":"a/b/node_modules"},"expected":{"matches":true}}
+{"name":"double star slash rejects suffix mismatch","op":"glob","input":{"pattern":"**/node_modules","relativePath":"a/node_modules_x"},"expected":{"matches":false}}
+{"name":"mid double star zero dirs","op":"glob","input":{"pattern":"a/**/b","relativePath":"a/b"},"expected":{"matches":true}}
+{"name":"mid double star many dirs","op":"glob","input":{"pattern":"a/**/b","relativePath":"a/x/y/b"},"expected":{"matches":true}}
+{"name":"mid double star requires directory boundary","op":"glob","input":{"pattern":"a/**/b","relativePath":"a/xb"},"expected":{"matches":false}}
+{"name":"trailing double star matches descendants","op":"glob","input":{"pattern":"build/**","relativePath":"build/x/y"},"expected":{"matches":true}}
+{"name":"trailing double star needs the slash","op":"glob","input":{"pattern":"build/**","relativePath":"build"},"expected":{"matches":false}}
+{"name":"double star not followed by slash spans slashes","op":"glob","input":{"pattern":"a/**b","relativePath":"a/xx/b"},"expected":{"matches":true}}
+{"name":"lone double star is basename mode","op":"glob","input":{"name":"y","pattern":"**","relativePath":"x/y"},"expected":{"matches":true}}
+{"name":"leading slash anchors to scope root","op":"glob","input":{"pattern":"/build","relativePath":"build"},"expected":{"matches":true}}
+{"name":"leading slash does not match nested","op":"glob","input":{"pattern":"/build","relativePath":"src/build"},"expected":{"matches":false}}
+{"name":"double leading slash keeps one slash","op":"glob","input":{"pattern":"//a","relativePath":"a"},"expected":{"matches":false}}
+{"name":"trailing slash is literal","op":"glob","input":{"pattern":"build/","relativePath":"build"},"expected":{"matches":false}}
+{"name":"question mark matches one char","op":"glob","input":{"pattern":"file?.txt","relativePath":"file1.txt"},"expected":{"matches":true}}
+{"name":"question mark does not match two chars","op":"glob","input":{"pattern":"file?.txt","relativePath":"file10.txt"},"expected":{"matches":false}}
+{"name":"question mark does not match slash","op":"glob","input":{"name":"a/b","pattern":"a?b","relativePath":"a/b"},"expected":{"matches":false}}
+{"name":"question mark matches newline","op":"glob","input":{"pattern":"a?b","relativePath":"a\nb"},"expected":{"matches":true}}
+{"name":"trailing double star spans newline","op":"glob","input":{"pattern":"a/**","relativePath":"a/b\nc"},"expected":{"matches":true}}
+{"name":"star matches leading dot","op":"glob","input":{"pattern":"*","relativePath":".hidden"},"expected":{"matches":true}}
+{"name":"matching is case sensitive","op":"glob","input":{"pattern":"*.ZIP","relativePath":"a.zip"},"expected":{"matches":false}}
+{"name":"regex plus is literal","op":"glob","input":{"pattern":"a+b.txt","relativePath":"aab.txt"},"expected":{"matches":false}}
+{"name":"regex plus literal positive","op":"glob","input":{"pattern":"a+b.txt","relativePath":"a+b.txt"},"expected":{"matches":true}}
+{"name":"dot is literal","op":"glob","input":{"pattern":"a.txt","relativePath":"aXtxt"},"expected":{"matches":false}}
+{"name":"parentheses are literal","op":"glob","input":{"pattern":"(x).log","relativePath":"(x).log"},"expected":{"matches":true}}
+{"name":"character class is literal","op":"glob","input":{"pattern":"a[1].txt","relativePath":"a1.txt"},"expected":{"matches":false}}
+{"name":"character class literal positive","op":"glob","input":{"pattern":"a[1].txt","relativePath":"a[1].txt"},"expected":{"matches":true}}
+{"name":"brace alternation is literal","op":"glob","input":{"pattern":"{a,b}.txt","relativePath":"a.txt"},"expected":{"matches":false}}
+{"name":"backslash is literal","op":"glob","input":{"pattern":"a\\b","relativePath":"a\\b"},"expected":{"matches":true}}
+{"name":"dollar and caret are literal","op":"glob","input":{"pattern":"^a$","relativePath":"^a$"},"expected":{"matches":true}}
+{"name":"question mark matches precomposed char","op":"glob","input":{"pattern":"caf?","relativePath":"café"},"expected":{"matches":true}}
+{"name":"question mark does not match decomposed char (two scalars)","op":"glob","input":{"pattern":"caf?","relativePath":"café"},"expected":{"matches":false}}
+{"name":"no unicode normalization precomposed pattern vs decomposed name","op":"glob","input":{"pattern":"café","relativePath":"café"},"expected":{"matches":false}}
+{"name":"no unicode normalization decomposed pattern vs decomposed name","op":"glob","input":{"pattern":"café","relativePath":"café"},"expected":{"matches":true}}
+{"name":"astral char counts as one for question mark","op":"glob","input":{"pattern":"a?b","relativePath":"a😀b"},"expected":{"matches":true}}

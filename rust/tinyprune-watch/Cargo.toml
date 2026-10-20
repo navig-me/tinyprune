@@ -1,0 +1,10 @@
+[package]
+name = "tinyprune-watch"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "In-development metadata-only event sources for TinyPrune"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# std has no inotify or poll API; libc provides the Linux ABI without a runtime.
+libc = "0.2"

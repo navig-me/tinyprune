@@ -6,6 +6,21 @@ Deliver the deterministic, local-first macOS v1 in `spec.md`: lifecycle rules sc
 
 **Release target:** macOS 14+ (Sonoma) on Apple Silicon and Intel, pending a first compatibility spike for the Finder Sync extension and chosen Sparkle release.
 
+## Cross-platform core (in development)
+
+This is an unreleased engineering effort under [ADR 0010](ADRs/0010-cross-platform-core-and-golden-fixtures.md), not an expansion of the macOS product contract. **No Linux or Windows build is released.** Swift remains the reference implementation; passing core fixtures alone does not establish platform safety or end-to-end parity.
+
+| Status | Work |
+|---|---|
+| Implemented | Rust domain decisions, config codec, synchronous trait-based Trash coordinator, and scheduler scan decisions with injected `Clock`, `MetadataSource`, and `ObservationStore`; 577 golden cases across 13 JSONL files, including templates, broadness, roots, plans, and schedule |
+| Implemented, limited verification | `tinyprune-unix` FileAccess and freedesktop Trash (tested on macOS); `tinyprune-watch` inotify EventSource (cross-compile-checked only, never executed); `tinyprune-windows` Recycle Bin/IFileOperation adapter (compile-checked only, never executed) |
+| Implemented, with limits | `tinyprune-agent` synchronous deterministic engine: bounded indexing, event handling, execution, cancellation/resume, deadline queue, per-item backoff, and restart recovery; 12 tests including a real Unix temporary-tree Trash move |
+| Not started | Durable Rust stores, production metadata enumerator, daemon/IPC, UIs and packaging; native Windows/Linux execution |
+
+The agent engine requires embedding-supplied durable stores, a production metadata enumerator, daemon/IPC hosting, and pausing during update installation. Index enumeration and per-tick event/execution work are bounded, but full snapshot decision evaluation and retained metadata grow with root size. The core's additive `platform_hidden` candidate flag and explicit Windows `PathFlavor` have Rust-only tests, with no Swift counterpart. Default `Posix` behavior leaves all 577 shared golden cases unchanged; the config codec remains POSIX. POSIX rename and Windows Shell cannot atomically condition a move on identity; see the adapter READMEs before treating either as a production executor.
+
+Keep platform I/O outside `tinyprune-core`; every adapter must preserve the product safety invariants. The existing `rust-core` CI job runs workspace tests and Clippy on Ubuntu/Windows/macOS, including applicable adapters, but configured CI is not native acceptance evidence. The macOS delivery plan below remains unchanged. See [rust/README.md](rust/README.md) and [AGENTS.md](AGENTS.md#rust-core-and-shared-golden-fixtures) for the shared verification contract.
+
 ## Principles and non-negotiable invariants
 
 1. The database schedules work; it never authorizes a Trash operation. Re-evaluate identity, permissions, current rule resolution, protection, pause state, deadline, and volume availability immediately before every move.

@@ -1,0 +1,34 @@
+{"name":"normalize plain","op":"path.normalize","input":{"path":"/a/b"},"expected":{"path":"/a/b"}}
+{"name":"normalize trailing slash","op":"path.normalize","input":{"path":"/a/b/"},"expected":{"path":"/a/b"}}
+{"name":"normalize double slash","op":"path.normalize","input":{"path":"/a//b"},"expected":{"path":"/a/b"}}
+{"name":"normalize dot segment","op":"path.normalize","input":{"path":"/a/./b"},"expected":{"path":"/a/b"}}
+{"name":"normalize trailing dot","op":"path.normalize","input":{"path":"/a/b/."},"expected":{"path":"/a/b"}}
+{"name":"normalize dotdot","op":"path.normalize","input":{"path":"/a/b/../c"},"expected":{"path":"/a/c"}}
+{"name":"normalize trailing dotdot","op":"path.normalize","input":{"path":"/a/b/.."},"expected":{"path":"/a"}}
+{"name":"normalize dotdot above root","op":"path.normalize","input":{"path":"/../a"},"expected":{"path":"/a"}}
+{"name":"normalize root","op":"path.normalize","input":{"path":"/"},"expected":{"path":"/"}}
+{"name":"normalize double root","op":"path.normalize","input":{"path":"//"},"expected":{"path":"/"}}
+{"name":"normalize unicode preserved","op":"path.normalize","input":{"path":"/Café/café"},"expected":{"path":"/Café/café"}}
+{"name":"normalize spaces preserved","op":"path.normalize","input":{"path":"/a b/c"},"expected":{"path":"/a b/c"}}
+{"name":"normalize percent not decoded","op":"path.normalize","input":{"path":"/a%20b"},"expected":{"path":"/a%20b"}}
+{"name":"normalize case preserved","op":"path.normalize","input":{"path":"/Dev/Foo"},"expected":{"path":"/Dev/Foo"}}
+{"name":"normalize does not resolve /private/tmp symlink alias","note":"Purely lexical: symlinks and firmlink aliases are never resolved, so /tmp/x and /private/tmp/x are different scopes.","op":"path.normalize","input":{"path":"/private/tmp/x"},"expected":{"path":"/private/tmp/x"}}
+{"name":"normalize does not resolve /private/var symlink alias","note":"Purely lexical, see above.","op":"path.normalize","input":{"path":"/private/var/x"},"expected":{"path":"/private/var/x"}}
+{"name":"normalize private other untouched","op":"path.normalize","input":{"path":"/private/other/x"},"expected":{"path":"/private/other/x"}}
+{"name":"scope child","op":"scope.relative","input":{"path":"/Dev/a","scope":{"path":"/Dev","recursive":true}},"expected":{"relative":"a"}}
+{"name":"scope grandchild recursive","op":"scope.relative","input":{"path":"/Dev/a/b","scope":{"path":"/Dev","recursive":true}},"expected":{"relative":"a/b"}}
+{"name":"scope grandchild non-recursive","op":"scope.relative","input":{"path":"/Dev/a/b","scope":{"path":"/Dev","recursive":false}},"expected":{"relative":null}}
+{"name":"scope child non-recursive","op":"scope.relative","input":{"path":"/Dev/a","scope":{"path":"/Dev","recursive":false}},"expected":{"relative":"a"}}
+{"name":"scope root itself is not inside","op":"scope.relative","input":{"path":"/Dev","scope":{"path":"/Dev","recursive":true}},"expected":{"relative":null}}
+{"name":"scope sibling with shared prefix","op":"scope.relative","input":{"path":"/Dev2/x","scope":{"path":"/Dev","recursive":true}},"expected":{"relative":null}}
+{"name":"scope trailing slash normalized","op":"scope.relative","input":{"path":"/Dev/a","scope":{"path":"/Dev/","recursive":true}},"expected":{"relative":"a"}}
+{"name":"scope candidate dotdot normalized","op":"scope.relative","input":{"path":"/Dev/x/../y","scope":{"path":"/Dev","recursive":true}},"expected":{"relative":"y"}}
+{"name":"scope candidate escapes via dotdot","op":"scope.relative","input":{"path":"/Dev/../Other","scope":{"path":"/Dev","recursive":true}},"expected":{"relative":null}}
+{"name":"scope is case sensitive","op":"scope.relative","input":{"path":"/dev/x","scope":{"path":"/Dev","recursive":true}},"expected":{"relative":null}}
+{"name":"scope root rejected","op":"scope.relative","input":{"path":"/a","scope":{"path":"/","recursive":true}},"expected":{"error":"invalidScope"}}
+{"name":"scope normalizing to root rejected","op":"scope.relative","input":{"path":"/b","scope":{"path":"/a/..","recursive":true}},"expected":{"error":"invalidScope"}}
+{"name":"scope relative path rejected","op":"scope.relative","input":{"path":"/Dev/a","scope":{"path":"Dev","recursive":true}},"expected":{"error":"invalidScope"}}
+{"name":"scope blank rejected","op":"scope.relative","input":{"path":"/Dev/a","scope":{"path":"   ","recursive":true}},"expected":{"error":"invalidScope"}}
+{"name":"scope empty rejected","op":"scope.relative","input":{"path":"/Dev/a","scope":{"path":"","recursive":true}},"expected":{"error":"invalidScope"}}
+{"name":"scope matching ignores Unicode normalization","note":"hasPrefix and == on Swift Strings use canonical equivalence; the relative path is cut by grapheme-cluster count of the scope path.","op":"scope.relative","input":{"path":"/Café/x","scope":{"path":"/Café","recursive":true}},"expected":{"relative":"x"}}
+{"name":"scope matching normalization on a non-recursive grandchild","op":"scope.relative","input":{"path":"/Café/x/y","scope":{"path":"/Café","recursive":false}},"expected":{"relative":null}}

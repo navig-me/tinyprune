@@ -38,7 +38,7 @@ jobs:
           native=true
           if [[ -n "$base" && "$base" != 0000000000000000000000000000000000000000 ]] \
              && files="$(git diff --name-only "$base" "$GITHUB_SHA" 2>/dev/null)" && [[ -n "$files" ]]; then
-            if ! grep -qvE '^(website/|docs/|[^/]+\.md$|\.github/workflows/(deploy-pages|publish-update-feed|homebrew)\.yml$)' <<<"$files"; then
+            if ! grep -qvE '^(website/|docs/|rust/|[^/]+\.md$|\.github/workflows/(deploy-pages|publish-update-feed|homebrew)\.yml$)' <<<"$files"; then
               native=false
             fi
           fi
@@ -59,6 +59,27 @@ jobs:
           node-version: 22.14.0
       - name: Validate static site
         run: npm --prefix ${{ matrix.site }} run check
+
+  # The Rust core must reproduce the Swift reference exactly on every platform it will ship for (ADR 0010).
+  rust-core:
+    name: Rust core golden fixtures (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, windows-2022, macos-14]
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - name: Install pinned Rust toolchain
+        shell: bash
+        run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal --component clippy
+      - name: Golden fixtures
+        run: cargo test --locked
+      - name: Lint
+        run: cargo clippy --locked --all-targets -- -D warnings
 
   native:
     name: Native acceptance (${{ matrix.runner }})

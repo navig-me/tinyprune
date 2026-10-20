@@ -1,0 +1,30 @@
+{"name":"exact name specificity 2","op":"matcher.match","input":{"kind":"directory","matcher":{"names":["node_modules"]},"relativePath":"a/node_modules"},"expected":{"matches":true,"specificity":2}}
+{"name":"exact name beats glob when both match","op":"matcher.match","input":{"kind":"directory","matcher":{"globs":["node_*"],"names":["node_modules"]},"relativePath":"a/node_modules"},"expected":{"matches":true,"specificity":2}}
+{"name":"glob only specificity 1","op":"matcher.match","input":{"kind":"directory","matcher":{"globs":["node_*"]},"relativePath":"a/node_modules"},"expected":{"matches":true,"specificity":1}}
+{"name":"empty matcher matches everything with specificity 0","op":"matcher.match","input":{"kind":"file","matcher":{},"relativePath":"anything"},"expected":{"matches":true,"specificity":0}}
+{"name":"exact name is case sensitive","op":"matcher.match","input":{"kind":"directory","matcher":{"names":["Node_Modules"]},"relativePath":"node_modules"},"expected":{"matches":false,"specificity":null}}
+{"name":"exact name compares basename not path","op":"matcher.match","input":{"kind":"directory","matcher":{"names":["a/node_modules"]},"name":"node_modules","relativePath":"a/node_modules"},"expected":{"matches":false,"specificity":null}}
+{"name":"directory-only matcher rejects file","op":"matcher.match","input":{"kind":"file","matcher":{"kind":"directory","names":["build"]},"relativePath":"build"},"expected":{"matches":false,"specificity":null}}
+{"name":"file-only matcher rejects directory","op":"matcher.match","input":{"kind":"directory","matcher":{"globs":["*.log"],"kind":"file"},"relativePath":"x.log"},"expected":{"matches":false,"specificity":null}}
+{"name":"fileOrDirectory accepts file","op":"matcher.match","input":{"kind":"file","matcher":{"globs":["*.log"],"kind":"fileOrDirectory"},"relativePath":"x.log"},"expected":{"matches":true,"specificity":1}}
+{"name":"glob with slash uses relative path","op":"matcher.match","input":{"kind":"file","matcher":{"globs":["logs/*.log"]},"name":"a.log","relativePath":"logs/a.log"},"expected":{"matches":true,"specificity":1}}
+{"name":"glob with slash does not match other dir","op":"matcher.match","input":{"kind":"file","matcher":{"globs":["logs/*.log"]},"name":"a.log","relativePath":"other/a.log"},"expected":{"matches":false,"specificity":null}}
+{"name":"non-matching names and globs","op":"matcher.match","input":{"kind":"file","matcher":{"globs":["b*"],"names":["a"]},"relativePath":"c"},"expected":{"matches":false,"specificity":null}}
+{"name":"blank exact name rejected","op":"matcher.match","input":{"kind":"file","matcher":{"names":[" "]},"relativePath":"a"},"expected":{"error":"emptyMatcherPattern"}}
+{"name":"blank glob rejected","op":"matcher.match","input":{"kind":"file","matcher":{"globs":[""]},"relativePath":"a"},"expected":{"error":"emptyMatcherPattern"}}
+{"name":"valid rule","op":"rule.validate","input":{"rule":{"id":"11111111-1111-1111-1111-111111111111","matcher":{"names":["x"]},"name":"Ok","scope":{"path":"/Dev"}}},"expected":{"valid":true}}
+{"name":"rule empty name rejected","op":"rule.validate","input":{"rule":{"id":"11111111-1111-1111-1111-111111111111","matcher":{"names":["x"]},"name":"  ","scope":{"path":"/Dev"}}},"expected":{"error":"emptyRuleName"}}
+{"name":"rule zero lifetime rejected","op":"rule.validate","input":{"rule":{"id":"11111111-1111-1111-1111-111111111111","lifetime":0,"scope":{"path":"/Dev"}}},"expected":{"error":"invalidDuration"}}
+{"name":"rule negative lifetime rejected","op":"rule.validate","input":{"rule":{"id":"11111111-1111-1111-1111-111111111111","lifetime":-5,"scope":{"path":"/Dev"}}},"expected":{"error":"invalidDuration"}}
+{"name":"rule zero grace rejected","op":"rule.validate","input":{"rule":{"grace":0,"id":"11111111-1111-1111-1111-111111111111","scope":{"path":"/Dev"}}},"expected":{"error":"invalidDuration"}}
+{"name":"rule root scope rejected","op":"rule.validate","input":{"rule":{"id":"11111111-1111-1111-1111-111111111111","scope":{"path":"/"}}},"expected":{"error":"invalidScope"}}
+{"name":"identity equal when optional fields absent","op":"identity.equals","input":{"a":{"path":"/a","resource":"0102"},"b":{"path":"/b","resource":"0102"}},"expected":{"equal":true}}
+{"name":"identity differs by resource","op":"identity.equals","input":{"a":{"path":"/a","resource":"0102"},"b":{"path":"/a","resource":"0103"}},"expected":{"equal":false}}
+{"name":"identity differs by volume","op":"identity.equals","input":{"a":{"path":"/a","volume":"00000000-0000-0000-0000-000000000001"},"b":{"path":"/a","volume":"00000000-0000-0000-0000-000000000002"}},"expected":{"equal":false}}
+{"name":"identity creation time mismatch when both present","op":"identity.equals","input":{"a":{"created":100,"path":"/a"},"b":{"created":200,"path":"/a"}},"expected":{"equal":false}}
+{"name":"identity creation time one side missing","op":"identity.equals","input":{"a":{"created":100,"path":"/a"},"b":{"path":"/a"}},"expected":{"equal":true}}
+{"name":"identity generation mismatch when both present","op":"identity.equals","input":{"a":{"generation":1,"path":"/a"},"b":{"generation":2,"path":"/a"}},"expected":{"equal":false}}
+{"name":"identity generation one side missing","op":"identity.equals","input":{"a":{"generation":1,"path":"/a"},"b":{"path":"/a"}},"expected":{"equal":true}}
+{"name":"identity persistence flag","op":"identity.equals","input":{"a":{"path":"/a","persistent":false},"b":{"path":"/a","persistent":true}},"expected":{"equal":true}}
+{"name":"exact name matching ignores Unicode normalization","note":"Swift String equality is canonical-equivalence based, unlike glob (regex) matching; a port must normalize (or compare canonically) for exactNames but not for globs.","op":"matcher.match","input":{"kind":"file","matcher":{"names":["café"]},"relativePath":"café"},"expected":{"matches":true,"specificity":2}}
+{"name":"glob matching does not ignore Unicode normalization","op":"matcher.match","input":{"kind":"file","matcher":{"globs":["café"]},"relativePath":"café"},"expected":{"matches":false,"specificity":null}}

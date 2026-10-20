@@ -15,6 +15,8 @@ Read `spec.md` and `PLAN.md` before changing product behavior. `spec.md` is the 
 - CLI and Finder extension are clients of the agent through XPC. Do not duplicate rule evaluation or cleanup logic in frontends.
 - Do not add V2 agentic features, cloud sync, telemetry, subscriptions, system optimization, or content analysis.
 
+The cross-platform core is an in-development, unreleased engineering effort ([ADR 0010](ADRs/0010-cross-platform-core-and-golden-fixtures.md)), not a change to the macOS-only product contract. No Linux or Windows build is released. The same safety invariants apply identically to Rust: Trash only, metadata only, Keep wins, re-check immediately before Trash, and Preview never trashes.
+
 ## Architecture boundaries
 
 - `TinyPruneDomain`: pure deterministic types, validation, rule precedence, and explanations.
@@ -33,6 +35,7 @@ Use stable filesystem identity `(volume UUID, resource identifier, path hint)` r
 - Audit rule mutations, overrides, scheduling decisions, preview matches, safety skips, Trash success, and failures transactionally.
 - Explicitly handle renamed/replaced identities, stale bookmarks, missing files, revoked permissions, disconnected volumes, xattr/database disagreement, agent restarts, and protected descendants.
 - Do not add a dependency without a concrete platform gap. Pin tool and action versions.
+- Rust crate dependencies require a concrete need; commit resolved versions in `rust/Cargo.lock` and keep the toolchain pinned in `rust/rust-toolchain.toml`.
 
 ## UI direction
 
@@ -70,3 +73,45 @@ swift test --disable-xctest --enable-swift-testing -Xswiftc -F -Xswiftc $F -Xswi
 ```
 
 Add `-c release -Xswiftc -enable-testing --filter PhaseTwoBenchmarkTests` for the 100k benchmark. Also run `swift run TinyPruneDomainCheck`, `swift run TinyPruneEngineCheck`, and `swift run TinyPruneUISnapshots` (offscreen UI render and flow check).
+
+### Rust core and shared golden fixtures
+
+The Rust workspace lives in `rust/`:
+
+- `tinyprune-core`: synchronous, trait-based domain decisions, config handling, pre-Trash coordination, and scheduler scan decisions with injected `Clock`, `MetadataSource`, and `ObservationStore`; no platform I/O or process hosting.
+- `tinyprune-agent`: synchronous deterministic orchestration of bounded indexing, events, execution, cancellation/resume, deadline queue, per-item backoff, and restart recovery. Its 12 tests include a real Unix temporary-tree Trash move. Enumeration and per-tick event/execution budgets are bounded; complete snapshot evaluation and retained metadata grow with root size. Embedding must supply durable stores, a production metadata enumerator, daemon/IPC hosting, and pausing during update installation.
+- `tinyprune-unix`: FileAccess and freedesktop Trash (tested on macOS).
+- `tinyprune-watch`: inotify EventSource (cross-compile-checked only, never executed).
+- `tinyprune-windows`: Recycle Bin/IFileOperation access (compile-checked only, never executed).
+
+Durable Rust stores, the production enumerator, daemon/IPC, UIs, packaging, and native Windows/Linux execution are not started. Platform I/O stays in adapters, not the core. The additive `platform_hidden` candidate flag and explicit Windows `PathFlavor` are covered by Rust-only tests with no Swift counterpart. Default `Posix` behavior leaves the 577 shared golden cases unchanged; the config codec remains POSIX. POSIX rename and Windows Shell cannot atomically condition moves on identity; read the crate READMEs and [rust/README.md](rust/README.md).
+
+From the repository root:
+
+```sh
+cd rust && cargo test --locked
+cargo clippy --locked --all-targets -- -D warnings
+# Focused agent-engine checks:
+cargo test --locked -p tinyprune-agent
+cargo clippy --locked -p tinyprune-agent --all-targets -- -D warnings
+```
+
+The existing `rust-core` job in `.github/workflows/ci.yml` runs both commands on Ubuntu, Windows, and macOS. Despite its “Golden fixtures” step name, `cargo test --locked` runs the workspace's target-applicable tests, including the new crates; no workflow change is required to include them. Configured CI is not evidence that native adapter tests have executed or proof of released platform support.
+
+`Fixtures/golden/*.jsonl` is the shared behavior contract: 577 cases in 13 files, including templates, broadness, roots, plans, and schedule; Swift is the reference. Keep fixture inputs/schema and both runners (`Tests/TinyPruneGoldenTests/` and `rust/tinyprune-core/tests/golden.rs`, including `tests/trash_ops/mod.rs`) aligned whenever operations or behavior change. Follow [the fixture schema](Fixtures/golden/README.md); hand-author inputs with unique case names, never expected outputs.
+
+On a Mac with Xcode, verify or intentionally regenerate expected outputs from the repository root:
+
+```sh
+swift test --filter GoldenFixtureTests
+TINYPRUNE_UPDATE_GOLDEN=1 swift test --filter GoldenFixtureTests
+```
+
+On a CommandLineTools-only Mac, use:
+
+```sh
+F=/Library/Developer/CommandLineTools/Library/Developer/Frameworks
+swift test --disable-xctest --enable-swift-testing -Xswiftc -F -Xswiftc $F -Xswiftc -Xfrontend -Xswiftc -disable-cross-import-overlays -Xlinker -F -Xlinker $F -Xlinker -rpath -Xlinker $F --filter GoldenFixtureTests
+```
+
+For the update workflow, prefix that Swift command with `TINYPRUNE_UPDATE_GOLDEN=1`. Review every regenerated `expected` diff, run again without the update variable, then run the Rust checks. Fix known behavior bugs in Swift first; do not independently reinterpret safety or Unicode behavior in Rust.
