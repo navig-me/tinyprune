@@ -183,5 +183,13 @@ fn quiesced_agent_does_not_trash_a_due_item_and_resumes_after_release() {
         }
     }
     assert!(!old.exists(), "pruning resumes after release");
+    // Where the item went is platform-specific (Unix: the injected XDG-style Trash directory; Windows: the
+    // user's Recycle Bin through the Shell, which has no directory to count), so assert the daemon's own record.
+    #[cfg(unix)]
     assert_eq!(fs::read_dir(base.join("trash/files")).unwrap().count(), 1);
+    assert!(matches!(
+        service.handle(Request::LoadActivity { limit: 100 }),
+        Response::Activity(items)
+            if items.iter().filter(|i| i.kind == ipc::ActivityKind::MovedToTrash).count() == 1
+    ));
 }

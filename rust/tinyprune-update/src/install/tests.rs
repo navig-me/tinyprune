@@ -3,7 +3,7 @@ use crate::archive::testing::{tar_gz, Entry};
 use crate::crypto::sha256_hex;
 use crate::download::testing::{FakeTransport, Route};
 use crate::interlock::Interlock;
-use crate::layout::{PointerKind, StdFs};
+use crate::layout::{InstallFs, StdFs};
 use crate::manifest::{ArchiveKind, Artifact};
 use crate::test_support::TempDir;
 use std::cell::{Cell, RefCell};
@@ -101,11 +101,13 @@ struct Restart {
 }
 impl Restarter for Restart {
     fn restart(&self) -> Result<RestartKind, String> {
-        let target = std::fs::read_link(self.layout.current()).unwrap();
-        self.log.borrow_mut().push(format!(
-            "restart->{}",
-            target.file_name().unwrap().to_str().unwrap()
-        ));
+        let target = StdFs::native()
+            .read_current(&self.layout)
+            .unwrap()
+            .expect("current pointer exists");
+        self.log
+            .borrow_mut()
+            .push(format!("restart->{target}"));
         let mut r = self.results.borrow_mut();
         if r.len() > 1 {
             r.remove(0)
@@ -130,11 +132,8 @@ impl SelfCheck for Checker {
             dir.join("bin/tinyprune").is_file(),
             "self-check runs the staged binaries"
         );
-        *self.current_at_check.borrow_mut() = Some(
-            std::fs::read_link(self.layout.current())
-                .ok()
-                .map(|p| p.to_string_lossy().into_owned()),
-        );
+        *self.current_at_check.borrow_mut() =
+            Some(StdFs::native().read_current(&self.layout).unwrap());
         self.result
             .clone()
             .map(|daemon_version| CheckReport { daemon_version })
@@ -171,9 +170,7 @@ impl Rig {
         let log: Log = Rc::default();
         let bytes = package(&[]);
         let offer = offer_for(&bytes);
-        let fs = StdFs {
-            pointer: PointerKind::Symlink,
-        };
+        let fs = StdFs::native();
         // An existing managed install: 0.1.0 build 1.
         std::fs::create_dir_all(layout.version_path("0.1.0-b1/bin")).unwrap();
         std::fs::write(layout.version_path("0.1.0-b1/bin/tinyprune"), "old").unwrap();
@@ -304,7 +301,7 @@ fn valid_update_swaps_atomically_restarts_and_checks_health_in_order() {
             .clone()
             .unwrap()
             .as_deref(),
-        Some("versions/0.1.0-b1")
+        Some("0.1.0-b1")
     );
     assert_eq!(
         rig.events(),
