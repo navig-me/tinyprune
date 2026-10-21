@@ -34,6 +34,7 @@ pub(crate) struct Pace {
     decisions: AtomicBool,
     last_scan_millis: AtomicU64,
     last_complete_bits: AtomicU64,
+    pub(crate) delta: AtomicBool,
 }
 impl Pace {
     pub fn busy(&self) -> bool {
@@ -214,6 +215,9 @@ impl IndexSource for DurableIndex {
         self.started = Some(Instant::now());
         self.enumerating = Duration::ZERO;
         self.shared.pace.scanning.store(true, Ordering::Release);
+        if self.shared.pace.delta.load(Ordering::Acquire) {
+            phases::record("delta_scan_start", Duration::ZERO, 0);
+        }
         Ok(())
     }
     fn next_batch(&mut self, limit: NonZeroUsize) -> Result<IndexBatch, String> {
@@ -230,12 +234,20 @@ impl IndexSource for DurableIndex {
         self.candidates.extend(batch.candidates.iter().cloned());
         if batch.complete {
             let now = self.clock.now();
+            if self.shared.pace.delta.load(Ordering::Acquire) {
+                if let Some(started) = self.started {
+                    phases::since("delta_scan", started, self.candidates.len());
+                }
+            }
             // Unchanged candidates are not rewritten by the store and not re-evaluated here.
             let publish_started = Instant::now();
             let stored = self
                 .store
                 .publish_candidate_subtree(&self.path, &self.candidates, now);
             phases::since("publish", publish_started, self.candidates.len());
+            if self.shared.pace.delta.load(Ordering::Acquire) {
+                phases::since("delta_publish", publish_started, self.candidates.len());
+            }
             let record_started = Instant::now();
             let published = stored.and_then(|_| self.shared.record(&self.path, &self.candidates));
             phases::since("record", record_started, self.candidates.len());
@@ -263,6 +275,7 @@ impl IndexSource for DurableIndex {
         refreshed: &[RuleCandidate],
     ) -> Result<(), String> {
         let now = self.clock.now();
+        let started = Instant::now();
         for path in removed {
             // An empty subtree deletes its rows and, with them, their fingerprints.
             self.store.publish_candidate_subtree(path, &[], now)?;
@@ -272,6 +285,7 @@ impl IndexSource for DurableIndex {
             self.store.upsert_candidates(refreshed, now)?;
             self.shared.record_upserts(refreshed)?;
         }
+        phases::since("delta_publish", started, removed.len() + refreshed.len());
         Ok(())
     }
 }
@@ -291,6 +305,7 @@ struct Job {
     store: Store,
     /// Containment index over the project snapshot taken when the job was loaded (Windows flavor).
     projects: Option<crate::ProjectIndex>,
+    processed: usize,
 }
 // Keep the same 4096-candidate work bound per turn, but commit once instead of
 // eight times: durable WAL flushes dominate explanation publication on Windows.
@@ -319,6 +334,9 @@ impl Decisions {
         let (revision, _, _) = store.runtime_state()?;
         store.refresh_projects()?;
         let projects = crate::ProjectIndex::new(store.projects()?);
+        if !root.is_empty() {
+            phases::record("decision_job_start", Duration::ZERO, 0);
+        }
         Ok(Job {
             root,
             after: None,
@@ -326,6 +344,7 @@ impl Decisions {
             policy,
             store,
             projects,
+            processed: 0,
         })
     }
     /// Evaluates the candidates and writes changed decisions in one store transaction.
@@ -366,6 +385,12 @@ impl Decisions {
         Ok(())
     }
     fn advance_inner(&mut self, shared: &Shared, reader: &Store, now: f64) -> Result<bool, String> {
+        // Never leave a changed candidate behind the remainder of a full-root pass.
+        // Pages are fetched fresh after this turn; no candidate snapshot survives a yield.
+        if !shared.dirty.lock().map_err(|_| "Dirty set poisoned")?.is_empty() {
+            let pending = Self::dirty_step(shared, reader, now)?;
+            return Ok(pending || self.job.is_some());
+        }
         for _ in 0..PAGES_PER_STEP {
             if self.job.is_none() {
                 let next = shared
@@ -385,6 +410,7 @@ impl Decisions {
                 .lock()
                 .map_err(|_| "Decision queue poisoned")?
                 .remove(&job.root)
+                || reader.runtime_state()?.0 != job.revision
             {
                 *job = Self::load(job.root.clone(), reader)?;
             }
@@ -399,12 +425,14 @@ impl Decisions {
                     .lock()
                     .map_err(|_| "Decision state poisoned")?
                     .insert(job.root.clone(), job.revision);
+                phases::record("decision_job_complete", Duration::ZERO, job.processed);
                 self.job = None;
                 continue;
             }
             job.after = page.last().map(|v| v.0.clone());
             let refs: Vec<&RuleCandidate> = page.iter().map(|(_, c)| c).collect();
             Self::write(job, &refs, now)?;
+            job.processed += page.len();
         }
         Ok(true)
     }
@@ -420,6 +448,8 @@ impl Decisions {
         }
         let result = (|| {
             let job = Self::load(String::new(), reader)?;
+            let refs: Vec<&RuleCandidate> = batch.iter().map(|(_, c)| c).collect();
+            Self::write(&job, &refs, now)?;
             // One changed file moves a project's activity, which moves every item below it.
             if job.policy.rules.iter().any(|r| {
                 r.expiry_basis == ExpiryBasis::ProjectActivity && r.state != RuleState::Paused
@@ -429,15 +459,9 @@ impl Decisions {
                     .lock()
                     .map_err(|_| "Decision queue poisoned")?
                     .extend(job.policy.managed_roots.iter().cloned());
-                shared
-                    .dirty
-                    .lock()
-                    .map_err(|_| "Dirty set poisoned")?
-                    .clear();
                 return Ok(());
             }
-            let refs: Vec<&RuleCandidate> = batch.iter().map(|(_, c)| c).collect();
-            Self::write(&job, &refs, now)
+            Ok(())
         })();
         if let Err(error) = result {
             // Keep them for the next turn.
@@ -542,6 +566,7 @@ impl AgentStore for DurableStore {
         let started = Instant::now();
         self.inner.replace_deadlines(root, deadlines)?;
         phases::since("deadlines", started, deadlines.len());
+        self.shared.pace.delta.store(false, Ordering::Release);
         self.queue_decisions(root)
     }
     fn update_deadlines(
@@ -553,9 +578,70 @@ impl AgentStore for DurableStore {
         let started = Instant::now();
         self.inner.update_deadlines(root, evaluated, deadlines)?;
         phases::since("deadlines_delta", started, evaluated.len());
+        phases::since("delta_update_deadlines", started, evaluated.len());
+        self.shared.pace.delta.store(false, Ordering::Release);
         self.queue_decisions(root)
     }
     fn remove_deadline(&mut self, request: &TrashRequest) -> Result<(), String> {
         self.inner.remove_deadline(request)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tinyprune_core::rule::{CandidateTimestamps, ItemKind};
+
+    #[test]
+    fn dirty_decisions_preempt_full_pages_and_full_pages_read_fresh_candidates() {
+        let store = Store::memory_with_flavor(codec::flavor()).unwrap();
+        let root = if cfg!(windows) { r"C:\Managed\Tree" } else { "/managed/tree" };
+        store.replace_roots(&[root.into()], 0.0).unwrap();
+        let path = if cfg!(windows) { format!(r"{root}\item") } else { format!("{root}/item") };
+        let candidate = RuleCandidate::new(
+            FilesystemIdentity {
+                volume: Uuid(1), resource: vec![1], path_hint: path,
+                creation_time: Some(0.0), generation: Some(1), is_persistent: true,
+            },
+            "item".into(), ItemKind::File, CandidateTimestamps::default(),
+        );
+        store.publish_candidate_subtree(root, std::slice::from_ref(&candidate), 0.0).unwrap();
+        let shared = Shared::default();
+        let mut decisions = Decisions { job: Some(Decisions::load(root.into(), &store).unwrap()) };
+        shared.record_upserts(std::slice::from_ref(&candidate)).unwrap();
+        assert!(decisions.advance(&shared, &store, 1.0).unwrap());
+        assert!(shared.dirty.lock().unwrap().is_empty());
+        assert!(decisions.job.as_ref().unwrap().after.is_none(), "dirty turn advanced full cursor");
+        assert_eq!(decisions.job.as_ref().unwrap().processed, 0);
+
+        // Publish newer metadata before resuming the full pass. It must fetch the
+        // new candidate instead of restoring the explanation from its old job.
+        let mut changed = candidate.clone();
+        changed.identity.path_hint.push_str("-new");
+        changed.name.push_str("-new");
+        store.publish_candidate_subtree(root, &[changed.clone()], 2.0).unwrap();
+        assert!(decisions.advance(&shared, &store, 2.0).unwrap());
+        let actual = store.latest_decision(&candidate.identity).unwrap().unwrap();
+        let current = Decisions::load(root.into(), &store).unwrap();
+        let expected = explain_with(&changed, &current.policy, &current.store, 2.0, current.projects.as_ref()).unwrap();
+        assert_eq!(actual, serde_json::to_value(expected).unwrap());
+        assert!(decisions.advance(&shared, &store, 2.0).unwrap());
+        assert!(!decisions.advance(&shared, &store, 2.0).unwrap());
+    }
+
+    #[test]
+    fn full_page_reloads_policy_revision_before_publication() {
+        let mut store = Store::memory_with_flavor(codec::flavor()).unwrap();
+        let root = if cfg!(windows) { r"C:\Managed\Tree" } else { "/managed/tree" };
+        store.replace_roots(&[root.into()], 0.0).unwrap();
+        let mut decisions = Decisions { job: Some(Decisions::load(root.into(), &store).unwrap()) };
+        let mut policy = store.load_snapshot().unwrap();
+        policy.globally_paused = !policy.globally_paused;
+        let (revision, until, retention) = store.runtime_state().unwrap();
+        store.replace_policy(&policy, revision, until, retention, 1.0).unwrap();
+        let shared = Shared::default();
+        assert!(decisions.advance(&shared, &store, 1.0).unwrap());
+        assert!(!decisions.advance(&shared, &store, 1.0).unwrap());
+        assert_eq!(shared.evaluated.lock().unwrap().get(root), Some(&store.runtime_state().unwrap().0));
     }
 }

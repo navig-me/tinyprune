@@ -77,6 +77,7 @@ impl Watch {
     }
 
     fn lost(&mut self, coalescer: &mut Coalescer) {
+        crate::record_phase("watch_loss", Duration::ZERO, 1);
         self.pairing.reset();
         self.count = 0;
         self.offset = 0;
@@ -105,14 +106,18 @@ impl Watch {
         self.pending = false;
         match result {
             Ok(()) if count > 0 && count as usize <= BUFFER_BYTES => {
+                crate::record_phase("watch_receipt_bytes", Duration::ZERO, count as usize);
                 self.count = count as usize;
                 self.offset = 0;
             }
             Ok(()) => {
+                crate::record_phase("watch_receipt_bytes", Duration::ZERO, count as usize);
+                crate::record_phase("watch_overflow", Duration::ZERO, 1);
                 self.lost(coalescer);
                 self.arm_or_disable(coalescer);
             }
             Err(error) if error.code() == ERROR_NOTIFY_ENUM_DIR.to_hresult() => {
+                crate::record_phase("watch_overflow", Duration::ZERO, 1);
                 self.lost(coalescer);
                 self.arm_or_disable(coalescer);
             }
@@ -309,7 +314,9 @@ fn overlaps(left: &std::path::Path, right: &std::path::Path) -> bool {
 impl EventSource for WindowsEventSource {
     fn poll(&mut self, timeout: Duration, limit: NonZeroUsize) -> io::Result<EventBatch> {
         if !self.coalescer.output.is_empty() {
-            return Ok(self.coalescer.batch(limit.get(), self.pending()));
+            let batch = self.coalescer.batch(limit.get(), self.pending());
+            trace_batch(&batch);
+            return Ok(batch);
         }
         let start = Instant::now();
         loop {
@@ -381,7 +388,18 @@ impl EventSource for WindowsEventSource {
                 self.coalescer.drained();
             }
         }
-        Ok(self.coalescer.batch(limit.get(), self.pending()))
+        let batch = self.coalescer.batch(limit.get(), self.pending());
+        trace_batch(&batch);
+        Ok(batch)
+    }
+}
+
+fn trace_batch(batch: &EventBatch) {
+    if !batch.events.is_empty() || !batch.must_rescan.is_empty() {
+        crate::record_phase("watch_batch", Duration::ZERO, batch.events.len());
+        if !batch.must_rescan.is_empty() {
+            crate::record_phase("watch_rescan", Duration::ZERO, batch.must_rescan.len());
+        }
     }
 }
 

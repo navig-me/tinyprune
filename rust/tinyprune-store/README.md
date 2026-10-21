@@ -43,9 +43,40 @@ Schema version 6 makes `current_decisions` orphan-free by construction: existing
 - `dangling_attempts` and `finish_recovery` implement the engine's startup recovery contract. `Agent` invokes them before indexing/cleanup. Other hosts must call `reconcile_attempts(injected_now)` before scheduling/execution. Recovery atomically closes each attempt and records an unknown-outcome safety skip; it is idempotent and never counts an unknown attempt as reclaimed. Opening alone does not invent a clock or silently recover.
 - Reclaim totals and UTC daily buckets derive exclusively from committed success ledger rows. Bytes are moved-to-Trash bytes, **not** free disk space; unknown sizes contribute zero bytes and zero known-size items. Migration backfills prior success audit rows. Daily ranges are half-open and days with no moves are omitted.
 
-`AgentStore::replace_deadlines` receives only identity/source/scheduled time, not a complete scan decision or occurrence clock. Its transactional `deadlineScheduled`/`deadlineRemoved` records use that scheduled time. **The daemon calls `record_decision(at, preview, full_explanation_json)`** for explicit scheduling and Preview match decisions, preserving item, scheduled time, rule, basis, project context, override and suppression reason; this stores JSON without dropping fields. Core/agent traits remain unchanged. That supplemental full-decision event is its own transaction, not falsely advertised as atomic with an earlier engine deadline publication. Runtime IPC must still return full explanations, never treat a persisted deadline as deletion permission. Core audit events for preflight Preview, safety skips, attempts, success and failure are stored by `AuditSink`.
+`AgentStore::replace_deadlines` receives only identity/source/scheduled time, not a complete scan decision or occurrence clock. Its transactional `deadlineScheduled`/`deadlineRemoved` records use that scheduled time. The daemon's batched `put_decisions` stores the full explanation in the current projection and one compact audit row per changed decision in the same FULL transaction. `record_decision(at, preview, full_explanation_json)` remains the standalone full-history API; its transaction is not atomic with an earlier deadline publication. Runtime IPC must still return full explanations, never treat a persisted deadline as deletion permission. Core audit events for preflight Preview, safety skips, attempts, success and failure are stored by `AuditSink`.
 
 The Swift persistence boundary also includes a versioned override metadata codec/reconciliation role. **Platform adapter TODO (out of this crate's scope):** xattr/Windows ADS override export/reconciliation. SQLite is the authority here; no xattrs/ADS or inherited child metadata are written.
+
+## Decision write diagnostics and schema 8
+
+`put_decisions` reuses cached lookup/upsert/audit statements across rows and batches. Every inserted/changed decision still has its own audit record in the same `synchronous=FULL` transaction; identical and missing-candidate rows append nothing. The full explanation is stored once in `current_decisions`, not duplicated into every scheduling audit payload. Compact scheduling/preview payloads have `version: 1`, `identityKey`, `item` (volume/resource/path hint/creation/generation/persistence), identity guards, `scheduledAt`, `ruleID` and `preview`. They are activity metadata, **not** full Explanation DTOs; consumers must not deserialize them as full explanations.
+
+Schema 8 archives the final full explanation in an audit record before a current decision is deleted, in the same transaction, including candidate cleanup and root cascades. This preserves full explanation lookup for moved/removed activity without duplicating each intermediate explanation. `latest_decision` returns current full explanations or archived/legacy full audit rows, never compact rows; identity guards still apply. Intermediate historical compact activity does not reconstruct a historical full explanation. Archive rows use the last decision's `updated_at`, not an invented removal clock. Archive insertion failure rolls back removal. Retention applies to these full archives just as to other activity.
+
+Schema 8 also drops `candidate_path` and `observation_path`: since schema 7, subtree predicates use the normalized `path_key` indexes, not `path_hint`. Root/FK-cleanup indexes and all schedule/rule/preview/audit indexes remain; they serve distinct queries.
+
+Set `TINYPRUNE_PHASE_LOG` to append JSONL records for `store.decisions.begin`, `store.decisions.sql` and `store.decisions.commit`. Begin includes writer-lock/IMMEDIATE-transaction acquisition; SQL includes validation, encoding, comparisons, statement stepping and index work; commit isolates SQLite commit (including any automatic checkpoint). Each reports input `items`, `changed_rows`, changed full `payload_bytes`, compact `audit_bytes`, elapsed `ms` and wall-clock `end_ms`. No paths, identities, rule IDs or payload contents are logged. Successful batches emit after commit; failed batches emit no successful phase records. An unset/unopenable sink is inert. The diagnostic sink is best effort, not an audit authority; its writes never relax SQLite durability.
+
+Each phase's `end_ms` is captured when that phase actually finishes, before deferred emission, so the SQL timeline is not shifted by commit latency. Failed transactions discard captured timings rather than publishing success records.
+
+Standalone raw SQLite diagnostic matrix (from `rust/`):
+
+```sh
+cargo test --release --locked -p tinyprune-store --test bench -- --ignored --nocapture
+```
+
+The ignored `raw_sqlite_100k_matrix` test prints a Markdown table and appends it to `TINYPRUNE_BENCH_OUT` when set, for release CI artifacts. It crosses FULL/NORMAL/OFF with WAL/fresh-default journal, production decision/audit secondary indexes versus PK-only, and full-duplicate versus compact audit payloads: 24 cases, each 100k synthetic rows in 25 transactions of up to 4,096 rows (final batch: 1,696), matching runtime decision page sizing. It reports SQL versus commit timing, row counts, total and per-row payload/audit bytes, and database/WAL bytes. This isolates SQLite/index/payload costs, not native Windows traversal or end-to-end runtime safety; timings are observations only when actually run. NORMAL/OFF are benchmark controls only; production policy, audit, scheduling and Trash storage remain FULL.
+
+Local release measurements (100k synthetic rows, all secondary indexes, 25 commits; individual runs, not statistical comparisons):
+
+| Host | FULL/WAL audit payload | SQL | COMMIT including auto-checkpoint | Database bytes |
+|---|---|---:|---:|---:|
+| Development Mac | full duplicate | 1.930 s | 5.386 s | 311,869,440 |
+| Development Mac | compact | 1.559 s | 4.003 s | 215,445,504 |
+| Docker Linux/aarch64 | full duplicate | 1.470 s | 3.555 s | 311,869,440 |
+| Docker Linux/aarch64 | compact | 1.087 s | 1.256 s | 215,445,504 |
+
+The synthetic full explanation averages 1,107.889 bytes/row; compact audit averages 340.889 bytes/row instead of another 1,107.889 bytes. These are fixture sizes, not a claim about every real explanation. COMMIT includes SQLite auto-checkpoint work and does not isolate a kernel `fsync` syscall. NORMAL/OFF did not uniformly improve these local runs; no production durability setting or decision page size was changed based on them.
 
 ## Verification
 

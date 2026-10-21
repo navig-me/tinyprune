@@ -102,6 +102,12 @@ jobs:
         run: |
           export TINYPRUNE_BENCH_OUT="$GITHUB_STEP_SUMMARY"
           cargo test --release --locked -p tinyprune-daemon --test bench -- --ignored --nocapture
+      - name: SQLite durability and index microbenchmark (non-gating)
+        continue-on-error: true
+        shell: bash
+        run: |
+          export TINYPRUNE_BENCH_OUT="$GITHUB_STEP_SUMMARY"
+          cargo test --release --locked -p tinyprune-store --test bench -- --ignored --nocapture
 
   # Frontend tests plus a Tauri 2 compile check of the in-development desktop shell (rust/ui is its own workspace).
   rust-ui:

@@ -8,6 +8,41 @@ use std::{
     path::Path,
     sync::{Arc, Mutex, MutexGuard},
 };
+
+// The diagnostic sink is optional, metadata-only and independent of database durability.
+static PHASE_SINK: std::sync::LazyLock<Option<Mutex<std::fs::File>>> =
+    std::sync::LazyLock::new(|| {
+        let path = std::env::var_os("TINYPRUNE_PHASE_LOG")?;
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .ok()
+            .map(Mutex::new)
+    });
+
+fn decision_phase(
+    phase: &str,
+    elapsed: std::time::Duration,
+    ended: std::time::SystemTime,
+    rows: usize,
+    changed: usize,
+    payload_bytes: usize,
+    audit_bytes: usize,
+) {
+    use std::io::Write as _;
+    let Some(sink) = PHASE_SINK.as_ref() else { return };
+    let end_ms = ended
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0.0, |d| d.as_secs_f64() * 1000.0);
+    if let Ok(mut file) = sink.lock() {
+        let _ = writeln!(
+            file,
+            "{{\"phase\":\"{phase}\",\"ms\":{:.3},\"items\":{rows},\"changed_rows\":{changed},\"payload_bytes\":{payload_bytes},\"audit_bytes\":{audit_bytes},\"end_ms\":{end_ms:.0}}}",
+            elapsed.as_secs_f64() * 1000.0
+        );
+    }
+}
 use tinyprune_agent::{AgentAudit, AgentStore};
 use tinyprune_core::{
     config, config_plan,
@@ -655,13 +690,20 @@ impl Store {
     /// Upserts current decisions in ONE transaction with prepared statements.
     ///
     /// Rows whose persisted payload/schedule/rule/preview are unchanged write nothing. New or changed
-    /// rows are upserted and also append a `schedulingDecision`/`previewMatch` audit record (as
-    /// `record_decision` does). Returns the number of rows recorded. Rows whose candidate row no longer
+    /// rows are upserted and append a compact, versioned `schedulingDecision`/`previewMatch` audit
+    /// record in the same FULL transaction. Full explanations live in the current projection.
+    /// Returns the number of rows recorded. Rows whose candidate row no longer
     /// exists (checked inside the same transaction) are silently skipped, so a decision evaluated just
     /// before a Trash/removal can never resurrect an orphan; the schema also rejects orphan inserts.
     pub fn put_decisions(&self, at: f64, rows: &[DecisionRow<'_>]) -> Result<usize> {
         finite(at)?;
-        self.transaction(|tx| {
+        let logging = PHASE_SINK.is_some();
+        let waiting = logging.then(std::time::Instant::now);
+        let mut c = self.lock()?;
+        let tx = sql(c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate))?;
+        let begin_elapsed = waiting.map(|start| (start.elapsed(), std::time::SystemTime::now()));
+        let started = logging.then(std::time::Instant::now);
+        let (recorded, payload_bytes, audit_bytes) = (|| {
             let mut find = sql(tx.prepare_cached(
                 "SELECT payload,scheduled_at,rule_id,preview FROM current_decisions WHERE identity_key=?",
             ))?;
@@ -672,6 +714,8 @@ impl Store {
             ))?;
             let mut audit = sql(tx.prepare_cached(INSERT_AUDIT))?;
             let mut recorded = 0usize;
+            let mut payload_bytes = 0usize;
+            let mut audit_bytes = 0usize;
             for row in rows {
                 if let Some(scheduled_at) = row.scheduled_at {
                     finite(scheduled_at)?;
@@ -697,6 +741,23 @@ impl Store {
                         continue;
                     }
                 }
+                let compact = encode(&serde_json::json!({
+                    "version": 1,
+                    "identityKey": &k,
+                    "creationTime": row.identity.creation_time,
+                    "item": {
+                        "volumeIdentifier": row.identity.volume.to_string(),
+                        "resourceIdentifier": hex(&row.identity.resource),
+                        "pathHint": &row.identity.path_hint,
+                        "creationTime": row.identity.creation_time,
+                        "generation": row.identity.generation,
+                        "isPersistent": row.identity.is_persistent
+                    },
+                    "generation": row.identity.generation,
+                    "scheduledAt": row.scheduled_at,
+                    "ruleID": row.rule_id,
+                    "preview": row.preview
+                }))?;
                 sql(upsert.execute(params![
                     &k,
                     root,
@@ -713,12 +774,28 @@ impl Store {
                     } else {
                         "schedulingDecision"
                     },
-                    &payload
+                    &compact
                 ]))?;
                 recorded += 1;
+                payload_bytes += payload.len();
+                audit_bytes += compact.len();
             }
-            Ok(recorded)
-        })
+            Ok::<_, String>((recorded, payload_bytes, audit_bytes))
+        })()?;
+        let sql_elapsed = started.map(|start| (start.elapsed(), std::time::SystemTime::now()));
+        let committing = logging.then(std::time::Instant::now);
+        sql(tx.commit())?;
+        // Emit only after commit: diagnostics never extend the write transaction.
+        if let Some((elapsed, ended)) =
+            committing.map(|start| (start.elapsed(), std::time::SystemTime::now()))
+        {
+            let (begin_elapsed, begin_ended) = begin_elapsed.unwrap();
+            let (sql_elapsed, sql_ended) = sql_elapsed.unwrap();
+            decision_phase("store.decisions.begin", begin_elapsed, begin_ended, rows.len(), recorded, payload_bytes, audit_bytes);
+            decision_phase("store.decisions.sql", sql_elapsed, sql_ended, rows.len(), recorded, payload_bytes, audit_bytes);
+            decision_phase("store.decisions.commit", elapsed, ended, rows.len(), recorded, payload_bytes, audit_bytes);
+        }
+        Ok(recorded)
     }
     /// `(active, preview, active_soon)` over scheduled decisions. `active_soon` counts active
     /// decisions due at or before `soon_until` (overdue included, as the Swift summary does); `_now` is
@@ -847,7 +924,7 @@ impl Store {
         ))?;
         for payload in rows {
             let value: serde_json::Value = decode(&sql(payload)?)?;
-            if guard_ok(&value) {
+            if !(value["version"] == 1 && value.get("identityKey").is_some()) && guard_ok(&value) {
                 return Ok(Some(value));
             }
         }

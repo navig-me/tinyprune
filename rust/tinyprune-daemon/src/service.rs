@@ -104,6 +104,10 @@ impl Service {
         self.state.lock().unwrap()
     }
     #[cfg(test)]
+    pub(crate) fn hold_decisions_for_test(&self) -> impl Sized + '_ {
+        self.decisions.lock().unwrap()
+    }
+    #[cfg(test)]
     pub(crate) fn state_for_test_audit_count(&self) -> usize {
         self.store.audit_records().unwrap().len()
     }
@@ -212,6 +216,9 @@ impl Service {
         self.waiters.load(Ordering::Acquire) > 0
     }
     pub fn tick(&self) -> Result<tinyprune_agent::TickReport, String> {
+        // Same lock order as mutations: even concurrent tick callers cannot
+        // change candidate metadata while an off-engine-lock page is publishing.
+        let mut decisions = self.decisions.lock().map_err(|_| "Decision job poisoned")?;
         let mut report = {
             let mut state = self.state.lock().map_err(|_| "Runtime mutex poisoned")?;
             if state.stopped {
@@ -235,11 +242,7 @@ impl Service {
             report
         };
         // Off the engine lock: evaluate full decisions for the published snapshot in bounded steps.
-        let pending = self
-            .decisions
-            .lock()
-            .map_err(|_| "Decision job poisoned")?
-            .advance(&self.shared, &self.store, self.clock.now())?;
+        let pending = decisions.advance(&self.shared, &self.store, self.clock.now())?;
         report.pending_work |= pending;
         Ok(report)
     }
@@ -419,6 +422,9 @@ impl Service {
             return Ok(answer);
         }
         let waiting = Waiting::new(&self.waiters);
+        // Serialize policy/candidate mutations with decision publication, not with reads.
+        // A full page must never publish an explanation from a superseded policy.
+        let _decisions = self.decisions.lock().map_err(|_| "Decision job poisoned")?;
         let mut state = self.state.lock().map_err(|_| "Runtime mutex poisoned")?;
         drop(waiting);
         let State {
@@ -941,8 +947,16 @@ fn activity(store: &Store, count: u32) -> Result<Vec<d::ActivityItem>, String> {
             let value: serde_json::Value =
                 serde_json::from_str(&record.payload).map_err(|e| e.to_string())?;
             let event = record.event()?;
+            let compact = value.get("version").and_then(serde_json::Value::as_u64) == Some(1)
+                && value.get("identityKey").is_some();
+            let compact_identity = if compact {
+                value.get("item").cloned().map(serde_json::from_value::<d::Identity>)
+                    .transpose().map_err(|e| e.to_string())?
+            } else {
+                None
+            };
             let explanation =
-                if matches!(record.kind.as_str(), "previewMatch" | "schedulingDecision") {
+                if matches!(record.kind.as_str(), "previewMatch" | "schedulingDecision") && !compact {
                     Some(
                         serde_json::from_value::<d::Explanation>(value.clone())
                             .map_err(|e| e.to_string())?,
@@ -977,10 +991,12 @@ fn activity(store: &Store, count: u32) -> Result<Vec<d::ActivityItem>, String> {
                 identity: event
                     .as_ref()
                     .and_then(|e| e.identity.as_ref().map(codec::identity))
-                    .or_else(|| explanation.as_ref().map(|e| e.item.clone())),
+                    .or_else(|| explanation.as_ref().map(|e| e.item.clone()))
+                    .or(compact_identity),
                 rule_id: event
                     .as_ref()
                     .and_then(|e| e.rule_id.map(|id| id.to_string()))
+                    .or_else(|| value.get("ruleID").and_then(serde_json::Value::as_str).map(str::to_owned))
                     .or_else(|| {
                         explanation
                             .as_ref()

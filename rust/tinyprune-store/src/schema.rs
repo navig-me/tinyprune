@@ -1,6 +1,6 @@
 use crate::{sql, Result};
 use rusqlite::Connection;
-pub const VERSION: i64 = 7;
+pub const VERSION: i64 = 8;
 const V1: &str = "
 CREATE TABLE rules(id TEXT PRIMARY KEY, position INTEGER NOT NULL, payload TEXT NOT NULL);
 CREATE TABLE overrides(id TEXT PRIMARY KEY, position INTEGER NOT NULL, identity_key TEXT, path_hint TEXT NOT NULL, payload TEXT NOT NULL);
@@ -50,7 +50,7 @@ CREATE INDEX decisions_root ON current_decisions(root);
 CREATE TRIGGER candidate_decision_cleanup AFTER DELETE ON candidates BEGIN DELETE FROM current_decisions WHERE identity_key=OLD.identity_key; END;
 CREATE TRIGGER candidate_decision_root AFTER UPDATE OF root ON candidates BEGIN UPDATE current_decisions SET root=NEW.root WHERE identity_key=NEW.identity_key; END;
 ";
-const MIGRATIONS: [(i64, &str); 7] = [
+const MIGRATIONS: [(i64, &str); 8] = [
     (1, V1),
     (2, V2),
     (3, V3),
@@ -58,6 +58,7 @@ const MIGRATIONS: [(i64, &str); 7] = [
     (5, V5),
     (6, V6),
     (7, V7),
+    (8, V8),
 ];
 const V6: &str = "
 DELETE FROM current_decisions WHERE identity_key NOT IN (SELECT identity_key FROM candidates);
@@ -71,6 +72,15 @@ CREATE INDEX candidate_key ON candidates(path_key);
 ALTER TABLE observations ADD COLUMN path_key TEXT NOT NULL DEFAULT '';
 CREATE INDEX observation_key ON observations(path_key);
 CREATE TABLE key_meta(id INTEGER PRIMARY KEY CHECK(id=1), flavor INTEGER NOT NULL);
+";
+// Path filtering uses normalized path_key range indexes since v7; no query filters/orders by
+// path_hint. Keep the root/order/filter indexes, which serve distinct queries and FK cleanup.
+const V8: &str = "
+DROP INDEX candidate_path;
+DROP INDEX observation_path;
+CREATE TRIGGER decision_archive BEFORE DELETE ON current_decisions BEGIN
+INSERT INTO audit(occurred_at,kind,payload) VALUES(OLD.updated_at,CASE WHEN OLD.preview=1 THEN 'previewMatch' ELSE 'schedulingDecision' END,OLD.payload);
+END;
 ";
 pub(crate) fn migrate(c: &mut Connection) -> Result<()> {
     let version: i64 = sql(c.query_row("PRAGMA user_version", [], |r| r.get(0)))?;

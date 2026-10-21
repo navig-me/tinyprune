@@ -835,6 +835,13 @@ fn decisions_batch_is_idempotent_indexed_and_cleaned_with_candidates() {
     );
     assert_eq!(changes(&s), writes);
     assert_eq!(s.audit_records().unwrap().len(), audit_before + N as usize);
+    let audit = s.audit_records().unwrap();
+    let compact: serde_json::Value = decode(&audit.last().unwrap().payload).unwrap();
+    assert_eq!(compact["version"], 1);
+    assert_eq!(compact["identityKey"], key(ids.last().unwrap()));
+    assert_eq!(compact["item"]["pathHint"], first.last().unwrap()["item"]["pathHint"]);
+    assert_eq!(compact["item"]["isPersistent"], true);
+    assert!(compact.get("marker").is_none());
     // One changed row is recorded and audited exactly once.
     let mut second = first.clone();
     second[7]["marker"] = serde_json::json!(99);
@@ -1116,6 +1123,9 @@ fn decisions_without_a_candidate_are_skipped_and_never_orphaned() {
     let mut moved = event(AuditKind::MovedToTrash, 3.0);
     moved.identity = Some(trashed.clone());
     s.append(moved).unwrap();
+    // Deletion archives the last full explanation atomically; compact scheduling history alone is
+    // never returned as an Explanation after the current projection is gone.
+    assert_eq!(s.latest_decision(&trashed).unwrap(), Some(b.clone()));
     let orphans = |s: &Store| -> i64 {
         s.lock().unwrap().query_row("SELECT COUNT(*) FROM current_decisions WHERE identity_key NOT IN (SELECT identity_key FROM candidates)", [], |r| r.get(0)).unwrap()
     };
@@ -1352,4 +1362,59 @@ fn subtree_queries_use_the_path_key_index_and_rekey_across_flavors() {
     assert_eq!(s.candidate_count().unwrap(), 1);
     s.remove_below(r"c:/ROOT").unwrap();
     assert_eq!(s.candidate_count().unwrap(), 0);
+}
+
+#[test]
+fn compact_decision_audit_failure_rolls_back_projection_and_archival() {
+    let mut s = Store::memory().unwrap();
+    s.replace_roots(&["/root".into()], 0.0).unwrap();
+    let identity = bulk_identity(1);
+    let candidate = RuleCandidate::new(
+        identity.clone(),
+        identity.path_hint.clone(),
+        ItemKind::File,
+        CandidateTimestamps::default(),
+    );
+    s.publish_candidate_subtree("/root", &[candidate], 1.0).unwrap();
+    let mut full = explanation(&identity, 1);
+    full["context"] = serde_json::json!("x".repeat(4096));
+    let row = DecisionRow {
+        identity: &identity,
+        scheduled_at: Some(10.0),
+        rule_id: None,
+        preview: false,
+        explanation: &full,
+    };
+    s.put_decisions(2.0, &[row]).unwrap();
+    let audit = s.audit_records().unwrap();
+    let compact = &audit.last().unwrap().payload;
+    assert!(compact.len() < full.to_string().len() / 2);
+    assert_eq!(s.latest_decision(&identity).unwrap(), Some(full.clone()));
+    s.lock().unwrap().execute_batch(
+        "CREATE TRIGGER fail_decision_audit BEFORE INSERT ON audit WHEN NEW.kind='schedulingDecision' BEGIN SELECT RAISE(ABORT,'injected audit failure'); END;"
+    ).unwrap();
+    let next = explanation(&identity, 2);
+    assert!(s.put_decisions(3.0, &[DecisionRow { explanation: &next, ..row }]).is_err());
+    assert_eq!(s.latest_decision(&identity).unwrap(), Some(full.clone()));
+    // The full archive is part of removal, not a best-effort supplemental transaction.
+    assert!(s.remove_below(&identity.path_hint).is_err());
+    assert_eq!(s.candidate_count().unwrap(), 1);
+    s.lock().unwrap().execute_batch("DROP TRIGGER fail_decision_audit").unwrap();
+    s.remove_below(&identity.path_hint).unwrap();
+    assert_eq!(s.latest_decision(&identity).unwrap(), Some(full));
+}
+
+#[test]
+fn v8_drops_only_obsolete_path_hint_indexes_and_keeps_full_durability() {
+    let c = Connection::open_in_memory().unwrap();
+    schema::at_version(&c, 7);
+    let s = Store::from_connection(c).unwrap();
+    let c = s.lock().unwrap();
+    let names = strings(&c, "SELECT name FROM sqlite_master WHERE type='index'", []).unwrap();
+    assert!(!names.iter().any(|n| n == "candidate_path" || n == "observation_path"));
+    for retained in ["candidate_key", "observation_key", "candidate_root", "decisions_root",
+        "decisions_due", "decisions_rule", "decisions_preview", "decision_identity"] {
+        assert!(names.iter().any(|n| n == retained), "{retained}");
+    }
+    assert_eq!(c.query_row("PRAGMA synchronous", [], |r| r.get::<_, i64>(0)).unwrap(), 2);
 }

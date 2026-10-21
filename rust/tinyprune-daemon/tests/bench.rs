@@ -232,6 +232,92 @@ fn phase_table(title: &str, records: &[PhaseRecord], origin_ms: f64) -> String {
     out + "\n"
 }
 
+/// CPU idleness is insufficient on a runner blocked in SQLite COMMIT. Wait for the explicit
+/// completion of the latest full decision job as well, without confusing persisted rows with a
+/// completed startup evaluation. Returns false rather than silently labeling a busy run settled.
+fn wait_for_decision_settle(path: &Path) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(600);
+    loop {
+        let records = read_phases(path);
+        let last_start = records
+            .iter()
+            .rposition(|r| r.phase == "decision_job_start");
+        if last_start.is_some_and(|start| {
+            records[start + 1..]
+                .iter()
+                .any(|r| r.phase == "decision_job_complete")
+        }) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Intersect phase spans with the actual event wait. Nested phases overlap; these are diagnostics,
+/// not additive buckets. Negative start offsets show work that was already running at file creation.
+fn event_phase_table(records: &[PhaseRecord], created_ms: f64, observed_ms: f64) -> String {
+    let mut out = String::from("### Event wait trace (relative to file creation)\n\n| Phase | passes | time intersecting wait | first start | last end | items |\n|---|---|---|---|---|---|\n");
+    let relevant: Vec<&PhaseRecord> = records
+        .iter()
+        .filter(|r| r.end_ms >= created_ms && r.end_ms - r.ms <= observed_ms)
+        .collect();
+    let mut names: Vec<&str> = Vec::new();
+    for r in &relevant {
+        if !names.contains(&r.phase.as_str()) {
+            names.push(&r.phase);
+        }
+    }
+    for name in names {
+        let mine: Vec<_> = relevant.iter().filter(|r| r.phase == name).collect();
+        let overlap: f64 = mine
+            .iter()
+            .map(|r| (r.end_ms.min(observed_ms) - (r.end_ms - r.ms).max(created_ms)).max(0.0))
+            .sum();
+        let first = mine
+            .iter()
+            .map(|r| r.end_ms - r.ms)
+            .fold(f64::INFINITY, f64::min);
+        let last = mine.iter().map(|r| r.end_ms).fold(0.0, f64::max);
+        let items: u64 = mine.iter().map(|r| r.items).sum();
+        out += &format!(
+            "| {name} | {} | {overlap:.1} ms | {:+.1} ms | {:+.1} ms | {items} |\n",
+            mine.len(),
+            first - created_ms,
+            last - created_ms
+        );
+    }
+    out + "\nNested SQL/commit, deadline and evaluation spans overlap and must not be summed. Watcher receipt is when the application observes a completed kernel buffer, not the kernel's event timestamp. Zero-duration markers locate receipt, enqueue, overflow/rescan and job boundaries. The final IPC response includes polling/transport delay beyond the deadline commit.\n\n"
+}
+
+#[test]
+fn event_trace_clips_nested_spans_without_including_unrelated_work() {
+    let record = |phase: &str, ms, end_ms| PhaseRecord {
+        phase: phase.into(),
+        ms,
+        end_ms,
+        items: 1,
+    };
+    let table = event_phase_table(
+        &[
+            record("before", 5.0, 90.0),
+            record("queued_work", 30.0, 110.0),
+            record("receipt", 0.0, 105.0),
+            record("commit", 10.0, 115.0),
+            record("after", 5.0, 130.0),
+        ],
+        100.0,
+        120.0,
+    );
+    assert!(!table.contains("| before |"));
+    assert!(!table.contains("| after |"));
+    assert!(table.contains("| queued_work | 1 | 10.0 ms | -20.0 ms | +10.0 ms |"));
+    assert!(table.contains("| receipt | 1 | 0.0 ms | +5.0 ms | +5.0 ms |"));
+    assert!(table.contains("| commit | 1 | 10.0 ms | +5.0 ms | +15.0 ms |"));
+}
+
 fn make_fixture(root: &Path, files: usize) -> usize {
     let dirs = files.div_ceil(1000).max(1);
     let per = files.div_ceil(dirs);
@@ -470,12 +556,21 @@ fn bench_100k_index_memory_latency_ipc() {
         std::thread::sleep(Duration::from_millis(50));
     }
     let restart_ready_secs = restart.elapsed().as_secs_f64();
-    // Let the startup pass settle (agent CPU idle for three consecutive 500 ms reads, at most 120 s), then create one
-    // file and wait for its deadline to appear. Where CPU time is unavailable, fall back to a fixed wait.
+    // A low CPU sample can mean an outstanding Windows fsync, not a settled startup job.
+    let settle_start = Instant::now();
     wait_until_idle(agent.pid());
+    let phase2_path = base.join("phases-2.jsonl");
+    let settled = wait_for_decision_settle(&phase2_path);
+    assert!(
+        settled,
+        "startup decision job did not settle in 600 s\n{}",
+        phase_table("Unsettled startup", &read_phases(&phase2_path), phase2_epoch_ms)
+    );
+    let settle_secs = settle_start.elapsed().as_secs_f64();
     let before = upcoming_total(&mut c, 1);
-    fs::File::create(root.join("group-0000").join("event-new.dat")).unwrap();
+    let event_epoch_ms = epoch_ms();
     let event = Instant::now();
+    fs::File::create(root.join("group-0000").join("event-new.dat")).unwrap();
     let mut latency_ms = f64::NAN;
     while event.elapsed() < Duration::from_secs(120) {
         if upcoming_total(&mut c, 1) > before {
@@ -484,6 +579,7 @@ fn bench_100k_index_memory_latency_ipc() {
         }
         std::thread::sleep(Duration::from_millis(10));
     }
+    let event_observed_epoch_ms = epoch_ms();
     let rss_phase2 = rss_mib(agent.pid());
     drop(c);
     drop(agent);
@@ -520,6 +616,7 @@ fn bench_100k_index_memory_latency_ipc() {
     };
     table +=
         &format!("| restart to persisted index served | {restart_ready_secs:.2} s | n/a | n/a |\n");
+    table += &format!("| restart startup decision settle wait | {settle_secs:.2} s | n/a | n/a |\n");
     table +=
         &format!("| event-to-deadline latency ({watcher}) | {latency_ms:.0} ms | n/a | n/a |\n");
     table += &format!("| RSS during phase 2 (restart + 2 s reconcile) | {rss_phase2:.0} MiB | peak <= 512 MiB | {} |\n", verdict(rss_phase2 <= 512.0));
@@ -528,6 +625,7 @@ fn bench_100k_index_memory_latency_ipc() {
     table += &format!("| IPC ExplainItem | {explain_ms:.1} ms | n/a | n/a |\n");
     let stall = MAX_STALL_MS.load(std::sync::atomic::Ordering::Relaxed) as f64 / 1000.0;
     table += &format!("| longest IPC stall (any request, during 100k scan/reconcile) | {stall:.1} s | n/a | n/a |\n");
+    table += "\nThe event-to-deadline row retains its historical name but measures visibility in `LoadUpcoming` (the current decision table), not only the scheduler deadline write. The event trace separates the deadline transaction from later decision publication and IPC polling. Startup settle is measured separately, using explicit full-decision job completion rather than CPU idleness alone.\n";
     let cpu_note = |a: Option<f64>, b: Option<f64>| match a.zip(b) {
         Some((a, b)) => format!("{:.1} s", (b - a).max(0.0)),
         None => "not measured".into(),
@@ -545,8 +643,9 @@ fn bench_100k_index_memory_latency_ipc() {
         cpu_note(cpu_at_index, cpu_at_done)
     );
     milestones += "\nPhases: enumerate = filesystem metadata traversal; publish = candidate rows to SQLite; record = change fingerprints; evaluate = agent snapshot merge + hydration + rule evaluation (scheduler scan) up to the deadline write; deadlines = deadline rows to SQLite; explain = per-item hydration + resolution + explanation; decisions_store = decision rows to SQLite.\n";
+    let phase2_records = read_phases(&phase2_path);
     let phase_report = format!(
-        "{}{}",
+        "{}{}{}",
         phase_table(
             "Rust daemon phase timing, first index of the rule (phase 1; passes after the first mean repeated full evaluations)",
             &read_phases(&base.join("phases-3600.jsonl")),
@@ -554,9 +653,10 @@ fn bench_100k_index_memory_latency_ipc() {
         ),
         phase_table(
             "Rust daemon phase timing, restart + 2 s reconcile + one new file (phase 2, since agent start)",
-            &read_phases(&base.join("phases-2.jsonl")),
+            &phase2_records,
             phase2_epoch_ms
-        )
+        ),
+        event_phase_table(&phase2_records, event_epoch_ms, event_observed_epoch_ms)
     );
     println!("\n{table}\n{milestones}\n{phase_report}");
     if let Some(path) = std::env::var_os("TINYPRUNE_BENCH_OUT") {

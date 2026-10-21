@@ -509,6 +509,7 @@ fn reads_are_answered_while_the_engine_is_busy() {
     // The guard stands in for a long scan turn; every read must still answer (they would deadlock
     // here if they waited for the engine).
     let _scan = service.hold_engine_for_test();
+    let _decisions = service.hold_decisions_for_test();
     assert!(matches!(
         service.handle(Request::LoadOverview),
         Response::Overview(v) if v.deadline_summary.as_ref().unwrap().active == 1 && v.indexed_items >= 1
@@ -642,6 +643,15 @@ fn changed_candidates_get_decisions_without_a_full_pass_and_trashed_ones_leave_n
         other => panic!("{other:?}"),
     };
     assert_eq!(total(service), 1);
+    let history = match service.handle(Request::LoadActivity { limit: 1000 }) {
+        Response::Activity(items) => items,
+        other => panic!("{other:?}"),
+    };
+    let expected_rule = fixture.rule().id;
+    assert!(history.iter().any(|item| {
+        item.identity.as_ref().is_some_and(|identity| identity.path_hint == a)
+            && item.rule_id.as_deref() == Some(expected_rule.as_str())
+    }), "compact scheduling activity lost its identity or rule");
     fs::write(fixture.item("b.tmp"), b"y").unwrap();
     acknowledged(service.handle(Request::RebuildIndex));
     settle(&daemon);

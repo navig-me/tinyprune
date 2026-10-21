@@ -39,6 +39,18 @@ A rescan signal is not proof that kernel coverage recovered. The future agent mu
 
 The target-only locked `windows` 0.62 dependency fills std's concrete gaps: recursive notifications, overlapped I/O/cancellation, waitable events, and ordinal path comparison. No asynchronous runtime or new crates.io package is needed.
 
+### Optional diagnostic trace
+
+With `TINYPRUNE_PHASE_LOG` set to an appendable file, the watcher and daemon share a counter-only JSONL sink: `phase`, `ms`, `items`, `end_ms` (Unix wall-clock milliseconds). Unset, nothing is written; records contain no paths or event payloads. All watcher records are zero-duration observation markers:
+
+- `watch_receipt_bytes`: bytes reported by a completed `GetOverlappedResult`, including zero-byte completions. This is the actual time userspace observes completion, **not** a claimed kernel generation/delivery timestamp.
+- `watch_loss`: one loss-handler invocation (malformed records, failed completion/rearm, unavailable root, or overflow); repeated observations are not deduplicated.
+- `watch_overflow`: one zero/invalid-size completion or `ERROR_NOTIFY_ENUM_DIR` observation.
+- `watch_batch`: coalesced events returned by a nonempty batch.
+- `watch_rescan`: roots returned for reconciliation, including new-directory coverage hints, not only overflow.
+
+Counts describe observations, not unique filesystem operations. Receipt and batch markers can be separated by bounded parsing turns, and no per-path identifiers are emitted.
+
 ## Other targets
 
 macOS and targets other than Linux/Windows compile the portable trait, event types, coalescer, and scripted source only. There is deliberately **no native watcher stub pretending to observe changes**, and no kqueue/FSEvents implementation. Consumers must select an actual platform adapter explicitly.

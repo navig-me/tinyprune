@@ -21,6 +21,26 @@ mod windows_notify;
 #[cfg(windows)]
 pub use windows::WindowsEventSource;
 
+/// Optional counter-only phase trace shared with the runtime. Receipt timestamps
+/// are observation times in this process, not kernel event delivery timestamps.
+pub fn record_phase(phase: &str, elapsed: Duration, items: usize) {
+    use std::io::Write as _;
+    use std::sync::{LazyLock, Mutex};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    static SINK: LazyLock<Option<Mutex<std::fs::File>>> = LazyLock::new(|| {
+        let path = std::env::var_os("TINYPRUNE_PHASE_LOG")?;
+        std::fs::OpenOptions::new().create(true).append(true).open(path).ok().map(Mutex::new)
+    });
+    let Some(sink) = SINK.as_ref() else { return };
+    let end_ms = SystemTime::now().duration_since(UNIX_EPOCH)
+        .map_or(0.0, |d| d.as_secs_f64() * 1000.0);
+    if let Ok(mut file) = sink.lock() {
+        let _ = writeln!(file,
+            "{{\"phase\":\"{phase}\",\"ms\":{:.3},\"items\":{items},\"end_ms\":{end_ms:.0}}}",
+            elapsed.as_secs_f64() * 1000.0);
+    }
+}
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum EventKind {
     Created,
