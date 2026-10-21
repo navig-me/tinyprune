@@ -1,6 +1,6 @@
 # TinyPrune cross-platform desktop UI (in development)
 
-Unreleased engineering work. TinyPrune remains macOS-only; the native Swift app is unchanged and is not replaced. No Linux or Windows build is released. The shell has been run on Linux only inside the Docker harness below (Ubuntu 24.04, WebKitGTK under Xvfb, aarch64 container); it has never been run on Windows (WebView2) or macOS (WKWebView), and no screen reader has been used.
+Unreleased engineering work. TinyPrune remains macOS-only; the native Swift app is unchanged and is not replaced. No Linux or Windows build is released. The shell has been run on Linux only inside the Docker harness below (Ubuntu 24.04, WebKitGTK under Xvfb, aarch64 container); it has also been run once on a GitHub-hosted windows-2022 runner (WebView2 131, see below) but never on macOS (WKWebView), and no screen reader has been used.
 
 This is a separate Cargo workspace (`rust/Cargo.toml` excludes `ui`) so webview and GTK dependencies cannot break the main Rust workspace or CI. It contains a Tauri 2 shell and a static, build-step-free HTML/CSS/vanilla-JS frontend.
 
@@ -43,6 +43,14 @@ cargo check --manifest-path rust/ui/Cargo.toml
 ```
 
 Linux requires WebKitGTK/GTK development packages; Windows requires WebView2. To run once those are present: `cargo run --manifest-path rust/ui/Cargo.toml`. The shell reads the agent endpoint from `TINYPRUNE_ENDPOINT`, then `TINYPRUNE_SOCKET`, then the per-OS default, exactly like the daemon and CLI. If the agent cannot be reached, the error names the endpoint and says the agent is not running, instead of showing a bare OS error. Packaging is intentionally minimal: bundling is disabled and `icons/` holds a **placeholder** development icon, not a TinyPrune brand asset.
+
+## Windows CI harness (real agent, real WebView2 window)
+
+The non-gating (`continue-on-error`) `rust-ui-windows` job in `.github/workflows/ci.yml` builds `tinyprune-agentd`, `tinyprune` and the UI (release, `--locked`) on windows-2022, checks that the Evergreen WebView2 runtime is present (it is preinstalled on the hosted image, 131.0.2903.86 on 2026-10-21; `windows/setup-webdriver.ps1` installs Microsoft's bootstrapper if it is ever missing), downloads the Microsoft Edge WebDriver matching that version from `msedgedriver.microsoft.com` (Microsoft publishes no checksum, so the job requires a valid Microsoft Authenticode signature on the executable), installs `tauri-driver` 2.0.4 and axe-core 4.10.3, and runs `windows/run-smoke.ps1`. That script starts the real agent with an isolated `--data-dir` and a unique `\\.\pipe\tinyprune-ui-*` endpoint (`TINYPRUNE_ENDPOINT`), then runs the same `docker/fixture.py` and `docker/smoke.py` as the Linux harness (parameterised by `TINYPRUNE_UI_*` environment variables). The smoke drives the window through tauri-driver and covers Overview, Rules and Preview, Upcoming, Activity, Settings, the explanation drawer (including Escape and focus return), the pause toggle, dark and 390 px layouts, the offline state after the agent process is killed (TerminateProcess), explicit mock mode, and 15 axe-core runs (all with 0 violations). Preview never touches the Recycle Bin; the smoke checks the fixture files still exist. Artifacts (WebDriver page screenshots, whole-desktop grabs, axe JSON, agent and driver logs) are kept 7 days.
+
+Limits: one hosted runner at 1024x768, devicePixelRatio 1 (no high-DPI or non-default scaling was exercised); the 1180x820 default window is larger than that desktop, so the lower part of the window is off-screen in the whole-desktop grabs, and those grabs are partly covered by a console window that msedgedriver makes `msedgewebview2.exe` open (the WebDriver page screenshots are unaffected). `prefers-reduced-motion` reads as reduce on the runner, so it is recorded rather than asserted. No screen reader, Narrator or installed (non-driver) launch path was tested.
+
+Defect found by this job: with several parallel requests the agent's single pending pipe instance made the client fail with `ERROR_PIPE_BUSY` (os error 231) and the UI showed "Agent unavailable" although the agent was running. Fixed in `tinyprune-ipc` (`windows::connect` now waits for a free instance), with a Windows burst test.
 
 ## Linux Docker harness (real agent, real Tauri window)
 

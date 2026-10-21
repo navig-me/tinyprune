@@ -28,6 +28,9 @@ pub mod manifest;
 pub mod state;
 #[cfg(feature = "client")]
 pub mod system;
+/// Loopback static file server for end-to-end tests; absent from released artifacts.
+#[cfg(feature = "test-overrides")]
+pub mod testserver;
 #[cfg(feature = "client")]
 pub mod transport;
 #[cfg(feature = "client")]

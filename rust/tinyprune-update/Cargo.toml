@@ -37,3 +37,9 @@ base64 = { version = "0.23", optional = true }
 flate2 = { version = "1", optional = true }
 tar = { version = "0.4", default-features = false, optional = true }
 zip = { version = "9", default-features = false, features = ["deflate-flate2"], optional = true }
+
+# Windows launcher only: job object (the agent dies with its launcher, so a Scheduled Task /End never
+# leaves an orphan agent holding the pipe) and console detachment. Same locked `windows` version as
+# tinyprune-windows; no new crate enters the tree.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Console", "Win32_System_JobObjects", "Win32_System_Threading"] }

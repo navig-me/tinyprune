@@ -1,8 +1,8 @@
 <#
 .SYNOPSIS
   Install the TinyPrune development build for the current user in the UPDATABLE layout (no elevation).
-  UNRELEASED engineering artifact: Windows is not a supported or released platform. NEVER RUN ON WINDOWS
-  by the authors: this script has not been parsed or executed there (ADR 0012).
+  UNRELEASED engineering artifact: Windows is not a supported or released platform. Exercised end to end on a
+  windows-2022 runner by rust/tests-e2e/update-windows.ps1 (ADR 0012).
 .DESCRIPTION
   Layout (ADR 0012):
     %LOCALAPPDATA%\TinyPrune\versions\<package_version>-b<build>\bin\*.exe

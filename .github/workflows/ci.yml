@@ -134,6 +134,58 @@ jobs:
       - name: Check Tauri shell
         run: cargo check --locked --manifest-path rust/ui/Cargo.toml
 
+  # The Tauri shell on a real Windows runner: WebView2, tauri-driver + Microsoft Edge WebDriver, the real agent over a
+  # named pipe. Non-gating while the Windows harness is unproven; the Linux equivalent is rust/ui/docker.
+  rust-ui-windows:
+    name: Rust UI on Windows (WebView2, real agent; non-gating)
+    runs-on: windows-2022
+    timeout-minutes: 60
+    continue-on-error: true
+    env:
+      TINYPRUNE_BIN_DIR: ${{ github.workspace }}\rust\target\release
+      TINYPRUNE_UI_APP: ${{ github.workspace }}\rust\ui\target\release\tinyprune-ui.exe
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - name: Paths under the runner temp directory
+        shell: pwsh
+        run: |
+          "TINYPRUNE_UI_AXE=$env:RUNNER_TEMP\a11y\node_modules\axe-core\axe.min.js" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "TINYPRUNE_UI_OUT=$env:RUNNER_TEMP\ui-out" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 22.14.0
+      - name: Install pinned Rust toolchain
+        shell: bash
+        run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust/rust-toolchain.toml)" --profile minimal
+      - name: Frontend tests
+        run: node --test rust/ui/frontend/tests/frontend.test.js
+      - name: Build agent, CLI and UI (release, locked)
+        shell: bash
+        run: |
+          cargo build --release --locked --manifest-path rust/Cargo.toml -p tinyprune-daemon -p tinyprune-cli
+          cargo build --release --locked --manifest-path rust/ui/Cargo.toml -p tinyprune-ui
+      - name: Install tauri-driver 2.0.4
+        run: cargo install tauri-driver --version 2.0.4 --locked
+      - name: WebView2 runtime and matching Edge WebDriver
+        shell: pwsh
+        run: ./rust/ui/windows/setup-webdriver.ps1
+      - name: Install axe-core 4.10.3
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\a11y" | Out-Null
+          Push-Location "$env:RUNNER_TEMP\a11y"
+          npm install --save-exact axe-core@4.10.3
+          Pop-Location
+      - name: Real-agent UI smoke (WebDriver)
+        shell: pwsh
+        run: ./rust/ui/windows/run-smoke.ps1
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: rust-ui-windows
+          path: ${{ runner.temp }}\ui-out
+          retention-days: 7
+
   native:
     name: Native acceptance (${{ matrix.runner }})
     needs: changes

@@ -97,6 +97,43 @@ pub trait InstallFs {
     fn set_current(&self, layout: &Layout, name: &str) -> io::Result<()>;
 }
 
+/// Windows error codes that mean "somebody has the file open right now": ACCESS_DENIED, SHARING_VIOLATION,
+/// LOCK_VIOLATION. Virus scanners and indexers hold freshly written files and directories for a moment,
+/// and a rename (a directory move, or the pointer replace) fails until they let go.
+pub(crate) fn is_transient_sharing_error(error: &io::Error) -> bool {
+    matches!(error.raw_os_error(), Some(5 | 32 | 33))
+}
+
+/// Run `op`, retrying a transient sharing error up to `attempts` times with `delay` between tries.
+/// Any other error, or the last transient one, is returned unchanged.
+pub(crate) fn retry_transient<T>(
+    attempts: u32,
+    delay: std::time::Duration,
+    mut op: impl FnMut() -> io::Result<T>,
+) -> io::Result<T> {
+    let mut tries = 0;
+    loop {
+        match op() {
+            Err(e) if tries < attempts && is_transient_sharing_error(&e) => {
+                tries += 1;
+                std::thread::sleep(delay);
+            }
+            other => return other,
+        }
+    }
+}
+
+/// `fs::rename`, retried on Windows only (elsewhere those codes mean something else and are real).
+fn rename_retrying(from: &Path, to: &Path) -> io::Result<()> {
+    if cfg!(windows) {
+        retry_transient(40, std::time::Duration::from_millis(100), || {
+            fs::rename(from, to)
+        })
+    } else {
+        fs::rename(from, to)
+    }
+}
+
 pub struct StdFs {
     pub pointer: PointerKind,
 }
@@ -124,7 +161,7 @@ impl InstallFs for StdFs {
                 "destination exists",
             ));
         }
-        fs::rename(from, to)
+        rename_retrying(from, to)
     }
     fn remove_dir_all(&self, path: &Path) -> io::Result<()> {
         fs::remove_dir_all(path)
@@ -219,7 +256,7 @@ impl InstallFs for StdFs {
         }
         // One rename replaces the old pointer; readers see the old or the new target, never neither.
         // (std's Windows rename uses MoveFileExW with MOVEFILE_REPLACE_EXISTING.)
-        let result = fs::rename(&tmp, layout.current());
+        let result = rename_retrying(&tmp, &layout.current());
         if result.is_err() {
             let _ = fs::remove_file(&tmp);
         }
@@ -405,6 +442,39 @@ mod tests {
 
     fn layout() -> Layout {
         Layout::new(r"C:\Users\u\AppData\Local\TinyPrune")
+    }
+
+    #[test]
+    fn transient_sharing_errors_are_retried_and_real_errors_are_not() {
+        use std::time::Duration;
+        for code in [5, 32, 33] {
+            let mut failures = 3;
+            let result = retry_transient(5, Duration::ZERO, || {
+                if failures > 0 {
+                    failures -= 1;
+                    Err(io::Error::from_raw_os_error(code))
+                } else {
+                    Ok(7)
+                }
+            });
+            assert_eq!(result.unwrap(), 7, "code {code}");
+        }
+        // Gives up after the budget, returning the last error.
+        let mut calls = 0;
+        let err = retry_transient::<()>(2, Duration::ZERO, || {
+            calls += 1;
+            Err(io::Error::from_raw_os_error(32))
+        })
+        .unwrap_err();
+        assert_eq!((calls, err.raw_os_error()), (3, Some(32)));
+        // A genuine error is returned at once.
+        let mut calls = 0;
+        let err = retry_transient::<()>(5, Duration::ZERO, || {
+            calls += 1;
+            Err(io::Error::from_raw_os_error(2))
+        })
+        .unwrap_err();
+        assert_eq!((calls, err.raw_os_error()), (1, Some(2)));
     }
 
     // --- Windows swap logic, against the abstract filesystem ---

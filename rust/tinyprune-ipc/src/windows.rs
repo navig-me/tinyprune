@@ -193,20 +193,38 @@ fn set_mode(file: &File, nonblocking: bool) -> io::Result<()> {
             .map_err(error)
     }
 }
+/// Total time a client waits for a free pipe instance. The listener keeps a single pending instance and only
+/// replaces it after accepting, so a burst of parallel clients (the UI issues several requests at once) sees
+/// ERROR_PIPE_BUSY until the accept loop catches up. That is flow control, not a failure.
+const BUSY_WAIT_MS: u64 = 10_000;
 pub fn connect(name: &str) -> io::Result<File> {
     validate_name(name)?;
     let name = wide(name);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(BUSY_WAIT_MS);
     unsafe {
-        let handle = CreateFileW(
-            PCWSTR(name.as_ptr()),
-            GENERIC_READ.0 | GENERIC_WRITE.0,
-            FILE_SHARE_MODE(0),
-            None,
-            OPEN_EXISTING,
-            FILE_FLAGS_AND_ATTRIBUTES(0),
-            None,
-        )
-        .map_err(error)?;
+        let handle = loop {
+            match CreateFileW(
+                PCWSTR(name.as_ptr()),
+                GENERIC_READ.0 | GENERIC_WRITE.0,
+                FILE_SHARE_MODE(0),
+                None,
+                OPEN_EXISTING,
+                FILE_FLAGS_AND_ATTRIBUTES(0),
+                None,
+            ) {
+                Ok(handle) => break handle,
+                Err(e) if e.code().0 as u32 & 0xffff == ERROR_PIPE_BUSY.0 => {
+                    let left = deadline.saturating_duration_since(std::time::Instant::now());
+                    if left.is_zero() {
+                        return Err(error(e));
+                    }
+                    // Returns early when an instance frees up; a timeout or a vanished pipe loops back to
+                    // CreateFileW, which reports the real state.
+                    let _ = WaitNamedPipeW(PCWSTR(name.as_ptr()), left.as_millis().min(250) as u32);
+                }
+                Err(e) => return Err(error(e)),
+            }
+        };
         let file = File::from_raw_handle(handle.0);
         let mut pid = 0;
         GetNamedPipeServerProcessId(handle, &mut pid).map_err(error)?;

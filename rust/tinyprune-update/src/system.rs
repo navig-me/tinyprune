@@ -97,6 +97,11 @@ impl DaemonControl for IpcDaemon<'_> {
             )),
         }
     }
+    /// A restarted agent starts with no update lease; the agent that was quiesced for this update is
+    /// still `Quiesced` (its lease outlives the restart window), so `Idle` identifies a new process.
+    fn is_fresh(&self) -> bool {
+        matches!(self.status(), Ok(s) if s.phase == Phase::Idle)
+    }
 }
 
 const OUTPUT_LIMIT: u64 = 64 * 1024;
@@ -206,16 +211,82 @@ impl Restarter for SystemdRestarter {
     }
 }
 
-/// Windows: stop and start the per-user Scheduled Task registered by `install.ps1`. The task runs
-/// `tinyprune-launcher`, which resolves `current` at start. Not exercised on Windows (see ADR 0012).
+/// Status column of `schtasks /Query /FO CSV /NH` for one task: the last quoted field.
+pub(crate) fn csv_task_status(output: &str) -> Option<String> {
+    let line = output.lines().map(str::trim).find(|l| !l.is_empty())?;
+    let field = line.rsplit("\",\"").next()?;
+    let status = field.trim_matches('"').trim();
+    (!status.is_empty()).then(|| status.to_owned())
+}
+
+/// Windows: stop and start the per-user Scheduled Task registered by `install-managed.ps1`. The task
+/// runs `tinyprune-launcher`, which resolves `current` at start (ADR 0012).
 pub struct ScheduledTaskRestarter {
     pub schtasks: String,
+    pub tasklist: String,
 }
 impl Default for ScheduledTaskRestarter {
     fn default() -> Self {
         Self {
             schtasks: "schtasks".into(),
+            tasklist: "tasklist".into(),
         }
+    }
+}
+/// True when `tasklist /FO CSV /NH` output lists a process with this image name.
+pub(crate) fn lists_image(output: &str, image: &str) -> bool {
+    output
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix('"'))
+        .any(|l| {
+            l.split('"')
+                .next()
+                .is_some_and(|name| name.eq_ignore_ascii_case(image))
+        })
+}
+
+impl ScheduledTaskRestarter {
+    fn task_status(&self) -> Option<String> {
+        let query = run_limited(
+            Command::new(&self.schtasks).args(["/Query", "/TN", TASK_NAME, "/FO", "CSV", "/NH"]),
+            Duration::from_secs(15),
+        )
+        .ok()?;
+        query
+            .status
+            .success()
+            .then(|| csv_task_status(&query.stdout))
+            .flatten()
+    }
+    fn agent_running(&self) -> bool {
+        run_limited(
+            Command::new(&self.tasklist).args([
+                "/FI",
+                "IMAGENAME eq tinyprune-agentd.exe",
+                "/FO",
+                "CSV",
+                "/NH",
+            ]),
+            Duration::from_secs(15),
+        )
+        .is_ok_and(|c| lists_image(&c.stdout, "tinyprune-agentd.exe"))
+    }
+    /// `/End` returns before the agent is gone, and `/Run` is silently ignored while the previous instance
+    /// still runs (the task's instance policy), which would leave the old agent holding the database lock
+    /// and every new agent dying at once. Wait (bounded) for the old agent to exit and the task to leave
+    /// `Running`, never starting the new one on top of it.
+    fn wait_until_stopped(&self) -> Result<(), String> {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while self.agent_running() {
+            if Instant::now() >= deadline {
+                return Err("the previous agent did not stop within 30 s".into());
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        while self.task_status().as_deref() == Some("Running") && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        Ok(())
     }
 }
 impl Restarter for ScheduledTaskRestarter {
@@ -228,10 +299,13 @@ impl Restarter for ScheduledTaskRestarter {
             return Ok(RestartKind::Unmanaged);
         }
         // /End fails when the task is not running; that is fine, /Run is what must succeed.
-        let _ = run_limited(
+        let ended = run_limited(
             Command::new(&self.schtasks).args(["/End", "/TN", TASK_NAME]),
             Duration::from_secs(30),
         );
+        if matches!(&ended, Ok(c) if c.status.success()) {
+            self.wait_until_stopped()?;
+        }
         let run = run_limited(
             Command::new(&self.schtasks).args(["/Run", "/TN", TASK_NAME]),
             Duration::from_secs(30),
@@ -462,6 +536,94 @@ echo "boom" >&2; exit 1"#,
         .restart()
         .unwrap_err();
         assert!(err.contains("boom"), "{err}");
+    }
+    #[test]
+    fn tasklist_rows_are_matched_by_image_name() {
+        let row = "\"tinyprune-agentd.exe\",\"123\",\"Console\",\"1\",\"10,000 K\"\r\n";
+        assert!(lists_image(row, "tinyprune-agentd.exe"));
+        assert!(lists_image(&row.to_uppercase(), "tinyprune-agentd.exe"));
+        assert!(!lists_image(row, "tinyprune-launcher.exe"));
+        assert!(!lists_image(
+            "INFO: No tasks are running which match the specified criteria.\r\n",
+            "tinyprune-agentd.exe"
+        ));
+        assert!(!lists_image("", "tinyprune-agentd.exe"));
+    }
+    #[test]
+    fn scheduled_task_restart_waits_for_the_old_agent_before_run() {
+        let d = TempDir::new();
+        let log = d.path().join("log");
+        let counter = d.path().join("count");
+        let schtasks = d.path().join("schtasks");
+        script(
+            &schtasks,
+            &format!(
+                r#"echo "$@" >> {log}
+case "$1" in
+/Query) case "$*" in *CSV*) echo '"\TinyPrune Agent (dev)","N/A","Ready"';; esac; exit 0;;
+/End) [ -f {no_end} ] && exit 1; exit 0;;
+/Run) exit 0;;
+esac
+exit 1"#,
+                log = log.display(),
+                no_end = d.path().join("no-end").display()
+            ),
+        );
+        let tasklist = d.path().join("tasklist");
+        script(
+            &tasklist,
+            &format!(
+                r#"echo "tasklist $@" >> {log}
+n=$(cat {c} 2>/dev/null || echo 0); n=$((n+1)); echo $n > {c}
+if [ $n -le 3 ]; then echo '"tinyprune-agentd.exe","123","Console","1","10,000 K"'; else echo 'INFO: No tasks are running which match the specified criteria.'; fi"#,
+                log = log.display(),
+                c = counter.display()
+            ),
+        );
+        let restarter = ScheduledTaskRestarter {
+            schtasks: schtasks.display().to_string(),
+            tasklist: tasklist.display().to_string(),
+        };
+        assert_eq!(restarter.restart().unwrap(), RestartKind::Restarted);
+        let calls: Vec<String> = std::fs::read_to_string(&log)
+            .unwrap()
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        let last_tasklist = calls
+            .iter()
+            .rposition(|c| c.starts_with("tasklist"))
+            .unwrap();
+        let run = calls.iter().position(|c| c.starts_with("/Run")).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&counter).unwrap().trim(),
+            "4",
+            "polled until the agent was gone"
+        );
+        assert!(
+            last_tasklist < run,
+            "/Run only after the old agent exited: {calls:?}"
+        );
+
+        // A task that was not running (/End fails) is started directly, without waiting on processes.
+        std::fs::write(d.path().join("no-end"), "").unwrap();
+        std::fs::remove_file(&counter).unwrap();
+        assert_eq!(restarter.restart().unwrap(), RestartKind::Restarted);
+        assert!(!counter.exists(), "no process polling when /End failed");
+    }
+    #[test]
+    fn task_status_is_the_last_csv_column() {
+        assert_eq!(
+            csv_task_status("\"\\TinyPrune Agent (dev)\",\"N/A\",\"Running\"\r\n").as_deref(),
+            Some("Running")
+        );
+        assert_eq!(
+            csv_task_status("\n\"\\TinyPrune Agent (dev)\",\"11/1/2026 3:00:00 AM\",\"Ready\"\n")
+                .as_deref(),
+            Some("Ready")
+        );
+        assert_eq!(csv_task_status(""), None);
+        assert_eq!(csv_task_status("\"\\x\",\"N/A\",\"\"\n"), None);
     }
     #[test]
     fn output_is_bounded() {
