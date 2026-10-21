@@ -1,6 +1,6 @@
 [package]
 name = "tinyprune-unix"
-version = "0.0.0"
+version = "0.2.0"
 edition = "2021"
 publish = false
 description = "In-development Unix filesystem adapter for TinyPrune"

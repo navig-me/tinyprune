@@ -70,6 +70,18 @@ def click(selector):
 def text(value):
     return until(lambda: js('return document.body.innerText.includes(arguments[0])', value), value)
 
+def preview_ready(description):
+    # A completed, populated Preview is the fixture contract, not merely an enabled Save button.
+    # until() bounds the wait and includes the rendered page in timeout diagnostics.
+    return until(lambda: js('''
+        const output = document.querySelector("#preview-output");
+        const save = document.querySelector("#save-rule");
+        return output && save && !save.disabled
+            && output.innerText.includes("Preview completed.")
+            && [...output.querySelectorAll("[data-explain]")].some(button =>
+                button.getAttribute("aria-label") === "Explain " + arguments[0]);
+    ''', str(fixture / 'old.txt')), description + ': completed Preview with old.txt explanation and Save enabled')
+
 def route(name, heading):
     click('nav a[href="#' + name + '"]')
     text(heading)
@@ -107,10 +119,14 @@ try:
     click('a[href="#rules/new"]'); text('A thoughtful new rule.')
     # Use WebDriver keystrokes for the editor, rather than assigning fixture DOM.
     command('/element/' + element('input[name="name"]') + '/value', {'text':'Created through UI'})
-    click('#preview-rule'); text('Preview completed.')
-    until(lambda: js('return !document.querySelector("#save-rule").disabled'), 'Preview enables save')
+    # Typing schedules a debounced automatic Preview. Let it finish before the single explicit
+    # Preview click, otherwise its pending timer can clear the results after Save first enables.
+    preview_ready('Automatic Preview after editing the rule name')
+    click('#preview-rule')
+    preview_ready('Explicit Preview')
     audit('real-preview'); shot('real-preview')
-    click('[data-explain]'); text('The agent’s complete decision context.')
+    preview_ready('Preview remains ready after audit and screenshots')
+    click('#preview-output [data-explain]'); text('The agent’s complete decision context.')
     audit('real-explanation'); shot('real-explanation')
     assert js('return document.querySelector("#explanation").open')
     # Escape closes the native modal; focus must return to its triggering button.

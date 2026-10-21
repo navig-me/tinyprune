@@ -45,6 +45,16 @@ jobs:
           echo "native=$native" >> "$GITHUB_OUTPUT"
           echo "Native jobs needed: $native"
 
+  # Cheap and independent of the `changes` filter: runs on every pull request and push (ADR 0013).
+  versions:
+    name: Version consistency
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - name: Marketing version, crates, lockfiles, CHANGELOG and RELEASES.md agree
+        run: python3 Scripts/check-versions.py
+
   static-sites:
     name: Validate ${{ matrix.site }}
     runs-on: ubuntu-24.04

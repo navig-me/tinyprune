@@ -9,7 +9,10 @@ label="${1:?target label required, e.g. linux-x86_64}"
 crate_version() {
   sed -n 's/^version *= *"\(.*\)"/\1/p' "$root/rust/$1/Cargo.toml" | sed -n '1p'
 }
-daemon="$(crate_version tinyprune-daemon)"
+# The stamp describes what was compiled: TINYPRUNE_VERSION (compiled into the binaries) wins over the crate version.
+# CI sets it to the daemon crate version, so released archives are unaffected; the update end-to-end uses it to
+# build old/new variants with distinct versions.
+daemon="${TINYPRUNE_VERSION:-$(crate_version tinyprune-daemon)}"
 cli="$(crate_version tinyprune-cli)"
 ui="$(crate_version ui)"
 [ -n "$daemon" ] && [ -n "$cli" ] || { echo "cannot read crate versions" >&2; exit 1; }
