@@ -6,8 +6,9 @@ This supplementary summary links to the same public, static HTML documentation p
 
 ## Key facts
 
-- Requires macOS 14 or later. Releases are universal (Intel and Apple silicon). Current early releases are not Developer ID signed or notarized; direct downloads require first-launch approval. Check [GitHub Releases](https://github.com/navig-me/tinyprune/releases) for the latest version.
-- This guide documents the Swift macOS app, Finder extension and CLI. The Rust workspace provides the cross-platform core and runtime for Linux and Windows. Check [GitHub Releases](https://github.com/navig-me/tinyprune/releases) for platform-specific downloads and installation requirements. See [cross-platform downloads and verification](https://docs.tinyprune.com/#cross-platform) and the linked engineering status matrix for native verification limits.
+- Requires macOS 14 or later on Intel or Apple silicon. The latest published macOS release is 0.1.13. Published builds are ad-hoc signed, not Developer ID signed or notarized; direct downloads require first-launch approval. [GitHub Releases](https://github.com/navig-me/tinyprune/releases) provides published macOS downloads.
+- Version 0.2.0 is prepared, not published. macOS is the only supported product. Linux x86_64 and Windows x86_64 Rust developer previews are being prepared; no Linux/Windows downloads or production Rust update feed are available. See [release status](https://docs.tinyprune.com/#releases), the [release log](https://github.com/navig-me/tinyprune/blob/main/RELEASES.md#020), and the [maintainer runbook](https://github.com/navig-me/tinyprune/blob/main/.github/RELEASING.md).
+- Native watchers, filesystem/Trash adapters, stores, IPC, daemon/CLI and developer installs have recorded CI/container evidence. Real-agent UI runs covered Linux aarch64 Docker and a Windows CI runner; the Windows managed updater ran end to end with a throwaway key. This is not supported-platform or general desktop acceptance. See the [Rust status matrix](https://github.com/navig-me/tinyprune/blob/main/rust/README.md#status-matrix) for exact environments and remaining limits.
 - Items only move to the macOS Trash. TinyPrune never permanently deletes files. Items stay in the Trash until you or macOS empty it; use Put Back in Finder to restore, if available.
 - Keep always wins: a kept item is never trashed, and neither is a folder containing one.
 - Preview runs matching and scheduling without trashing anything. Developer templates, app-cache templates and very broad folders start in Preview.
@@ -59,5 +60,6 @@ All use modification age, produce ordinary editable Trash rules, and start in Pr
 - [CLI exit codes](https://docs.tinyprune.com/#exit-codes)
 - [Rule configuration commands](https://docs.tinyprune.com/#manage-rules-as-code)
 - [Updates](https://docs.tinyprune.com/#updates)
-- [Cross-platform downloads and verification](https://docs.tinyprune.com/#cross-platform)
+- [Releases and preparation status](https://docs.tinyprune.com/#releases)
+- [Cross-platform status and verification](https://docs.tinyprune.com/#cross-platform)
 - [FAQ](https://docs.tinyprune.com/#faq)
