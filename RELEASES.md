@@ -12,18 +12,18 @@ Facts below were taken from `git tag`, `git log -1 --format=%cs <tag>`, `gh rele
 
 | Version | Status | Date | Channel |
 | --- | --- | --- | --- |
-| [0.2.0](#020) | **prepared, not published** | 2026-10-21 (prepared) | macOS (unchanged code) and Rust developer preview (Linux x86_64, Windows x86_64) |
+| [0.2.0](#020) | **publication started; release/signing approvals pending** | 2026-10-21 | macOS (unchanged code) and Rust developer preview (Linux x86_64, Windows x86_64) |
 | 0.1.13 | published prerelease | 2026-10-13 | macOS ad-hoc |
 | 0.1.12 | published prerelease, not in the update feed | 2026-10-09 | macOS ad-hoc |
 | 0.1.11 .. 0.1.2 | published prereleases | 2026-10-08 .. 2026-10-09 | macOS ad-hoc |
 | 0.1.1, 0.1.0 | published prereleases, predate in-app updates | 2026-10-08, 2026-10-06 | macOS ad-hoc |
 | 0.0.1 | tag only, never released | 2026-10-02 | none |
 
-Every published release so far is a **GitHub prerelease** with ad-hoc signed, **not notarized** DMGs: the `release` Environment holds no Apple credentials, so `signing=auto` selects the ad-hoc mode ([.github/DEPLOYMENT.md](.github/DEPLOYMENT.md), ADR 0004/0005/0009). No Developer ID release has ever been produced. First-install Gatekeeper approval is therefore required, as the release notes explain.
+Published macOS releases so far are **GitHub prereleases** with ad-hoc signed, **not notarized** DMGs: the `release` Environment holds no Apple credentials, so `signing=auto` selects the ad-hoc mode ([.github/DEPLOYMENT.md](.github/DEPLOYMENT.md), ADR 0004/0005/0009). No Developer ID release has been produced. First-install Gatekeeper approval is required. The Rust preview uses unsigned archives and a separately authenticated feed; a prerelease hosting page alone does not make that feed live.
 
 ## 0.2.0
 
-**Status: prepared, not published.** No version tag, GitHub release or signed feed has been published for 0.2.0. Preparation [PR #17](https://github.com/navig-me/tinyprune/pull/17) is merged as `18407d26e2188265d9b97037f16c5c8b478b9d76`; its website and documentation changes deploy independently of release publication. The latest published macOS release remains **0.1.13**; no Linux or Windows release downloads are available.
+**Status: publication started; approvals pending.** Tag `v0.2.0` points to `4975449e6476600439cbbea2cf5ae5dbb73b2cf0`, whose [main CI run 39594441064](https://github.com/navig-me/tinyprune/actions/runs/39594441064) passed. [macOS release run 39598318323](https://github.com/navig-me/tinyprune/actions/runs/39598318323) is waiting for `release` Environment approval. The [Rust developer-preview hosting prerelease](https://github.com/navig-me/tinyprune/releases/tag/rust-preview-0.2.0) has been created at candidate commit `18407d26e2188265d9b97037f16c5c8b478b9d76`; archives are not yet attached. [Rust feed run 39598352481](https://github.com/navig-me/tinyprune/actions/runs/39598352481) completed unsigned preparation and is waiting for `update-feed` approval. No production Rust feed is live. The latest downloadable macOS release remains **0.1.13** until the macOS job publishes.
 
 **Why a minor bump.** It adds the cross-platform Rust runtime as a **developer preview**. The macOS application code is unchanged since 0.1.13 apart from the version number; macOS is the only supported product. Linux and Windows archives are unsigned developer-preview builds and carry **no supported-platform claim** (AGENTS.md, ADR 0012).
 
@@ -33,8 +33,8 @@ Every published release so far is a **GitHub prerelease** with ad-hoc signed, **
 
 **Build numbers (monotonic, per channel, never shared).**
 
-- macOS/Sparkle: `CFBundleVersion` is `github.run_number` of the `release.yml` run for the tag. The last published build is **22** (0.1.13); the number for 0.2.0 is fixed only when the tag run starts and will be greater than 22. `Scripts/package-app.swift` defaults `TINYPRUNE_BUILD` to `1` for local builds only. The feed generator refuses a build not greater than retained entries (ADR 0009).
-- Rust preview: `TINYPRUNE_BUILD` is the `github.run_number` of the `rust-artifacts.yml` run (a counter separate from `release.yml`), stamped into the binaries and each archive's `VERSION`. `rust-update-feed.yml` reads the same number from the artifacts run (`gh run view --json number`) and `tinyprune-feed generate` refuses a build not above the retained feed entries; clients refuse downgrades and replayed feeds (ADR 0012). Pull-request runs also consume numbers, so the published number is whatever the chosen dispatch run on `main` has; the last pull-request run seen is #25.
+- macOS/Sparkle: `CFBundleVersion` is the `release.yml` `github.run_number`; the 0.2.0 run is **23**, above the last published build **22** (0.1.13). Packaging has not started until Environment approval is granted. Local builds default `TINYPRUNE_BUILD` to `1`; the feed generator refuses a build not greater than retained entries (ADR 0009).
+- Rust preview: promoted artifact build **29** comes from `github.run_number` of `rust-artifacts.yml`, a counter separate from the macOS channel. It is stamped into both archives and verified against the packaged CLI self-check. Clients refuse downgrade/replayed feeds; subsequent published builds must increase monotonically (ADR 0012).
 
 **Intended artifacts.**
 
@@ -53,7 +53,7 @@ The Rust archives will be hosted on a separate GitHub **prerelease** (not the ma
 | `tinyprune-dev-0.2.0-g18407d26e218-linux-x86_64.tar.gz` | `1b972b38025d2dfc5155912e62bc50de263d60c2c7d601501a57ad2b4f223432` |
 | `tinyprune-dev-0.2.0-g18407d26e218-windows-x86_64.zip` | `2ae730ce1ee58275c18cc2e3c1830d7cd02cda4ae90ebefd6882a0b341ae72eb` |
 
-These are expiring workflow artifacts, not immutable published release assets. No macOS 0.2.0 DMG, public Rust feed or version tag has been created.
+The verified Rust archives remain workflow artifacts until the signing job attaches them to `rust-preview-0.2.0`. Tag `v0.2.0` now exists, but no macOS 0.2.0 DMG or production Rust feed has been published. Do not announce an active update channel until the signed feed PRs are reviewed, deployed and checked through their `verify_public` workflows.
 
 **Verification status** (what CI actually proved; nothing else is claimed).
 
@@ -63,11 +63,20 @@ These are expiring workflow artifacts, not immutable published release assets. N
 | Rust dev artifacts build matrix (Linux, Windows, macOS), Linux Docker install test, Windows Scheduled Task install/run/uninstall | passed on PR #15 and PR #16 heads | [run 39541522001](https://github.com/navig-me/tinyprune/actions/runs/39541522001) (#15), [run 39555906929](https://github.com/navig-me/tinyprune/actions/runs/39555906929) (#16, head `007bb92`) |
 | `rust-core` (tests, clippy, release build, end-to-end smoke) on Ubuntu, Windows, macOS; Rust UI frontend tests + Tauri check; `rust-ui-windows` (non-gating) | passed on PR #16 head | [CI run 39555907074](https://github.com/navig-me/tinyprune/actions/runs/39555907074) |
 | Windows managed-update end-to-end (`windows-update-e2e`, real Scheduled Task, launcher, agent, throwaway key) | passed once on `windows-2022` | [dispatch run 39550764775](https://github.com/navig-me/tinyprune/actions/runs/39550764775) (commit `c25ee1f`); also a job in run 39555906929 |
-| `main` after merging PR #16 (`7d30795`) | CI run was still in progress when this entry was written | [run 39559192807](https://github.com/navig-me/tinyprune/actions/runs/39559192807); re-check before tagging |
+| Tagged `main` commit (`4975449`, `v0.2.0`) | CI passed, including native macOS acceptance, all Rust platforms and the Windows UI smoke | [run 39594441064](https://github.com/navig-me/tinyprune/actions/runs/39594441064) |
 | Preparation PR #17 (`2a49601`) | all 17 checks passed, including Windows UI and managed-update end-to-end | [CI run 39580285014](https://github.com/navig-me/tinyprune/actions/runs/39580285014), [artifact/install/update run 39580285020](https://github.com/navig-me/tinyprune/actions/runs/39580285020) |
-| Benchmark numbers | **not recorded here**; the 100k-entry and store benchmarks are non-gating and write to each CI run's job summary | record the figures from the chosen `main` run before publishing |
+| 100k-entry benchmark on tagged `main` commit | benchmark tests completed on Linux, Windows and macOS; figures below are single hosted-runner measurements, not latency guarantees | [run 39594441064](https://github.com/navig-me/tinyprune/actions/runs/39594441064), jobs 119203145741, 119203145505 and 119203145747 |
 
-**Evidence and remaining limits.** Native Linux inotify and Windows `ReadDirectoryChangesW`, filesystem/Trash adapters, stores, sockets/pipes, daemon/CLI and developer installs have recorded CI or container coverage. The Tauri UI ran against the real agent in Linux aarch64 Docker and on a Windows CI runner; Windows managed updates ran end to end with a throwaway key (runs above). The [Rust workspace status matrix](https://github.com/navig-me/tinyprune/blob/main/rust/README.md#status-matrix) records the detailed environments, measurements and remaining limits. These checks do not establish general desktop or screen-reader accessibility, Windows 100k-file performance acceptance, logon/reboot-trigger behavior, non-administrator behavior or coverage of other Windows editions. **No production Rust feed exists**: `rust-update-feed.yml` has never been run, and the repository variable `TINYPRUNE_UPDATE_PUBLIC_KEY` that `rust-artifacts.yml` reads to embed the production public key is **unset** (checked 2026-10-21), so a dispatch build today would have updates disabled and `rust-update-feed.yml` would reject it. The existing ADR 0009 key is intended to be reused, not rotated. Sparkle `sign_update` interoperability with that key for the Rust feed has not been run. macOS in-app installation of a Sparkle update remains end-to-end unverified (ADR 0009).
+| 100k files / 100 directories | Linux x86_64 | Windows x86_64 | macOS Rust adapter |
+| --- | --- | --- | --- |
+| Initial index | 4.54 s | 46.45 s | 9.56 s |
+| All decision rows visible | 15.83 s | 87.02 s | 27.05 s |
+| New-file event to deadline | 63 ms, inotify | 161 ms, native watcher | 1184 ms, periodic fallback |
+| Overview / Upcoming (100 items) | 25.5 / 5.5 ms | 57.7 / 14.5 ms | 23.3 / 6.3 ms |
+
+macOS numbers exercise the Rust test runtime, not the shipping Swift app. CI benchmark steps are non-gating; their logs were inspected for completed benchmark results before recording these figures.
+
+**Evidence and remaining limits.** Native Linux/Windows watchers, filesystem/Trash adapters, stores, IPC, daemon/CLI and developer installations have CI/container coverage. Tauri webviews ran against the real agent in Linux Docker and Windows CI; managed update tests used throwaway keys. The [detailed matrix](https://github.com/navig-me/tinyprune/blob/main/rust/README.md#status-matrix) identifies tested environments and limits. These checks do not establish screen-reader acceptance, logon/reboot-trigger behavior, non-administrator behavior or other Windows editions. The production public key is configured and embedded in build 29, but the Rust signing job is still awaiting approval: no production signed Rust feed is live, and Sparkle-tool interoperability with that production key for the Rust feed remains unverified. macOS Sparkle installation remains end-to-end unverified (ADR 0009).
 
 ## Per-release template
 
