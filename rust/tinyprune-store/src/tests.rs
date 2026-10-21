@@ -287,7 +287,8 @@ fn bench_put_decisions_checkpoint_and_readers() {
         fn drop(&mut self) { self.0.store(true, Ordering::Release); }
     }
     // (label, SQLite autocheckpoint frames, manual limit, truncate when idle after each page, readers, deadlines preloaded)
-    let cases: [(&str, i64, Option<u64>, bool, bool, bool); 9] = [
+    type BenchCase = (&'static str, i64, Option<u64>, bool, bool, bool);
+    let cases: [BenchCase; 9] = [
         ("SQLite autocheckpoint 1000 (previous default)", 1000, None, false, false, true),
         ("SQLite autocheckpoint 1000 (previous default)", 1000, None, false, true, true),
         ("SQLite autocheckpoint 1000, no deadlines preloaded", 1000, None, false, true, false),
