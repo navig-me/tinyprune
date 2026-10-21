@@ -50,6 +50,12 @@ pub trait DaemonControl {
     fn release(&self, token: &str) -> Result<(), ControlError>;
     /// The agent's `service_version`.
     fn health(&self) -> Result<String, ControlError>;
+    /// True when the agent that answers is a freshly started process, not the one that was quiesced for
+    /// this update. A restart that did not take effect leaves the old agent answering with the same
+    /// version, which must not count as a healthy new build. Default: assume fresh.
+    fn is_fresh(&self) -> bool {
+        true
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -361,7 +367,8 @@ fn wait_healthy(ctx: &InstallContext<'_>, expected: &str) -> Result<(), String> 
     let mut last: String;
     loop {
         last = match ctx.daemon.health() {
-            Ok(v) if v == expected => return Ok(()),
+            Ok(v) if v == expected && ctx.daemon.is_fresh() => return Ok(()),
+            Ok(v) if v == expected => "the agent that answers is still the one holding the update lease (it was not restarted)".to_owned(),
             Ok(v) => format!("agent reports version {v}, expected {expected}"),
             Err(e) => e.to_string(),
         };

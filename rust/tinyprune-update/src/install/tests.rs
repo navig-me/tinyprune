@@ -105,9 +105,7 @@ impl Restarter for Restart {
             .read_current(&self.layout)
             .unwrap()
             .expect("current pointer exists");
-        self.log
-            .borrow_mut()
-            .push(format!("restart->{target}"));
+        self.log.borrow_mut().push(format!("restart->{target}"));
         let mut r = self.results.borrow_mut();
         if r.len() > 1 {
             r.remove(0)
@@ -482,6 +480,57 @@ fn wrong_version_after_restart_counts_as_failed_health() {
     *rig.daemon.health.borrow_mut() = vec![Ok("0.1.0".into())]; // still the old agent
     assert!(matches!(rig.run(), Err(InstallError::RolledBack(_))));
     assert_eq!(rig.current(), "0.1.0-b1");
+}
+
+/// The old agent keeps answering with the same version when the restart did not take effect (for
+/// example the service manager ignored it). That must not count as a healthy new build.
+struct StaleAgent<'a> {
+    inner: &'a Daemon,
+    stale_checks: Cell<u32>,
+}
+impl DaemonControl for StaleAgent<'_> {
+    fn quiesce(&self, t: &str, g: &str, l: Duration) -> Result<Status, ControlError> {
+        self.inner.quiesce(t, g, l)
+    }
+    fn status(&self) -> Result<Status, ControlError> {
+        self.inner.status()
+    }
+    fn release(&self, t: &str) -> Result<(), ControlError> {
+        self.inner.release(t)
+    }
+    fn health(&self) -> Result<String, ControlError> {
+        self.inner.health()
+    }
+    fn is_fresh(&self) -> bool {
+        let left = self.stale_checks.get();
+        self.stale_checks.set(left.saturating_sub(1));
+        left == 0
+    }
+}
+
+#[test]
+fn a_restart_that_left_the_old_agent_answering_is_rolled_back() {
+    let rig = Rig::new();
+    // Health reports the expected version throughout; only freshness distinguishes old from new.
+    let stale = StaleAgent {
+        inner: &rig.daemon,
+        stale_checks: Cell::new(9),
+    };
+    let result = rig.run_with(&stale, &rig.sleeper);
+    assert!(
+        matches!(result, Err(InstallError::RolledBack(_))),
+        "{result:?}"
+    );
+    assert_eq!(rig.current(), "0.1.0-b1");
+
+    // The same agent but already fresh is healthy.
+    let rig = Rig::new();
+    let fresh = StaleAgent {
+        inner: &rig.daemon,
+        stale_checks: Cell::new(0),
+    };
+    assert!(rig.run_with(&fresh, &rig.sleeper).is_ok());
+    assert_eq!(rig.current(), "0.2.0-b2");
 }
 
 #[test]
