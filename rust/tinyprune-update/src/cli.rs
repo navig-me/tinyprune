@@ -432,6 +432,40 @@ fn execute(args: &[String], connect: Connect<'_>) -> Result<(Value, String), Fai
                 ),
             ))
         }
+        // End-to-end test harness only (never in released artifacts): hold or drop the agent's
+        // Trash/update lease so a script can prove Trash is blocked while an update is in progress.
+        #[cfg(feature = "test-overrides")]
+        "test-quiesce" | "test-release" => {
+            use crate::install::DaemonControl;
+            let a = parse(rest, &[], &["--token", "--seconds"])?;
+            let token = a
+                .value("--token")
+                .ok_or_else(|| failure("usage", "--token required", 64))?;
+            let socket = a.socket.clone();
+            let dial = move || connect(socket.as_deref());
+            let daemon = IpcDaemon { connect: &dial };
+            let status = if sub == "test-quiesce" {
+                let seconds: u64 = a
+                    .value("--seconds")
+                    .and_then(|s| s.parse().ok())
+                    .ok_or_else(|| failure("usage", "--seconds must be a number", 64))?;
+                daemon
+                    .quiesce(token, "e2e", std::time::Duration::from_secs(seconds))
+                    .map_err(|e| failure("busy", e.to_string(), 75))?
+            } else {
+                daemon
+                    .release(token)
+                    .map_err(|e| failure("busy", e.to_string(), 75))?;
+                daemon
+                    .status()
+                    .map_err(|e| failure("busy", e.to_string(), 75))?
+            };
+            let phase = format!("{:?}", status.phase);
+            Ok((
+                json!({"schemaVersion":1,"status":"ok","phase":phase}),
+                phase,
+            ))
+        }
         _ => Err(failure(
             "usage",
             format!("unknown update command '{sub}'"),

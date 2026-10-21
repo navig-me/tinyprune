@@ -206,8 +206,16 @@ impl Restarter for SystemdRestarter {
     }
 }
 
-/// Windows: stop and start the per-user Scheduled Task registered by `install.ps1`. The task runs
-/// `tinyprune-launcher`, which resolves `current` at start. Not exercised on Windows (see ADR 0012).
+/// Status column of `schtasks /Query /FO CSV /NH` for one task: the last quoted field.
+pub(crate) fn csv_task_status(output: &str) -> Option<String> {
+    let line = output.lines().map(str::trim).find(|l| !l.is_empty())?;
+    let field = line.rsplit("\",\"").next()?;
+    let status = field.trim_matches('"').trim();
+    (!status.is_empty()).then(|| status.to_owned())
+}
+
+/// Windows: stop and start the per-user Scheduled Task registered by `install-managed.ps1`. The task
+/// runs `tinyprune-launcher`, which resolves `current` at start (ADR 0012).
 pub struct ScheduledTaskRestarter {
     pub schtasks: String,
 }
@@ -216,6 +224,20 @@ impl Default for ScheduledTaskRestarter {
         Self {
             schtasks: "schtasks".into(),
         }
+    }
+}
+impl ScheduledTaskRestarter {
+    fn task_status(&self) -> Option<String> {
+        let query = run_limited(
+            Command::new(&self.schtasks).args(["/Query", "/TN", TASK_NAME, "/FO", "CSV", "/NH"]),
+            Duration::from_secs(15),
+        )
+        .ok()?;
+        query
+            .status
+            .success()
+            .then(|| csv_task_status(&query.stdout))
+            .flatten()
     }
 }
 impl Restarter for ScheduledTaskRestarter {
@@ -232,6 +254,12 @@ impl Restarter for ScheduledTaskRestarter {
             Command::new(&self.schtasks).args(["/End", "/TN", TASK_NAME]),
             Duration::from_secs(30),
         );
+        // The task's instance policy ignores /Run while the previous instance is still shutting down.
+        // `schtasks` reports an ended task as "Ready"; wait (bounded) until it is no longer "Running".
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while Instant::now() < deadline && self.task_status().as_deref() == Some("Running") {
+            std::thread::sleep(Duration::from_millis(250));
+        }
         let run = run_limited(
             Command::new(&self.schtasks).args(["/Run", "/TN", TASK_NAME]),
             Duration::from_secs(30),
@@ -462,6 +490,20 @@ echo "boom" >&2; exit 1"#,
         .restart()
         .unwrap_err();
         assert!(err.contains("boom"), "{err}");
+    }
+    #[test]
+    fn task_status_is_the_last_csv_column() {
+        assert_eq!(
+            csv_task_status("\"\\TinyPrune Agent (dev)\",\"N/A\",\"Running\"\r\n").as_deref(),
+            Some("Running")
+        );
+        assert_eq!(
+            csv_task_status("\n\"\\TinyPrune Agent (dev)\",\"11/1/2026 3:00:00 AM\",\"Ready\"\n")
+                .as_deref(),
+            Some("Ready")
+        );
+        assert_eq!(csv_task_status(""), None);
+        assert_eq!(csv_task_status("\"\\x\",\"N/A\",\"\"\n"), None);
     }
     #[test]
     fn output_is_bounded() {

@@ -70,7 +70,21 @@ try {
 
   $zip = Join-Path $OutDir "$name.zip"
   if (Test-Path $zip) { Remove-Item $zip }
-  Compress-Archive -Path $pkg -DestinationPath $zip
+  # Entry names use '/' on every PowerShell edition: the updater's extractor (ADR 0012) rejects '\' in names,
+  # and Compress-Archive in Windows PowerShell 5.1 writes them.
+  Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
+  $zipStream = [IO.File]::Open($zip, [IO.FileMode]::CreateNew)
+  $archive = New-Object IO.Compression.ZipArchive($zipStream, [IO.Compression.ZipArchiveMode]::Create)
+  try {
+    $prefix = $stage.TrimEnd('\') + '\'
+    Get-ChildItem -LiteralPath $pkg -Recurse -File | ForEach-Object {
+      $entry = $_.FullName.Substring($prefix.Length).Replace('\', '/')
+      [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $_.FullName, $entry, [IO.Compression.CompressionLevel]::Optimal)
+    }
+  } finally {
+    $archive.Dispose()
+    $zipStream.Dispose()
+  }
   $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant()
   # sha256sum format (two spaces), no BOM.
   [IO.File]::WriteAllText("$zip.sha256", "$hash  $name.zip`n", (New-Object Text.UTF8Encoding $false))

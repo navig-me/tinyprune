@@ -204,3 +204,23 @@ jobs:
             dist/SHA256SUMS
           if-no-files-found: error
           retention-days: 7
+
+  # ADR 0012: the managed Windows update path on a real runner, mirroring rust/tests-e2e/update-docker.sh.
+  # Non-production: the Ed25519 key is generated inside the job and discarded with it, the feed is served from
+  # a loopback listener, and the test binaries are built with the `test-overrides` features that released
+  # artifacts never use. No secret is read. The runner is disposable, which the script's guard requires.
+  windows-update-e2e:
+    name: Windows managed update end-to-end (windows-2022)
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - name: Install pinned Rust toolchain
+        shell: bash
+        working-directory: rust
+        run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal
+      - name: Update end-to-end (throwaway key, real Scheduled Task, real agent)
+        shell: pwsh
+        env:
+          TINYPRUNE_E2E_ALLOW_INSTALL: "1"
+        run: rust\tests-e2e\update-windows.ps1

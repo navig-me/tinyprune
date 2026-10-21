@@ -198,6 +198,17 @@ fn test_sign(o: &Opts) {
     let message = std::fs::read(o.need("file")).unwrap_or_else(|e| die(e.to_string()));
     println!("{}", TestKey::from_seed(seed).sign_b64(&message));
 }
+#[cfg(feature = "test-overrides")]
+fn test_serve(o: &Opts) {
+    let port: u16 = o
+        .need("port")
+        .parse()
+        .unwrap_or_else(|_| die("--port must be a number"));
+    let listener = std::net::TcpListener::bind(("127.0.0.1", port))
+        .unwrap_or_else(|e| die(format!("cannot listen on 127.0.0.1:{port}: {e}")));
+    println!("listening on 127.0.0.1:{port}");
+    tinyprune_update::testserver::serve(o.need("dir").into(), listener);
+}
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -212,6 +223,8 @@ fn main() {
         "test-keygen" => test_keygen(&opts),
         #[cfg(feature = "test-overrides")]
         "test-sign" => test_sign(&opts),
+        #[cfg(feature = "test-overrides")]
+        "test-serve" => test_serve(&opts),
         other => die(format!("unknown command {other:?}")),
     }
 }

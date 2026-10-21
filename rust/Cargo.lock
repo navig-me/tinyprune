@@ -799,6 +799,7 @@ dependencies = [
  "tar",
  "tinyprune-ipc",
  "ureq",
+ "windows",
  "zip",
 ]
 
