@@ -37,8 +37,20 @@ function Dump {
     if (Test-Path -LiteralPath $data) {
         Get-ChildItem -LiteralPath $data -Recurse -Depth 2 -ErrorAction SilentlyContinue | ForEach-Object FullName
         if (Test-Path -LiteralPath (Join-Path $data 'current')) { Write-Host "current -> $([IO.File]::ReadAllText((Join-Path $data 'current')).Trim())" }
-        Get-ChildItem -LiteralPath $data -Recurse -Filter '*.log' -ErrorAction SilentlyContinue | ForEach-Object {
+        Get-ChildItem -LiteralPath $data -Recurse -Include '*.log', '*.jsonl' -ErrorAction SilentlyContinue | ForEach-Object {
             Write-Host "--- $($_.FullName)"; Get-Content -LiteralPath $_.FullName -Tail 40
+        }
+        $shimPath = Join-Path $data 'bin\tinyprune.cmd'
+        if (Test-Path -LiteralPath $shimPath) {
+            Write-Host '--- tinyprune status via the shim'
+            (& $shimPath status 2>&1 | Out-String) | Write-Host
+            Write-Host "exit $LASTEXITCODE"
+        }
+        if (Test-Path -LiteralPath (Join-Path $data 'current')) {
+            $exe = Join-Path $data "versions\$([IO.File]::ReadAllText((Join-Path $data 'current')).Trim())\bin\tinyprune.exe"
+            Write-Host '--- tinyprune.exe status directly'
+            (& $exe status 2>&1 | Out-String) | Write-Host
+            Write-Host "exit $LASTEXITCODE"
         }
         $state = Join-Path $data 'update\state.json'
         if (Test-Path -LiteralPath $state) { Write-Host '--- update state'; Get-Content -LiteralPath $state }
