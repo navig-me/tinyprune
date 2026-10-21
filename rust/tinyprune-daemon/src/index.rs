@@ -292,8 +292,10 @@ struct Job {
     /// Containment index over the project snapshot taken when the job was loaded (Windows flavor).
     projects: Option<crate::ProjectIndex>,
 }
-const PAGE: usize = 512;
-const PAGES_PER_STEP: usize = 8;
+// Keep the same 4096-candidate work bound per turn, but commit once instead of
+// eight times: durable WAL flushes dominate explanation publication on Windows.
+const PAGE: usize = 4096;
+const PAGES_PER_STEP: usize = 1;
 
 impl Decisions {
     /// Evaluates up to a bounded number of candidates; true while more work remains.

@@ -25,7 +25,7 @@ The core is synchronous and trait-based. It provides no concrete filesystem, dat
 
 Product invariants apply identically here: metadata only, Trash only (never permanent deletion), Keep wins, re-check current identity/policy/protection/deadline/pause/availability before Trash, and Preview never trashes. Preserve path bytes rather than silently normalizing Unicode; Swift-compatible comparisons and raw-scalar glob behavior are distinct contracts.
 
-The Rust agent (`tinyprune-agentd`) and its IPC, CLI and UI exist as unreleased engineering work, but this is not a shipped Linux or Windows product: native execution of inotify, the Windows watcher and named pipes, installers, UI on Linux/Windows, performance on those systems, and an accessibility audit are not done (see the matrix below). POSIX rename and Windows Shell cannot atomically condition a move on source identity; the adapter READMEs document the remaining races. Core fixture coverage does not prove platform-adapter safety or end-to-end scheduler parity. Decisions are recorded in [ADR 0011](../ADRs/0011-rust-runtime-store-scan-ipc-daemon-cli-ui.md): macOS stays on Swift and is not wired to this runtime; config import/export is POSIX-only (Windows returns `InvalidRequest`); macOS has only a periodic reconcile fallback instead of a native watcher.
+The Rust agent (`tinyprune-agentd`) and its IPC, CLI and UI exist as unreleased engineering work, not a shipped Linux or Windows product. CI executes native watchers, sockets/pipes, daemon/CLI smokes, dev installs and a non-gating 100k benchmark on Linux and Windows; the Tauri webview ran only in a Linux aarch64 Docker container. POSIX rename and the Windows Shell cannot atomically condition a move on source identity; adapter READMEs document the races. Fixture coverage does not prove platform-adapter safety. ADR 0011 records the runtime decisions: macOS stays on Swift, Windows config import/export is unsupported, macOS has only a periodic reconcile fallback. ADR 0012 covers the separate, user-confirmed Rust updater; macOS keeps Sparkle.
 
 ### Platform paths and hidden metadata
 
@@ -38,31 +38,19 @@ Hot Windows-flavor loops do not re-normalize both operands per pair: `tinyprune_
 
 ## Status matrix
 
-"CI at pushed head" means `gh pr checks 15` for commit `6672a10` (pull request head when this was written), which contained only core, unix, watch (Linux inotify and portable parts), windows and agent; the later crates and the Windows watcher are uncommitted/unpushed and have **no CI result**. "Dev Mac" is the macOS Darwin x86_64 development host. Rows marked "in progress" are owned by other work items and are not claimed.
+Evidence: PR #15 checks at commit `536d105` passed on Ubuntu 24.04, Windows 2022 and macOS 14/15 (later commits need their own check). UI and updater Docker smokes ran locally on Linux aarch64. CI benchmarks are non-gating, so a green job can hide a failed benchmark. These are developer artifacts, not released builds.
 
 | Component | Linux | Windows | macOS (Rust) |
 |---|---|---|---|
-| core + 577 golden cases | tests run in CI at pushed head | tests run in CI at pushed head | tests run in CI at pushed head and on dev Mac |
-| `tinyprune-unix` (FileAccess, freedesktop Trash) | filesystem tests run in CI at pushed head | not applicable (empty crate) | tests run on dev Mac and in CI |
-| `tinyprune-windows` (Recycle Bin) | not applicable | native tests run in CI at pushed head | compile-checked only (cross target) |
-| `tinyprune-watch`: inotify | compile-checked only from macOS; real inotify events never executed | not applicable | not applicable; portable scripted-source tests run |
-| `tinyprune-watch`: `ReadDirectoryChangesW` | not applicable | implemented; compile-checked only, never executed (no CI result) | synthetic-buffer parser tests run; no native watcher exists (periodic reconcile fallback in the daemon) |
-| `tinyprune-agent` | tests run in CI at pushed head | tests run in CI at pushed head | tests run in CI and on dev Mac |
-| `tinyprune-store` | configured in CI, not yet pushed; cross-target check not possible on dev Mac (needs C toolchain) | same | tests and Clippy run on dev Mac |
-| `tinyprune-scan` | cross-compile-checked per README; never executed | same | tests run on dev Mac; 35,761 entries/s measured (50,101 entries, release, ignored benchmark) |
-| `tinyprune-ipc` Unix socket | never executed natively; no CI result | not applicable | tests run on dev Mac |
-| `tinyprune-ipc` named pipe | not applicable | cross-checked and linted only; never executed | not applicable |
-| `tinyprune-daemon` (`tinyprune-agentd`) | never executed | never executed | tests run on dev Mac (including real-socket end-to-end) |
-| `tinyprune-cli` (`tinyprune`) | never executed | never executed | tests run on dev Mac (loopback and real Unix socket) |
-| UI frontend (`rust/ui/frontend`, 9 Node tests) | never run | never run | 9 Node tests and manual Chromium run on dev Mac |
-| UI Tauri shell | never run (needs WebKitGTK/GTK) | never run (needs WebView2) | no webview run |
-| Restart-stable identity persistence | implemented; Linux path (filesystem UUID from mountinfo, `statx` birth time) never executed, cross-compile-checked only | implemented (volume serial, file ID, creation time); compile-checked only | tests run on dev Mac (reopen, rename, replacement, inode reuse); volumes without a durable id or without creation time are non-persistent |
-| End-to-end smoke (`rust/tests-e2e/smoke.sh`, `smoke.ps1`), benchmark (`cargo test --release --locked -p tinyprune-daemon --test bench -- --ignored --nocapture`) | configured in `ci.yml`, not yet run on GitHub | configured (`smoke.ps1` has never run on Windows), not yet run on GitHub | configured; smoke uses the freedesktop-style Trash under a temp `XDG_DATA_HOME`, not `~/.Trash` |
-| Dev archives (`rust/packaging`, `.github/workflows/rust-artifacts.yml`) | unsigned `.tar.gz` + systemd user unit scripts; `docker-test.sh` ran locally in Ubuntu 24.04 (aarch64) with real `systemd --user` and passed (install, service, Trash encoding/restore, per-mount fallback, SIGINT stop, restart, uninstall/purge); workflow never run on GitHub | unsigned `.zip` + PowerShell scripts (per-user Scheduled Task); install/uninstall test step added to the workflow but never run; scripts never run locally | build and `--version` only; no package (Swift app ships macOS) |
-| Updater (`tinyprune-update`, ADR 0012; `rust/tests-e2e/update-docker.sh`) | 76 unit tests + the real-daemon interlock test ran in Docker (Ubuntu aarch64, Rust 1.98.1), and the Docker end-to-end passed locally under real `systemd --user` with a throwaway key: managed install, tampered feed/artifact rejected, confirmation required, real update 0.1.0 b1 -> 0.2.0 b2 with systemd restart, root/rule/Keep survived and pruning resumed, replayed older feed refused, bad build rolled back. Never run on GitHub; no production key, feed or site | std-only swap/launcher code cross-checked for the Windows target and swap logic unit-tested against an in-memory Windows-semantics filesystem; the client features were not compile-checked for Windows (C toolchain), `install-managed.ps1`/`launcher` spawn/Scheduled Task restart never parsed or run | unit tests run on dev Mac (not an updater target: Sparkle updates the app); symlink-pointer swap is not atomic for readers on APFS |
-| Accessibility audit | not started | not started | not started |
+| Core, 577 Swift-reference fixtures, agent, store, scan | workspace tests + Clippy pass in CI | workspace tests + Clippy pass in CI | workspace tests + Clippy pass in CI |
+| Native filesystem, watcher, IPC | real inotify, Unix socket, freedesktop Trash exercised by CI and Docker smokes; symlink/volume races remain | real `ReadDirectoryChangesW`, named pipe and Recycle Bin exercised by the CI smoke; Shell race remains | Unix adapter uses a freedesktop-style Trash, not native macOS Trash; periodic reconcile, no Rust native watcher |
+| Daemon + CLI | real-binary smoke (23 checks) in CI; systemd user install/uninstall and cross-mount Trash in Docker | real-binary smoke and per-user Scheduled Task install/uninstall in CI | real-binary smoke in CI; not the shipping Swift agent |
+| 100k-file benchmark | initial index 4.94 s, deadlines for all files 17.60 s, event-to-deadline 87 ms (CI run 39466056350) | initial index 45.5 s, but only 85,418 of 100,000 decisions persisted by the 600 s limit; benchmark failed (non-gating). Decision persistence (`decisions_store`, 166 commits, 540 s) is the bottleneck and is under investigation | measured on the dev Mac only; not shipped |
+| Tauri UI | real-agent webview run in Linux aarch64 Docker under Xvfb; 15 axe-core runs without violations; CI compiles the shell and runs frontend tests | built best-effort in dev artifacts; no webview interaction test | webview not launched; SwiftUI remains the macOS UI |
+| Developer archives and install | unsigned tarball + systemd user unit; fresh-container install/Trash/restart/uninstall/purge passed locally and is repeated in CI | unsigned zip + Scheduled Task; install/uninstall step passed in CI | Rust binaries build only; Swift app owns packaging |
+| User-confirmed updater (ADR 0012) | unit tests and a Docker signed-feed update/rollback with a throwaway key passed; no production feed or key | unit tests pass in CI incl. file-pointer swap on a real temp filesystem; managed update, launcher restart and production feed untested | not used; Sparkle unchanged |
 
-Not verified anywhere: real inotify events, the Windows watcher, named pipes, Linux/Windows UI, installers, performance on Linux or Windows, and any accessibility audit beyond static HTML/CSS contract tests and computed contrast (no screen reader was run). Passing CI means unit and fixture tests passed on that runner; it is not product acceptance.
+Not accepted as a product: Windows 100k performance, desktop-level and screen-reader accessibility, signed releases, a production update feed.
 
 ## Commands
 
@@ -83,7 +71,7 @@ cargo run --locked -p tinyprune-cli --bin tinyprune -- status
 
 The UI is checked separately (`cargo check --manifest-path rust/ui/Cargo.toml`; `node --test tests/*.test.js` in `rust/ui/frontend`); see [ui/README.md](ui/README.md).
 
-The `rust-core` job in `../.github/workflows/ci.yml` runs the first two commands on `ubuntu-24.04`, `windows-2022`, and `macos-14`. Its “Golden fixtures” step runs `cargo test --locked` for the workspace, not just golden fixtures. The same job then builds release `tinyprune-agentd` and `tinyprune` and runs the end-to-end smoke (`tests-e2e/smoke.sh`, or `tests-e2e/smoke.ps1` on Windows), and a non-gating benchmark whose table goes to the job summary; a separate Ubuntu `rust-ui` job runs the frontend tests and a Tauri compile check. These added steps are configured but had not run on GitHub when this was written. A configured job is not evidence of a completed native run or adapter acceptance. Dependencies are allowed only for a concrete need; commit `Cargo.lock` changes and keep `rust-toolchain.toml` pinned. These checks do not produce a released cross-platform application.
+The `rust-core` job in `../.github/workflows/ci.yml` runs workspace tests and Clippy on `ubuntu-24.04`, `windows-2022` and `macos-14`, then release-binary smokes and a **non-gating** benchmark. The separate Ubuntu `rust-ui` job runs frontend tests and compiles the Tauri shell; `.github/workflows/rust-artifacts.yml` builds dev archives and tests installation. A passing job does not prove a release. Dependencies need a concrete need; commit `Cargo.lock` and keep `rust-toolchain.toml` pinned.
 
 ## Adding a golden case
 
