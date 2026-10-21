@@ -23,11 +23,13 @@ Every published release so far is a **GitHub prerelease** with ad-hoc signed, **
 
 ## 0.2.0
 
-**Status: prepared, not published.** Nothing below has been tagged, released, signed for a feed or deployed. Branch `release-0.2.0`, [PR #17](https://github.com/navig-me/tinyprune/pull/17), title "Release 0.2.0 (prepared)". The latest published macOS release remains **0.1.13**; no Linux or Windows downloads are available.
+**Status: prepared, not published.** No version tag, GitHub release or signed feed has been published for 0.2.0. Preparation [PR #17](https://github.com/navig-me/tinyprune/pull/17) is merged as `18407d26e2188265d9b97037f16c5c8b478b9d76`; its website and documentation changes deploy independently of release publication. The latest published macOS release remains **0.1.13**; no Linux or Windows release downloads are available.
 
 **Why a minor bump.** It adds the cross-platform Rust runtime as a **developer preview**. The macOS application code is unchanged since 0.1.13 apart from the version number; macOS is the only supported product. Linux and Windows archives are unsigned developer-preview builds and carry **no supported-platform claim** (AGENTS.md, ADR 0012).
 
 **Versions.** Marketing version 0.2.0 everywhere: `Scripts/package-app.swift`, the Swift agent's `serviceVersion` default and its two tests, all eleven workspace crates, `rust/ui` (`Cargo.toml`, `tauri.conf.json`) and both `Cargo.lock` files. `tinyprune --version` prints `tinyprune 0.2.0` and `tinyprune-agentd --version` prints `tinyprune-agentd 0.2.0` (both read `CARGO_PKG_VERSION`).
+
+**Signing configuration.** The existing ADR 0009 key is reused, not rotated. On 2026-10-21, the nonsecret repository variable `TINYPRUNE_UPDATE_PUBLIC_KEY` was set and verified equal to both Environments' public keys. `release` and `update-feed` now require `mihirkhandekar` approval and are restricted to branch `main` and tags `v*`. Self-approval is permitted for the sole maintainer; no two-person-review claim is made. No private key was retrieved or exported.
 
 **Build numbers (monotonic, per channel, never shared).**
 
@@ -42,7 +44,16 @@ Every published release so far is a **GitHub prerelease** with ad-hoc signed, **
 | Linux (Rust preview) | `tinyprune-dev-0.2.0-g<sha12>-linux-x86_64.tar.gz`, `.sha256`, `SHA256SUMS` | **unsigned archive**; the feed is EdDSA-signed with the ADR 0009 key | `rust-artifacts.yml` (dispatch on `main`), `rust-update-feed.yml` |
 | Windows (Rust preview) | `tinyprune-dev-0.2.0-g<sha12>-windows-x86_64.zip`, `.sha256`, `SHA256SUMS` | **unsigned archive** (SmartScreen may warn); signed feed as above | same |
 
-The Rust archives are hosted on a separate GitHub **prerelease** (not the macOS release), created by the maintainer before `rust-update-feed.yml` attaches the archives. Note that archive names and the `VERSION` stamp still say `tinyprune-dev` and `status=unreleased-development-artifact`; renaming them for a preview release is a maintainer decision not made here. SHA-256 values are not known until the artifacts exist; they will be recorded here when published.
+The Rust archives will be hosted on a separate GitHub **prerelease** (not the macOS release), created before `rust-update-feed.yml` attaches the archives. Names and VERSION stamps retain `tinyprune-dev` and `status=unreleased-development-artifact`; the release notes must identify them as developer previews.
+
+**Built candidate (not published).** [Rust artifacts run 39589828202](https://github.com/navig-me/tinyprune/actions/runs/39589828202), dispatch build **29**, succeeded on `main` commit `18407d26e2188265d9b97037f16c5c8b478b9d76`. Both platform archives include the 0.2.0 UI, daemon and CLI. Linux Docker installation, Windows Scheduled Task installation and the Windows throwaway-key managed-update job passed. Downloaded archive hashes were verified against the workflow manifests; the Windows manifest uses CRLF, so cross-platform verification must normalize line endings. The packaged Linux CLI self-check ran offline in an x86_64 Ubuntu container and reported version 0.2.0, build 29 and a public key matching both release Environments.
+
+| Candidate artifact | Verified SHA-256 |
+| --- | --- |
+| `tinyprune-dev-0.2.0-g18407d26e218-linux-x86_64.tar.gz` | `1b972b38025d2dfc5155912e62bc50de263d60c2c7d601501a57ad2b4f223432` |
+| `tinyprune-dev-0.2.0-g18407d26e218-windows-x86_64.zip` | `2ae730ce1ee58275c18cc2e3c1830d7cd02cda4ae90ebefd6882a0b341ae72eb` |
+
+These are expiring workflow artifacts, not immutable published release assets. No macOS 0.2.0 DMG, public Rust feed or version tag has been created.
 
 **Verification status** (what CI actually proved; nothing else is claimed).
 
@@ -53,7 +64,7 @@ The Rust archives are hosted on a separate GitHub **prerelease** (not the macOS 
 | `rust-core` (tests, clippy, release build, end-to-end smoke) on Ubuntu, Windows, macOS; Rust UI frontend tests + Tauri check; `rust-ui-windows` (non-gating) | passed on PR #16 head | [CI run 39555907074](https://github.com/navig-me/tinyprune/actions/runs/39555907074) |
 | Windows managed-update end-to-end (`windows-update-e2e`, real Scheduled Task, launcher, agent, throwaway key) | passed once on `windows-2022` | [dispatch run 39550764775](https://github.com/navig-me/tinyprune/actions/runs/39550764775) (commit `c25ee1f`); also a job in run 39555906929 |
 | `main` after merging PR #16 (`7d30795`) | CI run was still in progress when this entry was written | [run 39559192807](https://github.com/navig-me/tinyprune/actions/runs/39559192807); re-check before tagging |
-| This release PR's CI | see the PR; fill in the run IDs before merging | |
+| Preparation PR #17 (`2a49601`) | all 17 checks passed, including Windows UI and managed-update end-to-end | [CI run 39580285014](https://github.com/navig-me/tinyprune/actions/runs/39580285014), [artifact/install/update run 39580285020](https://github.com/navig-me/tinyprune/actions/runs/39580285020) |
 | Benchmark numbers | **not recorded here**; the 100k-entry and store benchmarks are non-gating and write to each CI run's job summary | record the figures from the chosen `main` run before publishing |
 
 **Evidence and remaining limits.** Native Linux inotify and Windows `ReadDirectoryChangesW`, filesystem/Trash adapters, stores, sockets/pipes, daemon/CLI and developer installs have recorded CI or container coverage. The Tauri UI ran against the real agent in Linux aarch64 Docker and on a Windows CI runner; Windows managed updates ran end to end with a throwaway key (runs above). The [Rust workspace status matrix](https://github.com/navig-me/tinyprune/blob/main/rust/README.md#status-matrix) records the detailed environments, measurements and remaining limits. These checks do not establish general desktop or screen-reader accessibility, Windows 100k-file performance acceptance, logon/reboot-trigger behavior, non-administrator behavior or coverage of other Windows editions. **No production Rust feed exists**: `rust-update-feed.yml` has never been run, and the repository variable `TINYPRUNE_UPDATE_PUBLIC_KEY` that `rust-artifacts.yml` reads to embed the production public key is **unset** (checked 2026-10-21), so a dispatch build today would have updates disabled and `rust-update-feed.yml` would reject it. The existing ADR 0009 key is intended to be reused, not rotated. Sparkle `sign_update` interoperability with that key for the Rust feed has not been run. macOS in-app installation of a Sparkle update remains end-to-end unverified (ADR 0009).
