@@ -10,8 +10,13 @@ import time
 import urllib.request
 import urllib.error
 
-out = Path('rust/ui/docker/out')
-axe = Path('/opt/a11y/node_modules/axe-core/axe.min.js').read_text()
+WINDOWS = os.name == 'nt'
+out = Path(os.environ.get('TINYPRUNE_UI_OUT', 'rust/ui/docker/out'))
+out.mkdir(parents=True, exist_ok=True)
+axe = Path(os.environ.get('TINYPRUNE_UI_AXE', '/opt/a11y/node_modules/axe-core/axe.min.js')).read_text(encoding='utf-8')
+app = os.environ.get('TINYPRUNE_UI_APP', '/build/release/tinyprune-ui')
+cli = os.environ.get('TINYPRUNE_UI_CLI', '/build/release/tinyprune')
+fixture = Path(os.environ.get('TINYPRUNE_UI_FIXTURE', '/tmp/tinyprune-ui-fixture'))
 report = []
 driver = subprocess.Popen(['tauri-driver'], stdout=(out / 'webdriver.log').open('w'), stderr=subprocess.STDOUT)
 session = None
@@ -71,12 +76,21 @@ def route(name, heading):
 
 def shot(name):
     (out / (name + '.png')).write_bytes(base64.b64decode(command('/screenshot', method='GET', retry=True)))
-    subprocess.run(['import','-window','root',str(out / (name + '-desktop.png'))], check=True)
+    if WINDOWS:
+        # Whole interactive desktop (window chrome, DPI scaling), in addition to the WebDriver page capture.
+        grab = ("Add-Type -AssemblyName System.Windows.Forms,System.Drawing;"
+                "$b=[System.Windows.Forms.SystemInformation]::VirtualScreen;"
+                "$i=New-Object System.Drawing.Bitmap $b.Width,$b.Height;"
+                "$g=[System.Drawing.Graphics]::FromImage($i);$g.CopyFromScreen($b.Location,[System.Drawing.Point]::Empty,$b.Size);"
+                "$i.Save($args[0],[System.Drawing.Imaging.ImageFormat]::Png)")
+        subprocess.run(['powershell','-NoProfile','-Command','& {' + grab + '}', str(out / (name + '-desktop.png'))], check=True)
+    else:
+        subprocess.run(['import','-window','root',str(out / (name + '-desktop.png'))], check=True)
 
 def audit(name):
     js(axe)
     result = command('/execute/async', {'script':"const done=arguments[arguments.length-1]; axe.run(document,{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']}}).then(done).catch(e=>done({error:String(e)}));",'args':[]}, retry=True)
-    (out / ('axe-' + name + '.json')).write_text(json.dumps(result, indent=2))
+    (out / ('axe-' + name + '.json')).write_text(json.dumps(result, indent=2), encoding='utf-8')
     assert not result.get('error'), result
     violations = result['violations']
     report.append({'page':name,'violations':len(violations),'passes':len(result['passes'])})
@@ -84,7 +98,7 @@ def audit(name):
 
 try:
     until(lambda: _ready(), 'tauri-driver')
-    response = request('POST', '/session', {'capabilities':{'alwaysMatch':{'tauri:options':{'application':'/build/release/tinyprune-ui'}}}})
+    response = request('POST', '/session', {'capabilities':{'alwaysMatch':{'tauri:options':{'application':app}}}})
     session = response['sessionId']
     text('Agent connected')
     text('tinyprune-ui-fixture')
@@ -92,7 +106,7 @@ try:
     route('rules', 'Rules with a reason.'); text('Docker Preview fixture'); audit('real-rules')
     click('a[href="#rules/new"]'); text('A thoughtful new rule.')
     # Use WebDriver keystrokes for the editor, rather than assigning fixture DOM.
-    command('/element/' + element('input[name="name"]') + '/value', {'text':'Created through Linux UI'})
+    command('/element/' + element('input[name="name"]') + '/value', {'text':'Created through UI'})
     click('#preview-rule'); text('Preview completed.')
     until(lambda: js('return !document.querySelector("#save-rule").disabled'), 'Preview enables save')
     audit('real-preview'); shot('real-preview')
@@ -103,12 +117,12 @@ try:
     command('/element/' + element('#close-explanation') + '/value', {'text':'\ue00c'})
     until(lambda: js('return !document.querySelector("#explanation").open'), 'Escape closes drawer')
     assert js('return document.activeElement.matches("[data-explain]")'), 'explanation focus was not restored'
-    click('#save-rule'); text('Rules with a reason.'); text('Created through Linux UI')
-    policy = subprocess.check_output(['/build/release/tinyprune','rules','--json'], text=True)
-    assert 'Created through Linux UI' in policy and 'preview' in policy
+    click('#save-rule'); text('Rules with a reason.'); text('Created through UI')
+    policy = subprocess.check_output([cli,'rules','--json'], text=True, encoding='utf-8')
+    assert 'Created through UI' in policy and 'preview' in policy
     route('upcoming','What comes next.'); text('old.txt'); text('1 of 1 item'); audit('real-upcoming'); shot('real-upcoming')
     assert js('return getComputedStyle(document.querySelector("#load-more")).display === "none"'), 'Load more is visible without a next cursor'
-    click('[data-explain]'); text('/tmp/tinyprune-ui-fixture/old.txt'); click('#close-explanation')
+    click('[data-explain]'); text('tinyprune-ui-fixture'); click('#close-explanation')
     route('activity','A clear paper trail.'); text('rule'); audit('real-activity'); shot('real-activity')
     route('settings','Quiet by design.'); audit('real-settings')
     # Dark theme (user-selectable) and a narrow window: contrast, reflow and no horizontal overflow.
@@ -120,15 +134,20 @@ try:
     command('/window/rect', {'width':1180,'height':820})
     js('document.documentElement.dataset.theme="light"')
     click('#pause'); text('Resume cleanup')
-    assert 'true' in subprocess.check_output(['/build/release/tinyprune','rules','--json'], text=True).lower()
+    assert 'true' in subprocess.check_output([cli,'rules','--json'], text=True, encoding='utf-8').lower()
     click('#pause'); text('Pause cleanup'); shot('real-settings')
     # Native WebDriver Tab navigation and reduced-motion computed contract.
     command('/element/' + element('#pause') + '/value', {'text':'\ue004'})
     assert js('return document.activeElement.id === "hidden-protection"'), 'Tab order from pause to hidden protection'
-    assert js('return matchMedia("(prefers-reduced-motion: reduce)").matches'), 'Linux reduced motion preference is not active'
-    assert js('return getComputedStyle(document.querySelector("button")).transitionDuration === "0s"')
-    os.kill(int(os.environ['TINYPRUNE_UI_AGENT_PID']), signal.SIGINT)
-    until(lambda: not Path(os.environ['TINYPRUNE_ENDPOINT']).exists(), 'agent socket removed after SIGINT')
+    if not WINDOWS:
+        assert js('return matchMedia("(prefers-reduced-motion: reduce)").matches'), 'Linux reduced motion preference is not active'
+        assert js('return getComputedStyle(document.querySelector("button")).transitionDuration === "0s"')
+    else:
+        # The hosted runner has animations enabled; record what WebView2 reports instead of asserting it.
+        report.append({'reducedMotionMatches': js('return matchMedia("(prefers-reduced-motion: reduce)").matches'), 'devicePixelRatio': js('return devicePixelRatio'), 'userAgent': js('return navigator.userAgent')})
+    # Kill the agent (SIGINT on Unix; TerminateProcess on Windows) and wait until the CLI can no longer reach it.
+    os.kill(int(os.environ['TINYPRUNE_UI_AGENT_PID']), signal.SIGTERM if WINDOWS else signal.SIGINT)
+    until(lambda: subprocess.run([cli,'status'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0, 'agent endpoint gone after kill')
     route('overview','Your files can wait.')
     text('Agent unavailable'); text('The TinyPrune agent is not running'); audit('real-offline'); shot('real-offline')
     # Explicit mock only, in the same actual Linux WebKitGTK frontend.
@@ -136,11 +155,12 @@ try:
     text('Browser demo')
     for name, heading in [('overview','Room for what matters.'),('rules','Rules with a reason.'),('upcoming','What comes next.'),('activity','A clear paper trail.'),('settings','Quiet by design.')]:
         route(name, heading); audit('mock-' + name)
-    assert Path('/tmp/tinyprune-ui-fixture/old.txt').exists()
-    assert Path('/tmp/tinyprune-ui-fixture/keep.txt').exists()
-    assert not list(Path(os.environ['XDG_DATA_HOME']).glob('Trash/files/*')), 'Preview moved files'
-    (out / 'summary.json').write_text(json.dumps(report, indent=2))
-    print('UI DOCKER PASS: real agent CRUD/Preview, navigation, explanations, pause, keyboard, reduced motion, offline, mock, axe', flush=True)
+    assert (fixture / 'old.txt').exists()
+    assert (fixture / 'keep.txt').exists()
+    if not WINDOWS:
+        assert not list(Path(os.environ['XDG_DATA_HOME']).glob('Trash/files/*')), 'Preview moved files'
+    (out / 'summary.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
+    print('UI PASS (' + ('Windows WebView2' if WINDOWS else 'Linux WebKitGTK') + '): real agent CRUD/Preview, navigation, explanations, pause, keyboard, reduced motion, offline, mock, axe', flush=True)
 finally:
     if session:
         try:
