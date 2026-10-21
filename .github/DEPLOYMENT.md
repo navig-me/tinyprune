@@ -125,7 +125,7 @@ First installation of an ad-hoc browser download still requires the Gatekeeper a
 
 ### Release cheat sheet (ad-hoc direct release)
 
-1. Bump the version in `Scripts/package-app.swift`, `Sources/TinyPruneAgentCore/AgentRequestHandler.swift` and the two `serviceVersion` assertions in `Tests/TinyPruneAgentCoreTests`, and add a `CHANGELOG.md` entry.
+1. Bump the version in `Scripts/package-app.swift` (the source of truth), `Sources/TinyPruneAgentCore/AgentRequestHandler.swift`, the two `serviceVersion` assertions in `Tests/TinyPruneAgentCoreTests`, every Rust crate, `rust/ui` and both `Cargo.lock` files (`cargo update --workspace --offline`), add a dated `CHANGELOG.md` entry and a `RELEASES.md` entry, then run `python3 Scripts/check-versions.py`. The full procedure, including the Rust preview and rollback, is in [RELEASING.md](RELEASING.md).
 2. Commit, push `main`, and make sure the tag points at a commit that is on `main` (do not tag before a `git pull --rebase`): `git tag -a vX.Y.Z -m "TinyPrune X.Y.Z" && git push origin vX.Y.Z`. The tag triggers `release.yml`.
 3. When the run finishes it opens an `updates/vX.Y.Z` PR (needs the "Allow GitHub Actions to create and approve pull requests" setting). Review and merge it, then wait for the Pages deploy of `main`.
 4. Verify the live feed: `gh workflow run publish-update-feed.yml -f tag=vX.Y.Z -f verify_public=true`. The input is `tag`, not `release_tag`. Check it with `gh run list --workflow=publish-update-feed.yml --limit 1`.

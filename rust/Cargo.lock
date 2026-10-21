@@ -699,7 +699,7 @@ dependencies = [
 
 [[package]]
 name = "tinyprune-agent"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "tinyprune-core",
  "tinyprune-unix",
@@ -709,7 +709,7 @@ dependencies = [
 
 [[package]]
 name = "tinyprune-cli"
-version = "0.0.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "serde",
@@ -720,7 +720,7 @@ dependencies = [
 
 [[package]]
 name = "tinyprune-core"
-version = "0.0.0"
+version = "0.2.0"
 dependencies = [
  "serde_json",
  "sha2",
@@ -730,7 +730,7 @@ dependencies = [
 
 [[package]]
 name = "tinyprune-daemon"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ctrlc",
  "serde",
@@ -748,7 +748,7 @@ dependencies = [
 
 [[package]]
 name = "tinyprune-ipc"
-version = "0.0.0"
+version = "0.2.0"
 dependencies = [
  "libc",
  "serde",
@@ -758,7 +758,7 @@ dependencies = [
 
 [[package]]
 name = "tinyprune-scan"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "tinyprune-agent",
  "tinyprune-core",
@@ -768,7 +768,7 @@ dependencies = [
 
 [[package]]
 name = "tinyprune-store"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "rusqlite",
  "serde",
@@ -781,7 +781,7 @@ dependencies = [
 
 [[package]]
 name = "tinyprune-unix"
-version = "0.0.0"
+version = "0.2.0"
 dependencies = [
  "libc",
  "tinyprune-core",
@@ -789,7 +789,7 @@ dependencies = [
 
 [[package]]
 name = "tinyprune-update"
-version = "0.0.0"
+version = "0.2.0"
 dependencies = [
  "base64",
  "flate2",
@@ -805,7 +805,7 @@ dependencies = [
 
 [[package]]
 name = "tinyprune-watch"
-version = "0.0.0"
+version = "0.2.0"
 dependencies = [
  "libc",
  "windows",
@@ -813,7 +813,7 @@ dependencies = [
 
 [[package]]
 name = "tinyprune-windows"
-version = "0.0.0"
+version = "0.2.0"
 dependencies = [
  "tinyprune-core",
  "windows",

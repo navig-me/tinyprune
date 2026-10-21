@@ -81,7 +81,7 @@ swift Scripts/package-app.swift
 open .build/package/TinyPrune.app
 ```
 
-Tests: see [AGENTS.md](AGENTS.md#running-tests). Architecture and release process: [PLAN.md](PLAN.md), [ADRs/](ADRs), [.github/DEPLOYMENT.md](.github/DEPLOYMENT.md).
+Tests: see [AGENTS.md](AGENTS.md#running-tests). Architecture and release process: [PLAN.md](PLAN.md), [ADRs/](ADRs), [.github/DEPLOYMENT.md](.github/DEPLOYMENT.md). Every release (version, artifacts, signing mode, checksums, build number and verification status, including prepared, withdrawn and yanked ones) is recorded in [RELEASES.md](RELEASES.md); the maintainer runbook is [.github/RELEASING.md](.github/RELEASING.md).
 
 ## Cross-platform core
 

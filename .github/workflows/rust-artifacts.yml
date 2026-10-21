@@ -26,10 +26,11 @@ jobs:
     timeout-minutes: 45
     env:
       # ADR 0012 updater identity, compiled into the binaries and stamped into VERSION. The build number
-      # is this run's number; the public key is a non-secret repository variable (unset on forks, which
-      # yields binaries with updates disabled). No secret is used by this workflow.
+      # is this run's number (a counter private to this workflow, see RELEASING.md). The production public
+      # key is NOT set here: it is embedded only by the "Embed production update key" step below, and only
+      # for a workflow_dispatch run on main. Pull-request and other-branch builds therefore never carry it
+      # and have updates disabled. No secret is used by this workflow.
       TINYPRUNE_BUILD: ${{ github.run_number }}
-      TINYPRUNE_UPDATE_PUBLIC_KEY: ${{ vars.TINYPRUNE_UPDATE_PUBLIC_KEY }}
     strategy:
       fail-fast: false
       matrix:
@@ -45,6 +46,24 @@ jobs:
 
       - name: Stamp updater version
         run: echo "TINYPRUNE_VERSION=$(sed -n 's/^version *= *"\(.*\)"/\1/p' tinyprune-daemon/Cargo.toml | sed -n '1p')" >> "$GITHUB_ENV"
+
+      # The key is public, non-secret configuration (the ADR 0009 Ed25519 public key). It lives in the
+      # repository variable TINYPRUNE_UPDATE_PUBLIC_KEY, which a maintainer must keep equal to the
+      # `update-feed` Environment's SPARKLE_ED25519_PUBLIC_KEY; rust-update-feed.yml refuses to sign when
+      # the embedded key differs from the Environment's. Unset variable: binaries without a key (updates
+      # disabled), which rust-update-feed.yml rejects.
+      - name: Embed production update key (workflow_dispatch on main only)
+        if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+        env:
+          UPDATE_PUBLIC_KEY: ${{ vars.TINYPRUNE_UPDATE_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$UPDATE_PUBLIC_KEY" ]]; then
+            echo "::warning::Repository variable TINYPRUNE_UPDATE_PUBLIC_KEY is unset: binaries have updates disabled and cannot be promoted to a feed."
+          else
+            [[ "$UPDATE_PUBLIC_KEY" =~ ^[A-Za-z0-9+/]{43}=$ ]] || { echo 'TINYPRUNE_UPDATE_PUBLIC_KEY is not a base64 32-byte Ed25519 public key'; exit 1; }
+            echo "TINYPRUNE_UPDATE_PUBLIC_KEY=$UPDATE_PUBLIC_KEY" >> "$GITHUB_ENV"
+          fi
 
       # Separate invocations keep the agent free of the updater's HTTP/TLS client (feature unification
       # is per invocation). The launcher is the Windows Scheduled Task entry point (ADR 0012).

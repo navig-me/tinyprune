@@ -20,7 +20,7 @@ CI: `.github/workflows/rust-artifacts.yml` (`workflow_dispatch` and `pull_reques
 
 `tinyprune-dev-<version>-linux-x86_64.tar.gz` / `tinyprune-dev-<version>-windows-x86_64.zip`, each with a `.sha256` sidecar, plus a per-job `SHA256SUMS` in the workflow artifact. Inside: `bin/` (`tinyprune`, `tinyprune-agentd`, optional `tinyprune-ui`), the install/uninstall scripts, Linux `share/systemd/user/` and (with UI) `share/applications/`, `LICENSE`, `README.txt`, `VERSION`.
 
-`VERSION` is key=value text, no timestamps: `status=unreleased-development-artifact`, `package_version=<daemon crate version>+g<12-char sha>` (`-dirty` appended for local builds with uncommitted changes under `rust/`), each crate's version, full `git_sha`, `target`. The daemon, CLI and UI crates currently carry different versions (0.1.0 / 0.0.0 / 0.1.0); the archive name uses the daemon's. `tinyprune-agentd --version` and `tinyprune --version` print the crate version only (no git sha embedded in the binary).
+`VERSION` is key=value text, no timestamps: `status=unreleased-development-artifact`, `package_version=<daemon crate version>+g<12-char sha>` (`-dirty` appended for local builds with uncommitted changes under `rust/`), `build=<TINYPRUNE_BUILD>` (0 for unstamped local builds), each crate's version, full `git_sha`, `target`. All workspace crates and `rust/ui` carry the same version (`Scripts/check-versions.py` enforces it; the release version is in [RELEASES.md](../../RELEASES.md)); the archive name uses the daemon's. `tinyprune-agentd --version` and `tinyprune --version` print the crate version only (no git sha embedded in the binary). The `tinyprune-dev` archive name and `unreleased-development-artifact` status are unchanged for the 0.2.0 developer preview.
 
 ### Doctor-friendly layout
 
@@ -85,6 +85,8 @@ Stamping is done at packaging time (`common/stamp.sh`, `package.ps1`) from `Carg
 ## CI workflow (`rust-artifacts.yml`)
 
 Matrix `ubuntu-24.04`, `windows-2022`, `macos-14`. Each: pinned toolchain from `rust-toolchain.toml`, `cargo build --release --locked -p tinyprune-daemon -p tinyprune-cli`, run `--version` of both binaries and require the crate version in the output. Ubuntu/Windows then package, upload (`tinyprune-rust-dev-<runner>`, 7 days, with `SHA256SUMS`); macOS uploads nothing. The UI step (Ubuntu: apt GTK/WebKit packages; Windows: WebView2 is preinstalled) is `continue-on-error`, so if it fails the package silently omits the UI; check the step result in the run. The Windows job also parse-checks the install scripts under real PowerShell; the Linux job runs `test-install.sh`.
+
+Update identity: every run stamps `TINYPRUNE_BUILD` (the run's `github.run_number`, a counter separate from `release.yml`). The production update public key (`TINYPRUNE_UPDATE_PUBLIC_KEY`, from the repository variable of the same name) is embedded **only** by the step "Embed production update key" and only on a `workflow_dispatch` run on `main`; pull-request and other-branch builds have updates disabled. See [.github/RELEASING.md](../../.github/RELEASING.md).
 
 ## What is NOT verified
 

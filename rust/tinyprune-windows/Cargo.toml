@@ -1,6 +1,6 @@
 [package]
 name = "tinyprune-windows"
-version = "0.0.0"
+version = "0.2.0"
 edition = "2021"
 publish = false
 description = "In-development Windows filesystem adapter for TinyPrune"

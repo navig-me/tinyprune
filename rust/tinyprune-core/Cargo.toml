@@ -1,6 +1,6 @@
 [package]
 name = "tinyprune-core"
-version = "0.0.0"
+version = "0.2.0"
 edition = "2021"
 description = "Platform-neutral TinyPrune decision logic, verified against Fixtures/golden"
 publish = false
