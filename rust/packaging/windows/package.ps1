@@ -25,7 +25,10 @@ function Get-CrateVersion([string]$crate) {
   if (-not $m) { throw "cannot read version of $crate" }
   $m.Matches[0].Groups[1].Value
 }
-$daemon = Get-CrateVersion 'tinyprune-daemon'
+# The stamp describes what was compiled: TINYPRUNE_VERSION (compiled into the binaries) wins over the crate version.
+# CI sets it to the daemon crate version, so released archives are unaffected; the update end-to-end uses it to
+# build old/new variants with distinct versions.
+$daemon = if ($env:TINYPRUNE_VERSION) { $env:TINYPRUNE_VERSION } else { Get-CrateVersion 'tinyprune-daemon' }
 $cli = Get-CrateVersion 'tinyprune-cli'
 $uiVer = Get-CrateVersion 'ui'
 $sha = $env:GITHUB_SHA
