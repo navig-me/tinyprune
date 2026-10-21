@@ -6,7 +6,7 @@ This file contains no secrets and must stay free of them. Nothing here is a Linu
 
 ## 0. State of the controls (read first)
 
-As observed with the maintainer's `gh` token on 2026-10-21, **none of the four Environments (`release`, `update-feed`, `homebrew`, `cloudflare-pages-production`) has required reviewers or a deployment-branch restriction, and `main` has no branch protection.** Every "approval" below that relies on an Environment reviewer is therefore not enforced until a maintainer configures it. Do that before the first production signing (section 8). Re-check at any time:
+As configured and re-read through the GitHub API on 2026-10-21, `release` and `update-feed` require approval from `mihirkhandekar` and accept only the `main` branch or `v*` tags. Self-review is allowed because this is currently the sole repository maintainer; this is an explicit approval gate, not independent two-person review. These changes do not configure protection for `homebrew`, `cloudflare-pages-production` or `main`; those still require separate maintainer decisions. Re-check before every release:
 
 ```sh
 gh api repos/:owner/:repo/environments/update-feed --jq '{rules: [.protection_rules[] | {type, reviewers: (.reviewers // [] | length)}], branches: .deployment_branch_policy}'
@@ -38,7 +38,7 @@ Public keys are not secret, so comparing them is fine.
 # The three public values must be identical:
 gh api repos/:owner/:repo/environments/update-feed/variables/SPARKLE_ED25519_PUBLIC_KEY --jq .value
 gh api repos/:owner/:repo/environments/release/variables/SPARKLE_ED25519_PUBLIC_KEY     --jq .value
-gh variable get TINYPRUNE_UPDATE_PUBLIC_KEY       # Rust builds; unset today, see section 3
+gh variable get TINYPRUNE_UPDATE_PUBLIC_KEY       # Rust builds; configured and checked against both Environments
 ```
 
 The workflows verify this for you at signing time, and you should read their logs rather than trust a green tick alone:
@@ -68,7 +68,7 @@ Do all of these in the release PR or before tagging. Record the evidence (run li
 
 `rust-artifacts.yml` stamps `TINYPRUNE_BUILD` (this run's `github.run_number`) into every build, but embeds `TINYPRUNE_UPDATE_PUBLIC_KEY` only in the step "Embed production update key (workflow_dispatch on main only)", whose `if` is `github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'`. Pull-request runs, forks and dispatches from other branches never receive the key and produce binaries with in-app updates disabled (`tinyprune update status` reports why). The step validates that the variable is a base64 32-byte key and warns if it is unset. No secret is read by this workflow.
 
-Gap found and fixed with this release: the workflow used to read `vars.TINYPRUNE_UPDATE_PUBLIC_KEY` for every run, including pull requests, and that repository variable is not set (the key only exists as an Environment variable, which the build job cannot read). A dispatch build would have had no key and `rust-update-feed.yml` would have rejected it. The boundary is not weakened: signing still happens only in `rust-update-feed.yml` on `main` inside `update-feed`, and it still refuses an artifacts run that is not a successful `workflow_dispatch` on a commit on `main`. **Remaining manual step:** set the repository variable to the same public value as the Environment variable:
+The workflow previously read `vars.TINYPRUNE_UPDATE_PUBLIC_KEY` for every run, including pull requests, while the repository variable was unset. The 0.2.0 preparation restricts embedding to dispatch builds on `main`. The repository variable is now configured and was compared with both Environments' public keys on 2026-10-21 without accessing the private key. Signing still happens separately in `rust-update-feed.yml` inside `update-feed` and refuses artifacts whose embedded key differs. To configure or repair the public variable after checking key custody:
 
 ```sh
 gh variable set TINYPRUNE_UPDATE_PUBLIC_KEY --body "$(gh api repos/:owner/:repo/environments/update-feed/variables/SPARKLE_ED25519_PUBLIC_KEY --jq .value)"
@@ -126,8 +126,8 @@ Version and build numbers only go up. Clients refuse downgrades and replayed fee
 
 ## 8. Manual maintainer actions that cannot be automated here
 
-- Configure required reviewers and deployment-branch/tag restrictions on `release`, `update-feed`, `homebrew` and `cloudflare-pages-production`, and protect `main`, before the first production signing (section 0). Until then, the private key is reachable by any workflow job from any branch that names `update-feed`.
-- Set the repository variable `TINYPRUNE_UPDATE_PUBLIC_KEY` (section 3).
+- Retain and verify the configured approval/branch gates on `release` and `update-feed` (section 0). Review `homebrew`, `cloudflare-pages-production` and `main` protections separately; they were not changed as part of these signing-gate approvals.
+- Verify the configured repository variable `TINYPRUNE_UPDATE_PUBLIC_KEY` still equals both Environment public keys (sections 1 and 3); never replace or rotate it as routine release preparation.
 - Approve every Environment-gated job (`release` once; `update-feed` for the appcast publish, the appcast verify, the Rust sign and the Rust verify; `cloudflare-pages-production` for each Pages deploy), merge the feed PRs, and push the tag. A tag push is irreversible in practice; nothing in this PR creates one.
 - Create the Rust hosting prerelease (section 5, step 3).
 - Apple Developer ID signing and notarization: not available. Without all six Apple secrets in `release` every macOS release is ad-hoc and not notarized; providing them is an account-level maintainer action (DEPLOYMENT.md).
