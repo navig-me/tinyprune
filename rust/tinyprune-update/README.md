@@ -36,7 +36,7 @@ Updates are **disabled** (exit 78) for a copy that: embeds no key (`TINYPRUNE_UP
 <root>/update/state.json
 ```
 
-`<root>` is `${XDG_DATA_HOME:-~/.local/share}/tinyprune` or `%LOCALAPPDATA%\TinyPrune`. Created by `packaging/linux/install-managed.sh` (symlink shims in `~/.local/bin`, unit `ExecStart` through `current/bin`) or `packaging/windows/install-managed.ps1` (per-user Scheduled Task running `tinyprune-launcher`, which resolves `current`). Windows stages side by side because a running exe cannot be replaced; only the pointer file is swapped. The previous build is kept; older ones are pruned best effort.
+`<root>` is `${XDG_DATA_HOME:-~/.local/share}/tinyprune` or `%LOCALAPPDATA%\TinyPrune`. Created by `packaging/linux/install-managed.sh` (symlink shims in `~/.local/bin`, unit `ExecStart` through `current/bin`) or `packaging/windows/install-managed.ps1` (per-user Scheduled Task running `tinyprune-launcher`, which resolves `current`). Windows stages side by side because a running exe cannot be replaced; only the pointer file is swapped (renames retry transient sharing violations: error 5/32/33, 4 s). The previous build is kept; older ones are pruned best effort. On Windows the launcher runs `tinyprune-agentd` with `CREATE_NO_WINDOW`, null stdio and a kill-on-close job object (ending the task never orphans an agent), waits for it and returns its exit code, and appends to `<root>\logs\launcher.log`. The restarter ends the task, waits for the old agent process to exit (the task's instance policy silently ignores `/Run` while it lingers), then runs it; a health check passes only when the answering agent reports the new version **and** holds no update lease (a fresh process).
 
 ## Trash/update interlock
 
@@ -44,7 +44,7 @@ Updates are **disabled** (exit 78) for a copy that: embeds no key (`TINYPRUNE_UP
 
 ## Release tooling
 
-`tinyprune-feed generate|verify` (CI). Production signing is done by Sparkle's `sign_update` in the protected `update-feed` Environment ([`rust-update-feed.yml`](../../.github/workflows/rust-update-feed.yml)); `test-keygen`/`test-sign` exist only under `--features test-overrides` for throwaway test keys.
+`tinyprune-feed generate|verify` (CI). Production signing is done by Sparkle's `sign_update` in the protected `update-feed` Environment ([`rust-update-feed.yml`](../../.github/workflows/rust-update-feed.yml)); `test-keygen`/`test-sign`/`test-serve` (a std-only loopback static file server, so the Windows end-to-end needs no Python) exist only under `--features test-overrides`. `tinyprune update test-quiesce|test-release` (same feature) hold and drop the Trash/update lease for the end-to-end Trash-blocked check.
 
 ## Features
 
@@ -65,14 +65,15 @@ cargo test --locked -p tinyprune-update
 cargo test --locked -p tinyprune-daemon --test update_interlock     # real daemon: quiesced agent does not Trash
 cargo clippy --locked -p tinyprune-update --all-targets -- -D warnings
 rust/tests-e2e/update-docker.sh                                      # Docker: real systemd, real binaries, throwaway key
+rust\tests-e2e\update-windows.ps1                                    # Windows (needs TINYPRUNE_E2E_ALLOW_INSTALL=1; replaces the per-user install and task): real Scheduled Task, launcher, agent, throwaway key; CI job `windows-update-e2e` in rust-artifacts.yml
 ```
 
-Unit tests inject a scripted `Transport` and fixed throwaway test keys and cover: valid update; bad signature; tampered feed; hash mismatch; truncated, dropped and oversize downloads; replayed feed; downgrade and build reuse; unsupported platform; hostile archives; install blocked while a Trash is in flight and Trash blocked while quiescing (real `Interlock`); atomic swap and rollback on failed self-check, failed restart and failed health check on real temp directories; Windows swap logic against an in-memory filesystem with Windows semantics (locked running directory, no overwrite).
+Unit tests inject a scripted `Transport` and fixed throwaway test keys and cover: valid update; bad signature; tampered feed; hash mismatch; truncated, dropped and oversize downloads; replayed feed; downgrade and build reuse; unsupported platform; hostile archives; install blocked while a Trash is in flight and Trash blocked while quiescing (real `Interlock`); atomic swap and rollback on failed self-check, failed restart, failed health check and a restart that left the old agent answering, on real temp directories; Windows swap logic against an in-memory filesystem with Windows semantics (locked running directory, no overwrite); transient sharing-violation retry; the Scheduled Task restarter against `schtasks`/`tasklist` shims (waits for the old agent to exit before `/Run`); the real `tinyprune-launcher` binary (`tests/launcher.rs`: pointer resolution, argument and exit-code propagation, refusal paths); the loopback test server.
 
 ## Not verified
 
-- The Windows install swap, Scheduled Task restart and `tinyprune-launcher` spawn path have **never run on Windows**; `install-managed.ps1` was not parsed or run. Only the swap logic is unit-tested (in-memory fake).
+- Windows (`windows-2022`, workflow run 39550764775, commit `c25ee1f`): the managed path passed once end to end on a hosted runner (`rust/tests-e2e/update-windows.ps1`, 11 checks; the job's pass is one run, not a stability measurement). Not covered: a reboot/logon trigger of the task (the test starts it with `-Start`), a non-administrator user, antivirus/indexer interference beyond what the runner has, a UI-triggered update, and a different Windows edition. The launcher's hidden-console/job-object behavior is verified only through the process tree seen in that run, not on an interactive desktop.
 - Real `systemd` is exercised only by the Docker end-to-end; there is no GitHub CI result for it.
-- No production key, production feed, deployed site or GitHub workflow run exists. Sparkle `sign_update` interoperability is by signature format (checked against RFC 8032 vectors and ring), not against a run of the real tool with a real exported key.
+- No production key, production feed or deployed site exists. Sparkle `sign_update` interoperability is by signature format (checked against RFC 8032 vectors and ring), not against a run of the real tool with a real exported key.
 - macOS: `rename(2)` over a symlink is not atomic for concurrent readers on APFS (observed `EINVAL`); the updater does not target macOS.
 - Residual interlock race: the lease is verified right before the swap, not held across the service restart (ADR 0012).
