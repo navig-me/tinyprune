@@ -649,7 +649,7 @@ fn changed_candidates_get_decisions_without_a_full_pass_and_trashed_ones_leave_n
     };
     let expected_rule = fixture.rule().id;
     assert!(history.iter().any(|item| {
-        item.identity.as_ref().is_some_and(|identity| identity.path_hint == a)
+        item.identity.as_ref().is_some_and(|identity| codec::flavor().equal(&identity.path_hint, &a))
             && item.rule_id.as_deref() == Some(expected_rule.as_str())
     }), "compact scheduling activity lost its identity or rule");
     fs::write(fixture.item("b.tmp"), b"y").unwrap();
