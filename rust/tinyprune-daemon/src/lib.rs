@@ -286,6 +286,13 @@ impl Daemon {
         }
         Ok(())
     }
+    /// Polls WAL maintenance; one step may take seconds on a slow disk but blocks only this thread.
+    fn maintenance_loop(&self, shutdown: &AtomicBool) {
+        while !shutdown.load(Ordering::Acquire) {
+            self.service.maintain_wal();
+            std::thread::park_timeout(Duration::from_millis(250));
+        }
+    }
     pub fn run(&self, shutdown: Arc<AtomicBool>) -> io::Result<()> {
         #[cfg(unix)]
         let listener = {
@@ -322,10 +329,15 @@ impl Daemon {
         let server = ipc::Server::new(self.service.clone(), ipc::ServerOptions::default())?;
         let result = std::thread::scope(|scope| {
             let engine = scope.spawn(|| self.engine_loop(&shutdown));
+            // WAL checkpoints run on their own thread and connection so they never delay IPC writes or a
+            // decision commit; see `Service::maintain_wal`.
+            let maintenance = scope.spawn(|| self.maintenance_loop(&shutdown));
             let result = self.accept_loop(listener, &server, &shutdown);
             shutdown.store(true, Ordering::Release);
             engine.thread().unpark();
+            maintenance.thread().unpark();
             let _ = engine.join();
+            let _ = maintenance.join();
             result
         });
         self.service.stop()?;

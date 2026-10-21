@@ -172,7 +172,7 @@ fn checkpoint_with_pinned_reader_does_not_block_and_completes_after_release() {
     assert!(started.elapsed() < std::time::Duration::from_secs(2));
     assert!(partial.checkpointed_frames < partial.log_frames, "{partial:?}");
     let idle = store.checkpoint_idle().unwrap().expect("WAL file exists");
-    assert!(idle.busy, "{idle:?}");
+    assert!(!idle.truncated && idle.checkpointed_frames < idle.log_frames, "{idle:?}");
     // The pinned snapshot stays consistent while checkpoints ran, and Store reads and writes proceed.
     assert_eq!(
         pinned.query_row("SELECT COUNT(*) FROM current_decisions", [], |r| r.get::<_, i64>(0)).unwrap(),
@@ -182,7 +182,7 @@ fn checkpoint_with_pinned_reader_does_not_block_and_completes_after_release() {
     store.record_decision(2.0, false, &fixture.values[0]).unwrap();
     pinned.execute_batch("COMMIT").unwrap();
     let done = store.checkpoint_idle().unwrap().expect("WAL file exists");
-    assert!(!done.busy, "{done:?}");
+    assert!(done.truncated, "{done:?}");
     assert_eq!(store.wal_bytes(), 0);
     assert_eq!(decision_total(&store), 2048);
     drop(pinned);
@@ -229,7 +229,7 @@ fn checkpoint_under_concurrent_read_traffic_keeps_data_and_bounds_wal() {
     assert!(max_wal <= LIMIT + 2 * first_page, "{max_wal} vs one page {first_page}");
     assert!(max_wal < PAGES as u64 * first_page * 3 / 4, "WAL never recycled: {max_wal}");
     assert_eq!(decision_total(&store), (4096 * PAGES) as i64);
-    assert!(!store.checkpoint_idle().unwrap().unwrap().busy);
+    assert!(store.checkpoint_idle().unwrap().unwrap().truncated);
     assert_eq!(store.wal_bytes(), 0);
     let check: String = store.read().unwrap().query_row("PRAGMA integrity_check", [], |r| r.get(0)).unwrap();
     assert_eq!(check, "ok");
@@ -280,49 +280,75 @@ fn bench_put_decisions_checkpoint_and_readers() {
     const MIB: u64 = 1024 * 1024;
     let dir = temp_dir("api");
     let fixture = decision_fixture(ROWS);
-    let mut report = String::from("\n### Production Store 100k decision checkpoint/read-traffic controls\n\nReal Store schema/API with preloaded candidates (and deadlines unless noted), FULL/WAL throughout. Twenty-five 4096-row pages, deterministic shuffled schedule keys. Preparation excluded; reader requests reproduce upcoming COUNT + one-row reads every 10 ms. `SQLite autocheckpoint` rows are the previous production behaviour (and isolated controls); `manual` rows use the current Store: autocheckpoint off, `Store::checkpoint_if_needed(limit)` between pages (timed separately, included in `wall`). `idle` runs `Store::checkpoint_idle` (TRUNCATE) after every page. The final TRUNCATE after all pages is timed separately. `page ms` is the fastest/median/slowest put_decisions page.\n\n| mode | IPC-like readers | deadlines preloaded | read requests | put_decisions total ms | page ms min / median / max | between-page checkpoints (count) | between-page checkpoint ms | wall ms | max WAL bytes | final checkpoint ms | WAL bytes before final | checkpoint busy |\n|---|---|---|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|\n");
+    let mut report = String::from("\n### Production Store 100k decision checkpoint/read-traffic controls\n\nReal Store schema/API with preloaded candidates (and deadlines unless noted), FULL/WAL throughout. Twenty-five 4096-row pages, deterministic shuffled schedule keys. Preparation excluded; reader requests reproduce upcoming COUNT + one-row reads every 10 ms. `SQLite autocheckpoint` rows are the previous production behaviour (and isolated controls); the other rows use the current Store: autocheckpoint off and `Store::checkpoint_if_needed(limit)` either inline after each page or polled every 50 ms from a background thread (separate checkpoint connection; the daemon's design). Checkpoint time during writes is summed over all checkpoints and is part of `wall` only when it ran inline or was still running after the last page. The final `Store::checkpoint_idle` (PASSIVE then TRUNCATE) after all pages is timed separately. `page ms` is the fastest/median/slowest put_decisions page.\n\n| mode | IPC-like readers | deadlines preloaded | read requests | put_decisions total ms | page ms min / median / max | checkpoints during writes (count) | checkpoint ms during writes (summed) | wall ms | max WAL bytes | final idle checkpoint ms | WAL bytes before final | WAL truncated by final |\n|---|---|---|---:|---:|---|---:|---:|---:|---:|---:|---:|---|\n");
     print!("{report}");
     struct StopReader<'a>(&'a AtomicBool);
     impl Drop for StopReader<'_> {
         fn drop(&mut self) { self.0.store(true, Ordering::Release); }
     }
-    // (label, SQLite autocheckpoint frames, manual limit, truncate when idle after each page, readers, deadlines preloaded)
-    type BenchCase = (&'static str, i64, Option<u64>, bool, bool, bool);
-    let cases: [BenchCase; 9] = [
-        ("SQLite autocheckpoint 1000 (previous default)", 1000, None, false, false, true),
-        ("SQLite autocheckpoint 1000 (previous default)", 1000, None, false, true, true),
-        ("SQLite autocheckpoint 1000, no deadlines preloaded", 1000, None, false, true, false),
-        ("SQLite autocheckpoint 10000", 10_000, None, false, true, true),
-        ("no checkpoint at all (unbounded WAL control)", 0, None, false, true, true),
-        ("manual PASSIVE over 64 MiB", 0, Some(64 * MIB), false, true, true),
-        ("manual PASSIVE over 16 MiB", 0, Some(16 * MIB), false, true, true),
-        ("manual PASSIVE over 0 (every page)", 0, Some(0), false, true, true),
-        ("manual idle TRUNCATE after every page", 0, None, true, true, true),
+    struct BenchCase {
+        label: &'static str,
+        /// SQLite autocheckpoint frames on the writer (0 = off, the production setting).
+        frames: i64,
+        /// `checkpoint_if_needed(limit)` on the writing thread after every page.
+        inline_limit: Option<u64>,
+        /// `checkpoint_if_needed(limit)` polled every 50 ms from a separate thread (the daemon's design).
+        background_limit: Option<u64>,
+        deadlines: bool,
+        readers: bool,
+    }
+    let case = |label, frames, inline_limit, background_limit, deadlines, readers| BenchCase {
+        label, frames, inline_limit, background_limit, deadlines, readers,
+    };
+    let cases = [
+        case("SQLite autocheckpoint 1000 (previous default)", 1000, None, None, true, false),
+        case("SQLite autocheckpoint 1000 (previous default)", 1000, None, None, true, true),
+        case("SQLite autocheckpoint 1000, no deadlines preloaded", 1000, None, None, false, true),
+        case("SQLite autocheckpoint 10000", 10_000, None, None, true, true),
+        case("no checkpoint during writes (unbounded WAL control)", 0, None, None, true, true),
+        case("inline PASSIVE over 64 MiB after each page", 0, Some(64 * MIB), None, true, true),
+        case("inline PASSIVE over 192 MiB after each page", 0, Some(192 * MIB), None, true, true),
+        case("background PASSIVE over 64 MiB (separate connection)", 0, None, Some(64 * MIB), true, true),
+        case("background PASSIVE over 192 MiB (separate connection; daemon default)", 0, None, Some(192 * MIB), true, true),
     ];
-    for (case, (label, frames, limit, idle, readers, deadlines)) in cases.into_iter().enumerate() {
-        let path = dir.join(format!("case-{case}.sqlite"));
-        let (put_ms, wall_ms, between_ms, between_count, max_wal);
-        let final_ms;
-        let wal_bytes;
-        let checkpoint_busy;
+    for (index, case) in cases.iter().enumerate() {
+        let (label, readers, deadlines) = (case.label, case.readers, case.deadlines);
+        let path = dir.join(format!("case-{index}.sqlite"));
         let requests = AtomicUsize::new(0);
-        let page_stats: String;
+        let background_count = AtomicUsize::new(0);
+        let background_micros = AtomicUsize::new(0);
+        let (put_ms, wall_ms, between_ms, between_count, max_wal, page_stats, final_ms, wal_bytes, truncated);
         {
             let store = fixture_store_with(&path, &fixture, deadlines);
-            store.lock().unwrap().pragma_update(None, "wal_autocheckpoint", frames).unwrap();
+            store.lock().unwrap().pragma_update(None, "wal_autocheckpoint", case.frames).unwrap();
             let stop = AtomicBool::new(false);
             let reader = store.clone();
+            let background = store.clone();
             let (mut put, mut between, mut count, mut high) = (0.0, 0.0, 0usize, 0u64);
             let mut pages: Vec<f64> = vec![];
             let wall = Instant::now();
             std::thread::scope(|scope| {
-                let _stop_reader = StopReader(&stop);
+                let _stop_threads = StopReader(&stop);
                 if readers {
                     scope.spawn(|| {
                         while !stop.load(Ordering::Acquire) {
                             reader.decision_page(None, None, None, NonZeroUsize::new(1).unwrap()).unwrap();
                             requests.fetch_add(1, Ordering::Relaxed);
                             std::thread::sleep(Duration::from_millis(10));
+                        }
+                    });
+                }
+                if let Some(limit) = case.background_limit {
+                    let (stop, background, background_count, background_micros) =
+                        (&stop, &background, &background_count, &background_micros);
+                    scope.spawn(move || {
+                        while !stop.load(Ordering::Acquire) {
+                            let started = Instant::now();
+                            if background.checkpoint_if_needed(limit).unwrap().is_some() {
+                                background_count.fetch_add(1, Ordering::Relaxed);
+                                background_micros.fetch_add(started.elapsed().as_micros() as usize, Ordering::Relaxed);
+                            }
+                            std::thread::sleep(Duration::from_millis(50));
                         }
                     });
                 }
@@ -333,30 +359,29 @@ fn bench_put_decisions_checkpoint_and_readers() {
                     put += elapsed;
                     pages.push(elapsed);
                     high = high.max(store.wal_bytes());
-                    let started = Instant::now();
-                    let ran = match (limit, idle) {
-                        (Some(limit), _) => store.checkpoint_if_needed(limit).unwrap().is_some(),
-                        (None, true) => store.checkpoint_idle().unwrap().is_some(),
-                        (None, false) => false,
-                    };
-                    if ran {
-                        count += 1;
-                        between += started.elapsed().as_secs_f64() * 1000.0;
+                    if let Some(limit) = case.inline_limit {
+                        let started = Instant::now();
+                        if store.checkpoint_if_needed(limit).unwrap().is_some() {
+                            count += 1;
+                            between += started.elapsed().as_secs_f64() * 1000.0;
+                        }
                     }
                 }
+                // The pages are done; wall time includes a checkpoint still running in the background.
+                stop.store(true, Ordering::Release);
             });
             pages.sort_by(|a, b| a.total_cmp(b));
             page_stats = format!("{:.0} / {:.0} / {:.0}", pages[0], pages[pages.len() / 2], pages[pages.len() - 1]);
+            count += background_count.load(Ordering::Relaxed);
+            between += background_micros.load(Ordering::Relaxed) as f64 / 1000.0;
             (put_ms, between_ms, between_count, max_wal) = (put, between, count, high);
             wall_ms = wall.elapsed().as_secs_f64() * 1000.0;
             wal_bytes = store.wal_bytes();
             let started = Instant::now();
-            checkpoint_busy = store.lock().unwrap().query_row(
-                "PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get::<_, i64>(0)
-            ).unwrap();
+            truncated = store.checkpoint_idle().unwrap().is_some_and(|c| c.truncated);
             final_ms = started.elapsed().as_secs_f64() * 1000.0;
         }
-        let row = format!("| {label} | {readers} | {deadlines} | {} | {put_ms:.3} | {page_stats} | {between_count} | {between_ms:.3} | {wall_ms:.3} | {max_wal} | {final_ms:.3} | {wal_bytes} | {checkpoint_busy} |\n", requests.load(Ordering::Relaxed));
+        let row = format!("| {label} | {readers} | {deadlines} | {} | {put_ms:.3} | {page_stats} | {between_count} | {between_ms:.3} | {wall_ms:.3} | {max_wal} | {final_ms:.3} | {wal_bytes} | {truncated} |\n", requests.load(Ordering::Relaxed));
         print!("{row}");
         report.push_str(&row);
         std::fs::remove_file(path).unwrap();

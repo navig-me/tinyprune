@@ -129,22 +129,28 @@ impl<'a> Contains<'a> {
 fn count(n: i64) -> Result<u64> {
     u64::try_from(n).map_err(|_| "Invalid persisted count".into())
 }
-/// Default WAL size at which scheduled maintenance should checkpoint (also SQLite's WAL truncation limit).
-pub const DEFAULT_WAL_CHECKPOINT_BYTES: u64 = 64 * 1024 * 1024;
-/// WAL size above which every write transaction first runs a passive checkpoint, even for callers that
-/// never schedule maintenance.
-pub const HARD_WAL_LIMIT_BYTES: u64 = 256 * 1024 * 1024;
+/// WAL size above which the daemon checkpoints while decision work is queued. Backfilling rewrites every
+/// distinct page in the log once, so checkpointing after each 4096-row page (about 40 MiB of mostly
+/// distinct index pages) multiplies the work; fewer, larger checkpoints are far cheaper (see README).
+pub const DEFAULT_WAL_CHECKPOINT_BYTES: u64 = 192 * 1024 * 1024;
+/// WAL size above which every write transaction first runs a passive checkpoint (on the writer, under
+/// its mutex), even for callers that never schedule maintenance.
+pub const HARD_WAL_LIMIT_BYTES: u64 = 512 * 1024 * 1024;
+/// SQLite truncates the WAL file to this size when it restarts the log after a completed checkpoint.
+const WAL_JOURNAL_SIZE_LIMIT: u64 = 64 * 1024 * 1024;
 /// Outcome of one WAL checkpoint attempt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Checkpoint {
     /// WAL file size when the attempt began.
     pub wal_bytes: u64,
     /// SQLite reported busy: a lock or reader stopped the checkpoint (TRUNCATE with its zero timeout).
-    /// A PASSIVE checkpoint limited by a pinned reader usually reports `false`; compare the frame counts.
     pub busy: bool,
-    /// Frames in the WAL after the attempt / frames backfilled into the database.
+    /// Frames in the WAL after the attempt / frames backfilled into the database. A PASSIVE checkpoint
+    /// limited by a pinned reader reports `busy == false` with `checkpointed_frames < log_frames`.
     pub log_frames: i64,
     pub checkpointed_frames: i64,
+    /// The WAL file was reset and truncated to zero bytes (idle maintenance only).
+    pub truncated: bool,
 }
 fn run_checkpoint(c: &Connection, mode: &str, wal_bytes: u64) -> Result<Checkpoint> {
     let (busy, log_frames, checkpointed_frames) = sql(c.query_row(
@@ -157,7 +163,20 @@ fn run_checkpoint(c: &Connection, mode: &str, wal_bytes: u64) -> Result<Checkpoi
         busy: busy != 0,
         log_frames,
         checkpointed_frames,
+        truncated: mode == "TRUNCATE" && busy == 0,
     })
+}
+/// Checkpoint connection (separate from the writer and reader) plus the `<database>-wal` path.
+struct Maintenance {
+    wal_path: PathBuf,
+    conn: Mutex<Connection>,
+}
+impl Maintenance {
+    fn conn(&self) -> Result<MutexGuard<'_, Connection>> {
+        self.conn
+            .lock()
+            .map_err(|_| "Store maintenance mutex poisoned".into())
+    }
 }
 /// Durable store handle.
 ///
@@ -174,8 +193,8 @@ pub struct Store {
     reader: Arc<Mutex<Connection>>,
     projects: Vec<Project>,
     path_flavor: PathFlavor,
-    /// `<database>-wal`; `None` for in-memory stores.
-    wal_path: Option<PathBuf>,
+    /// WAL file and checkpoint connection; `None` for in-memory stores.
+    maintenance: Option<Arc<Maintenance>>,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct DeadlineCursor {
@@ -265,13 +284,21 @@ impl Store {
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         ))?;
         sql(reader.busy_timeout(std::time::Duration::from_secs(5)))?;
+        // Checkpoints run on their own connection so they never hold the writer mutex.
+        let maintenance = sql(Connection::open(path))?;
+        sql(maintenance.busy_timeout(std::time::Duration::from_secs(5)))?;
+        sql(maintenance
+            .execute_batch("PRAGMA synchronous=FULL; PRAGMA wal_autocheckpoint=0;"))?;
         let mut wal_name = path.as_os_str().to_owned();
         wal_name.push("-wal");
         Self::finish(
             Arc::new(Mutex::new(writer)),
             Arc::new(Mutex::new(reader)),
             path_flavor,
-            Some(PathBuf::from(wal_name)),
+            Some(Arc::new(Maintenance {
+                wal_path: PathBuf::from(wal_name),
+                conn: Mutex::new(maintenance),
+            })),
         )
     }
     pub fn memory() -> Result<Self> {
@@ -298,7 +325,7 @@ impl Store {
         // adding a database fsync to the durable commit path (minutes over a 100k-row publication on
         // Windows). Checkpoints are scheduled between jobs instead; see `checkpoint_if_needed`.
         sql(c.execute_batch(&format!(
-            "PRAGMA wal_autocheckpoint=0; PRAGMA journal_size_limit={DEFAULT_WAL_CHECKPOINT_BYTES};"
+            "PRAGMA wal_autocheckpoint=0; PRAGMA journal_size_limit={WAL_JOURNAL_SIZE_LIMIT};"
         )))?;
         schema::migrate(&mut c)?;
         // Device-number identities are not restart-stable. Never execute their stale schedules.
@@ -320,14 +347,14 @@ impl Store {
         writer: Arc<Mutex<Connection>>,
         reader: Arc<Mutex<Connection>>,
         path_flavor: PathFlavor,
-        wal_path: Option<PathBuf>,
+        maintenance: Option<Arc<Maintenance>>,
     ) -> Result<Self> {
         let mut store = Self {
             writer,
             reader,
             projects: vec![],
             path_flavor,
-            wal_path,
+            maintenance,
         };
         ensure_keys(&*store.lock()?, path_flavor)?;
         store.refresh_projects()?;
@@ -374,47 +401,61 @@ impl Store {
     }
     /// Size of the write-ahead log file (0 for in-memory stores or when no log file exists).
     pub fn wal_bytes(&self) -> u64 {
-        self.wal_path
+        self.maintenance
             .as_ref()
-            .and_then(|path| std::fs::metadata(path).ok())
+            .and_then(|m| std::fs::metadata(&m.wal_path).ok())
             .map_or(0, |meta| meta.len())
     }
-    /// Cheap bounded maintenance between write jobs: when the WAL file is larger than `limit_bytes`,
-    /// runs one `PRAGMA wal_checkpoint(PASSIVE)` (otherwise does nothing).
+    /// Bounded maintenance: when the WAL file is larger than `limit_bytes`, runs one
+    /// `PRAGMA wal_checkpoint(PASSIVE)` (otherwise does nothing and returns `None`).
     ///
     /// Autocheckpoint is disabled on the writer, so no commit ever pays for a checkpoint inside the
-    /// durable commit path; this is the only place (besides [`Store::checkpoint_idle`] and the
-    /// [`HARD_WAL_LIMIT_BYTES`] backstop) that checkpoints. PASSIVE never waits for readers or writers of
-    /// other connections and never blocks the read connection: it backfills as far as the oldest reader
-    /// snapshot allows and reports `busy` when it could not finish. It is never run inside a write
-    /// transaction (it takes the writer mutex between transactions). Durability is unchanged:
-    /// `synchronous=FULL` still applies to every commit and to the checkpoint's database sync.
+    /// durable commit path; this and [`Store::checkpoint_idle`] (plus the [`HARD_WAL_LIMIT_BYTES`]
+    /// backstop) are the only checkpoint sites. The checkpoint runs on its own connection: it does NOT
+    /// take the writer mutex, never waits for readers or for an open write transaction, and
+    /// can proceed while other threads commit (SQLite lets writers append to the WAL meanwhile). It
+    /// backfills as far as the oldest reader snapshot allows; `log_frames > checkpointed_frames` in the
+    /// result means a reader (or a concurrent commit) kept part of the log, and the next call continues.
+    /// Durability is unchanged: `synchronous=FULL` still applies to every commit and to the
+    /// checkpoint's database sync. Only the calling thread waits for the checkpoint's I/O.
     ///
     /// WAL size bound: a checkpoint is requested whenever a caller finds more than `limit_bytes`, so the
-    /// WAL stays within `limit_bytes` + the largest single write transaction (about 25 MiB for a 4096-row
-    /// decision page) + whatever a long-lived reader snapshot pins. Callers that never invoke this are
-    /// still bounded by `HARD_WAL_LIMIT_BYTES` (checked before every write transaction).
+    /// WAL stays within `limit_bytes` + the writes that commit while one checkpoint runs (the largest
+    /// single write transaction is about 40 MiB for a 4096-row decision page) + whatever a long-lived
+    /// reader snapshot pins. Callers that never invoke this are still bounded by `HARD_WAL_LIMIT_BYTES`.
     pub fn checkpoint_if_needed(&self, limit_bytes: u64) -> Result<Option<Checkpoint>> {
+        let Some(maintenance) = &self.maintenance else {
+            return Ok(None);
+        };
         let wal_bytes = self.wal_bytes();
         if wal_bytes <= limit_bytes {
             return Ok(None);
         }
-        let c = self.lock()?;
+        let c = maintenance.conn()?;
         run_checkpoint(&c, "PASSIVE", wal_bytes).map(Some)
     }
-    /// Idle-time maintenance: backfills the whole WAL and truncates the file with
-    /// `PRAGMA wal_checkpoint(TRUNCATE)` using a zero busy timeout, so an active reader makes it return
-    /// `busy` immediately instead of waiting. Does nothing when the WAL file is empty or absent.
+    /// Idle-time maintenance: backfills the whole WAL with a PASSIVE checkpoint and, only when that
+    /// reached the end of the log, truncates the file with `wal_checkpoint(TRUNCATE)` using a zero busy
+    /// timeout (nothing is left to copy, so the writer lock is held only briefly; an active writer or
+    /// reader makes it a no-op). `truncated` reports whether the file was reset. Does nothing when the
+    /// WAL file is empty or absent.
     pub fn checkpoint_idle(&self) -> Result<Option<Checkpoint>> {
+        let Some(maintenance) = &self.maintenance else {
+            return Ok(None);
+        };
         let wal_bytes = self.wal_bytes();
         if wal_bytes == 0 {
             return Ok(None);
         }
-        let c = self.lock()?;
+        let c = maintenance.conn()?;
+        let passive = run_checkpoint(&c, "PASSIVE", wal_bytes)?;
+        if passive.log_frames != passive.checkpointed_frames {
+            return Ok(Some(passive));
+        }
         sql(c.busy_timeout(std::time::Duration::ZERO))?;
-        let result = run_checkpoint(&c, "TRUNCATE", wal_bytes);
+        let truncated = run_checkpoint(&c, "TRUNCATE", wal_bytes);
         sql(c.busy_timeout(std::time::Duration::from_secs(5)))?;
-        result.map(Some)
+        truncated.map(Some)
     }
     /// Safety net for callers that never schedule checkpoints (autocheckpoint is off). Best effort:
     /// a failed or busy checkpoint only means the WAL stays larger until the next attempt.
