@@ -320,3 +320,46 @@ fn golden_dtos_roundtrip() {
         assert_eq!(serde_json::to_value(parsed).unwrap(), *value);
     }
 }
+/// A burst of parallel clients against one pending pipe instance must queue (ERROR_PIPE_BUSY is waited out), as the
+/// desktop UI issues several requests at once.
+#[cfg(windows)]
+#[test]
+fn named_pipe_burst_of_parallel_clients_is_queued_not_refused() {
+    let name = format!(r"\\.\pipe\tinyprune-ipc-burst-{}", std::process::id());
+    let mut listener = windows::Listener::bind(&name).unwrap();
+    let server = Arc::new(server(64));
+    const CLIENTS: usize = 24;
+    let acceptor = {
+        let server = server.clone();
+        thread::spawn(move || {
+            let mut workers = Vec::new();
+            for _ in 0..CLIENTS {
+                // Slow accept loop so every client races for the single pending instance.
+                thread::sleep(std::time::Duration::from_millis(5));
+                workers.push(server.dispatch(listener.accept().unwrap()).unwrap());
+            }
+            for worker in workers {
+                worker.join().unwrap().unwrap();
+            }
+        })
+    };
+    let barrier = Arc::new(Barrier::new(CLIENTS));
+    let clients: Vec<_> = (0..CLIENTS)
+        .map(|_| {
+            let (name, barrier) = (name.clone(), barrier.clone());
+            thread::spawn(move || {
+                barrier.wait();
+                let stream = windows::connect(&name).unwrap();
+                let mut client = Client::connect(stream, VersionRange::default(), 4096).unwrap();
+                assert!(matches!(
+                    client.request(Request::Health).unwrap(),
+                    Response::Health(_)
+                ));
+            })
+        })
+        .collect();
+    for client in clients {
+        client.join().unwrap();
+    }
+    acceptor.join().unwrap();
+}
