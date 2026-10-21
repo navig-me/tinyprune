@@ -5,7 +5,7 @@ use codec::*;
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Transaction};
 use std::{
     collections::HashSet,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex, MutexGuard},
 };
 
@@ -129,6 +129,36 @@ impl<'a> Contains<'a> {
 fn count(n: i64) -> Result<u64> {
     u64::try_from(n).map_err(|_| "Invalid persisted count".into())
 }
+/// Default WAL size at which scheduled maintenance should checkpoint (also SQLite's WAL truncation limit).
+pub const DEFAULT_WAL_CHECKPOINT_BYTES: u64 = 64 * 1024 * 1024;
+/// WAL size above which every write transaction first runs a passive checkpoint, even for callers that
+/// never schedule maintenance.
+pub const HARD_WAL_LIMIT_BYTES: u64 = 256 * 1024 * 1024;
+/// Outcome of one WAL checkpoint attempt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Checkpoint {
+    /// WAL file size when the attempt began.
+    pub wal_bytes: u64,
+    /// SQLite reported busy: a lock or reader stopped the checkpoint (TRUNCATE with its zero timeout).
+    /// A PASSIVE checkpoint limited by a pinned reader usually reports `false`; compare the frame counts.
+    pub busy: bool,
+    /// Frames in the WAL after the attempt / frames backfilled into the database.
+    pub log_frames: i64,
+    pub checkpointed_frames: i64,
+}
+fn run_checkpoint(c: &Connection, mode: &str, wal_bytes: u64) -> Result<Checkpoint> {
+    let (busy, log_frames, checkpointed_frames) = sql(c.query_row(
+        &format!("PRAGMA wal_checkpoint({mode})"),
+        [],
+        |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)),
+    ))?;
+    Ok(Checkpoint {
+        wal_bytes,
+        busy: busy != 0,
+        log_frames,
+        checkpointed_frames,
+    })
+}
 /// Durable store handle.
 ///
 /// * One **writer** connection (mutex) serializes every mutation as an IMMEDIATE transaction.
@@ -144,6 +174,8 @@ pub struct Store {
     reader: Arc<Mutex<Connection>>,
     projects: Vec<Project>,
     path_flavor: PathFlavor,
+    /// `<database>-wal`; `None` for in-memory stores.
+    wal_path: Option<PathBuf>,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct DeadlineCursor {
@@ -233,10 +265,13 @@ impl Store {
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         ))?;
         sql(reader.busy_timeout(std::time::Duration::from_secs(5)))?;
+        let mut wal_name = path.as_os_str().to_owned();
+        wal_name.push("-wal");
         Self::finish(
             Arc::new(Mutex::new(writer)),
             Arc::new(Mutex::new(reader)),
             path_flavor,
+            Some(PathBuf::from(wal_name)),
         )
     }
     pub fn memory() -> Result<Self> {
@@ -252,13 +287,19 @@ impl Store {
     }
     fn from_connection_with_flavor(c: Connection, path_flavor: PathFlavor) -> Result<Self> {
         let shared = Arc::new(Mutex::new(Self::prepare_writer(c)?));
-        Self::finish(shared.clone(), shared, path_flavor)
+        Self::finish(shared.clone(), shared, path_flavor, None)
     }
     fn prepare_writer(mut c: Connection) -> Result<Connection> {
         sql(c.busy_timeout(std::time::Duration::from_secs(5)))?;
         sql(c.execute_batch(
             "PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;",
         ))?;
+        // Autocheckpoint would run inside the commit of whichever transaction crosses the threshold,
+        // adding a database fsync to the durable commit path (minutes over a 100k-row publication on
+        // Windows). Checkpoints are scheduled between jobs instead; see `checkpoint_if_needed`.
+        sql(c.execute_batch(&format!(
+            "PRAGMA wal_autocheckpoint=0; PRAGMA journal_size_limit={DEFAULT_WAL_CHECKPOINT_BYTES};"
+        )))?;
         schema::migrate(&mut c)?;
         // Device-number identities are not restart-stable. Never execute their stale schedules.
         sql(c.execute(
@@ -279,12 +320,14 @@ impl Store {
         writer: Arc<Mutex<Connection>>,
         reader: Arc<Mutex<Connection>>,
         path_flavor: PathFlavor,
+        wal_path: Option<PathBuf>,
     ) -> Result<Self> {
         let mut store = Self {
             writer,
             reader,
             projects: vec![],
             path_flavor,
+            wal_path,
         };
         ensure_keys(&*store.lock()?, path_flavor)?;
         store.refresh_projects()?;
@@ -304,6 +347,7 @@ impl Store {
     }
     fn transaction<T>(&self, f: impl FnOnce(&Transaction<'_>) -> Result<T>) -> Result<T> {
         let mut c = self.lock()?;
+        self.checkpoint_backstop(&c);
         let tx = sql(c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate))?;
         let value = f(&tx)?;
         sql(tx.commit())?;
@@ -327,6 +371,58 @@ impl Store {
             .zip(u64::try_from(size).ok())
             .and_then(|(pages, size)| pages.checked_mul(size))
             .ok_or_else(|| "Invalid database page size/count".into())
+    }
+    /// Size of the write-ahead log file (0 for in-memory stores or when no log file exists).
+    pub fn wal_bytes(&self) -> u64 {
+        self.wal_path
+            .as_ref()
+            .and_then(|path| std::fs::metadata(path).ok())
+            .map_or(0, |meta| meta.len())
+    }
+    /// Cheap bounded maintenance between write jobs: when the WAL file is larger than `limit_bytes`,
+    /// runs one `PRAGMA wal_checkpoint(PASSIVE)` (otherwise does nothing).
+    ///
+    /// Autocheckpoint is disabled on the writer, so no commit ever pays for a checkpoint inside the
+    /// durable commit path; this is the only place (besides [`Store::checkpoint_idle`] and the
+    /// [`HARD_WAL_LIMIT_BYTES`] backstop) that checkpoints. PASSIVE never waits for readers or writers of
+    /// other connections and never blocks the read connection: it backfills as far as the oldest reader
+    /// snapshot allows and reports `busy` when it could not finish. It is never run inside a write
+    /// transaction (it takes the writer mutex between transactions). Durability is unchanged:
+    /// `synchronous=FULL` still applies to every commit and to the checkpoint's database sync.
+    ///
+    /// WAL size bound: a checkpoint is requested whenever a caller finds more than `limit_bytes`, so the
+    /// WAL stays within `limit_bytes` + the largest single write transaction (about 25 MiB for a 4096-row
+    /// decision page) + whatever a long-lived reader snapshot pins. Callers that never invoke this are
+    /// still bounded by `HARD_WAL_LIMIT_BYTES` (checked before every write transaction).
+    pub fn checkpoint_if_needed(&self, limit_bytes: u64) -> Result<Option<Checkpoint>> {
+        let wal_bytes = self.wal_bytes();
+        if wal_bytes <= limit_bytes {
+            return Ok(None);
+        }
+        let c = self.lock()?;
+        run_checkpoint(&c, "PASSIVE", wal_bytes).map(Some)
+    }
+    /// Idle-time maintenance: backfills the whole WAL and truncates the file with
+    /// `PRAGMA wal_checkpoint(TRUNCATE)` using a zero busy timeout, so an active reader makes it return
+    /// `busy` immediately instead of waiting. Does nothing when the WAL file is empty or absent.
+    pub fn checkpoint_idle(&self) -> Result<Option<Checkpoint>> {
+        let wal_bytes = self.wal_bytes();
+        if wal_bytes == 0 {
+            return Ok(None);
+        }
+        let c = self.lock()?;
+        sql(c.busy_timeout(std::time::Duration::ZERO))?;
+        let result = run_checkpoint(&c, "TRUNCATE", wal_bytes);
+        sql(c.busy_timeout(std::time::Duration::from_secs(5)))?;
+        result.map(Some)
+    }
+    /// Safety net for callers that never schedule checkpoints (autocheckpoint is off). Best effort:
+    /// a failed or busy checkpoint only means the WAL stays larger until the next attempt.
+    fn checkpoint_backstop(&self, c: &Connection) {
+        let wal_bytes = self.wal_bytes();
+        if wal_bytes > HARD_WAL_LIMIT_BYTES {
+            let _ = run_checkpoint(c, "PASSIVE", wal_bytes);
+        }
     }
     pub fn schema_version(&self) -> Result<i64> {
         sql(self
@@ -700,6 +796,7 @@ impl Store {
         let logging = PHASE_SINK.is_some();
         let waiting = logging.then(std::time::Instant::now);
         let mut c = self.lock()?;
+        self.checkpoint_backstop(&c);
         let tx = sql(c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate))?;
         let begin_elapsed = waiting.map(|start| (start.elapsed(), std::time::SystemTime::now()));
         let started = logging.then(std::time::Instant::now);

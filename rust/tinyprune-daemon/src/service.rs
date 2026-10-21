@@ -244,6 +244,15 @@ impl Service {
         // Off the engine lock: evaluate full decisions for the published snapshot in bounded steps.
         let pending = decisions.advance(&self.shared, &self.store, self.clock.now())?;
         report.pending_work |= pending;
+        // Between jobs (no write transaction is open here): autocheckpoint is off on the writer, so
+        // backfill the WAL once it exceeds the default limit while work is queued, and truncate it when
+        // idle. Best effort: a busy or failed checkpoint only leaves the WAL larger until the next turn.
+        let _ = if report.pending_work {
+            self.store
+                .checkpoint_if_needed(tinyprune_store::DEFAULT_WAL_CHECKPOINT_BYTES)
+        } else {
+            self.store.checkpoint_idle()
+        };
         Ok(report)
     }
     pub(crate) fn stop(&self) -> std::io::Result<()> {

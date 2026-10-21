@@ -58,19 +58,14 @@ fn candidate(n: u8) -> RuleCandidate {
     )
 }
 
-#[test]
-#[ignore = "100k production Store API checkpoint/read-traffic diagnostic"]
-fn bench_put_decisions_checkpoint_and_readers() {
-    use std::io::Write as _;
-    use std::sync::atomic::AtomicBool;
-    use std::time::{Duration, Instant};
-    const ROWS: usize = 100_000;
-    let dir = std::env::temp_dir().join(format!(
-        "tinyprune-store-api-{}-{}", std::process::id(),
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    let candidates: Vec<_> = (0..ROWS).map(|n| {
+struct DecisionFixture {
+    candidates: Vec<RuleCandidate>,
+    deadlines: Vec<TrashRequest>,
+    values: Vec<serde_json::Value>,
+}
+/// `rows` candidates under `/root` with deterministic shuffled schedule keys and ~1 KiB explanations.
+fn decision_fixture(rows: usize) -> DecisionFixture {
+    let candidates: Vec<_> = (0..rows).map(|n| {
         let mut item = candidate(0);
         item.identity.resource = (n as u128).to_be_bytes().to_vec();
         item.identity.path_hint = format!("/root/group-{:04}/item-{n:06}.dat", n / 1000);
@@ -79,7 +74,7 @@ fn bench_put_decisions_checkpoint_and_readers() {
     let deadlines: Vec<_> = candidates.iter().enumerate().map(|(n, item)| TrashRequest {
         candidate_identity: item.identity.clone(),
         source: ScheduledSource::Rule(Uuid(2)),
-        scheduled_at: 2_000_000.0 + ((n * 7919) % ROWS) as f64,
+        scheduled_at: 2_000_000.0 + ((n * 7919) % rows) as f64,
     }).collect();
     let values: Vec<_> = deadlines.iter().map(|deadline| serde_json::json!({
         "item": {
@@ -91,33 +86,227 @@ fn bench_put_decisions_checkpoint_and_readers() {
         "scheduledAt": deadline.scheduled_at, "rule": {"id": Uuid(2).to_string()},
         "basis": "modified", "diagnosticContext": "x".repeat(768)
     })).collect();
+    DecisionFixture { candidates, deadlines, values }
+}
+/// Fresh file-backed store holding the fixture's candidates and deadlines, fully checkpointed so a
+/// measurement starts from an empty WAL.
+fn fixture_store(path: &Path, fixture: &DecisionFixture) -> Store {
+    let mut store = Store::open(path).unwrap();
+    store.replace_roots(&["/root".into()], 0.0).unwrap();
+    store.publish_candidate_subtree("/root", &fixture.candidates, 0.0).unwrap();
+    AgentStore::replace_deadlines(&mut store, "/root", &fixture.deadlines).unwrap();
+    store.lock().unwrap().execute_batch("PRAGMA wal_checkpoint(TRUNCATE)").unwrap();
+    store
+}
+fn put_page(store: &Store, fixture: &DecisionFixture, page: usize, size: usize) -> usize {
     let rule_id = Uuid(2).to_string();
-    let mut report = String::from("\n### Production Store 100k decision checkpoint/read-traffic controls\n\nReal Store schema/API with preloaded candidates and deadlines, FULL/WAL throughout. Twenty-five 4096-row pages, deterministic shuffled schedule keys. Preparation excluded; reader requests reproduce upcoming COUNT + one-row reads every 10 ms. Autocheckpoint changes are isolated benchmark controls, not production settings. Final TRUNCATE checkpoint runs after readers stop and is timed separately.\n\n| Auto-checkpoint frames | IPC-like readers | read requests | put_decisions total ms | final checkpoint ms | WAL bytes before checkpoint | checkpoint busy |\n|---:|---|---:|---:|---:|---:|---:|\n");
+    let start = page * size;
+    let end = (start + size).min(fixture.deadlines.len());
+    let rows: Vec<_> = (start..end).map(|n| DecisionRow {
+        identity: &fixture.deadlines[n].candidate_identity,
+        scheduled_at: Some(fixture.deadlines[n].scheduled_at),
+        rule_id: Some(&rule_id), preview: false, explanation: &fixture.values[n],
+    }).collect();
+    store.put_decisions(1.0, &rows).unwrap()
+}
+fn decision_total(store: &Store) -> i64 {
+    store.read().unwrap().query_row("SELECT COUNT(*) FROM current_decisions", [], |r| r.get(0)).unwrap()
+}
+fn temp_dir(label: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "tinyprune-store-{label}-{}-{}", std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[test]
+fn file_store_disables_autocheckpoint_and_keeps_full_synchronous() {
+    let dir = temp_dir("pragmas");
+    let store = Store::open(dir.join("p.sqlite")).unwrap();
+    {
+        let c = store.lock().unwrap();
+        assert_eq!(c.query_row("PRAGMA wal_autocheckpoint", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+        assert_eq!(c.query_row("PRAGMA synchronous", [], |r| r.get::<_, i64>(0)).unwrap(), 2, "FULL");
+        assert_eq!(c.query_row("PRAGMA journal_mode", [], |r| r.get::<_, String>(0)).unwrap(), "wal");
+    }
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+#[test]
+fn checkpoint_is_noop_for_memory_store_and_small_wal() {
+    let store = Store::memory().unwrap();
+    assert_eq!(store.wal_bytes(), 0);
+    assert_eq!(store.checkpoint_if_needed(0).unwrap(), None);
+    assert_eq!(store.checkpoint_idle().unwrap(), None);
+    let dir = temp_dir("noop");
+    let store = Store::open(dir.join("n.sqlite")).unwrap();
+    assert_eq!(store.checkpoint_if_needed(u64::MAX).unwrap(), None);
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+#[test]
+fn checkpoint_with_pinned_reader_does_not_block_and_completes_after_release() {
+    let dir = temp_dir("pinned");
+    let path = dir.join("r.sqlite");
+    let fixture = decision_fixture(2048);
+    let store = fixture_store(&path, &fixture);
+    // An independent connection pins a snapshot taken before the decisions are written.
+    let pinned = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    pinned.execute_batch("BEGIN").unwrap();
+    assert_eq!(
+        pinned.query_row("SELECT COUNT(*) FROM current_decisions", [], |r| r.get::<_, i64>(0)).unwrap(),
+        0
+    );
+    assert_eq!(put_page(&store, &fixture, 0, 2048), 2048);
+    assert!(store.wal_bytes() > 0);
+    // Never waits for the pinned reader: returns promptly, reports busy, backfills nothing past the pin.
+    let started = std::time::Instant::now();
+    let partial = store.checkpoint_if_needed(0).unwrap().expect("WAL is over the limit");
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    assert!(partial.checkpointed_frames < partial.log_frames, "{partial:?}");
+    let idle = store.checkpoint_idle().unwrap().expect("WAL file exists");
+    assert!(idle.busy, "{idle:?}");
+    // The pinned snapshot stays consistent while checkpoints ran, and Store reads and writes proceed.
+    assert_eq!(
+        pinned.query_row("SELECT COUNT(*) FROM current_decisions", [], |r| r.get::<_, i64>(0)).unwrap(),
+        0
+    );
+    assert_eq!(decision_total(&store), 2048);
+    store.record_decision(2.0, false, &fixture.values[0]).unwrap();
+    pinned.execute_batch("COMMIT").unwrap();
+    let done = store.checkpoint_idle().unwrap().expect("WAL file exists");
+    assert!(!done.busy, "{done:?}");
+    assert_eq!(store.wal_bytes(), 0);
+    assert_eq!(decision_total(&store), 2048);
+    drop(pinned);
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+#[test]
+fn checkpoint_under_concurrent_read_traffic_keeps_data_and_bounds_wal() {
+    use std::sync::atomic::AtomicBool;
+    const LIMIT: u64 = 1024 * 1024;
+    const PAGES: usize = 5;
+    let dir = temp_dir("bounded");
+    let path = dir.join("b.sqlite");
+    let fixture = decision_fixture(4096 * PAGES);
+    let store = fixture_store(&path, &fixture);
+    let stop = AtomicBool::new(false);
+    let reads = AtomicUsize::new(0);
+    let (mut first_page, mut max_wal, mut checkpoints) = (0u64, 0u64, 0usize);
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            while !stop.load(Ordering::Acquire) {
+                store.decision_page(None, None, None, NonZeroUsize::new(5).unwrap()).unwrap();
+                reads.fetch_add(1, Ordering::Relaxed);
+            }
+        });
+        for page in 0..PAGES {
+            put_page(&store, &fixture, page, 4096);
+            let after = store.wal_bytes();
+            if page == 0 {
+                first_page = after;
+            }
+            max_wal = max_wal.max(after);
+            if store.checkpoint_if_needed(LIMIT).unwrap().is_some() {
+                checkpoints += 1;
+            }
+        }
+        stop.store(true, Ordering::Release);
+    });
+    assert!(reads.load(Ordering::Relaxed) > 0);
+    // One page of WAL is far above the limit, so every page is followed by a checkpoint and the log
+    // restarts: the file never exceeds limit + about one page (unbounded growth would be PAGES pages).
+    assert!(first_page > 2 * LIMIT, "fixture page too small: {first_page}");
+    assert_eq!(checkpoints, PAGES);
+    assert!(max_wal <= LIMIT + 2 * first_page, "{max_wal} vs one page {first_page}");
+    assert!(max_wal < PAGES as u64 * first_page * 3 / 4, "WAL never recycled: {max_wal}");
+    assert_eq!(decision_total(&store), (4096 * PAGES) as i64);
+    assert!(!store.checkpoint_idle().unwrap().unwrap().busy);
+    assert_eq!(store.wal_bytes(), 0);
+    let check: String = store.read().unwrap().query_row("PRAGMA integrity_check", [], |r| r.get(0)).unwrap();
+    assert_eq!(check, "ok");
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+#[test]
+fn reopen_after_unclean_exit_replays_uncheckpointed_wal() {
+    const CHILD: &str = "TINYPRUNE_STORE_CRASH_DIR";
+    const NAME: &str = "tests::reopen_after_unclean_exit_replays_uncheckpointed_wal";
+    if let Some(dir) = std::env::var_os(CHILD) {
+        // Child: write durable decisions without any checkpoint, then die without running destructors.
+        let fixture = decision_fixture(2048);
+        let store = fixture_store(&PathBuf::from(dir).join("crash.sqlite"), &fixture);
+        assert_eq!(put_page(&store, &fixture, 0, 2048), 2048);
+        assert!(store.wal_bytes() > 0);
+        std::process::abort();
+    }
+    let dir = temp_dir("crash");
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", NAME, "--test-threads=1", "--nocapture"])
+        .env(CHILD, &dir)
+        .status()
+        .unwrap();
+    assert!(!status.success(), "child must die uncleanly: {status:?}");
+    let path = dir.join("crash.sqlite");
+    let wal_before = std::fs::metadata(dir.join("crash.sqlite-wal")).map_or(0, |m| m.len());
+    assert!(wal_before > 0, "the crash must leave committed frames in the WAL");
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.candidate_count().unwrap(), 2048);
+    assert_eq!(decision_total(&store), 2048);
+    let check: String = store.read().unwrap().query_row("PRAGMA integrity_check", [], |r| r.get(0)).unwrap();
+    assert_eq!(check, "ok");
+    store.checkpoint_idle().unwrap();
+    assert_eq!(store.wal_bytes(), 0);
+    assert_eq!(decision_total(&store), 2048);
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+#[ignore = "100k production Store API checkpoint/read-traffic diagnostic"]
+fn bench_put_decisions_checkpoint_and_readers() {
+    use std::io::Write as _;
+    use std::sync::atomic::AtomicBool;
+    use std::time::{Duration, Instant};
+    const ROWS: usize = 100_000;
+    const MIB: u64 = 1024 * 1024;
+    let dir = temp_dir("api");
+    let fixture = decision_fixture(ROWS);
+    let mut report = String::from("\n### Production Store 100k decision checkpoint/read-traffic controls\n\nReal Store schema/API with preloaded candidates and deadlines, FULL/WAL throughout. Twenty-five 4096-row pages, deterministic shuffled schedule keys. Preparation excluded; reader requests reproduce upcoming COUNT + one-row reads every 10 ms. `SQLite autocheckpoint` rows are the previous production behaviour (and isolated controls); `manual` rows use the current Store: autocheckpoint off, `Store::checkpoint_if_needed(limit)` between pages (timed separately, included in `wall`). `idle` runs `Store::checkpoint_idle` (TRUNCATE) after every page. The final TRUNCATE after all pages is timed separately.\n\n| mode | IPC-like readers | read requests | put_decisions total ms | between-page checkpoints (count) | between-page checkpoint ms | wall ms | max WAL bytes | final checkpoint ms | WAL bytes before final | checkpoint busy |\n|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n");
     print!("{report}");
     struct StopReader<'a>(&'a AtomicBool);
     impl Drop for StopReader<'_> {
         fn drop(&mut self) { self.0.store(true, Ordering::Release); }
     }
-    for (frames, readers) in [(1000, false), (1000, true), (0, true), (10_000, true)] {
-        let path = dir.join(format!("case-{frames}-{readers}.sqlite"));
-        let put_ms;
-        let checkpoint_ms;
+    // (label, SQLite autocheckpoint frames, manual limit, truncate when idle after each page, readers)
+    let cases: [(&str, i64, Option<u64>, bool, bool); 8] = [
+        ("SQLite autocheckpoint 1000 (previous default)", 1000, None, false, false),
+        ("SQLite autocheckpoint 1000 (previous default)", 1000, None, false, true),
+        ("SQLite autocheckpoint 10000", 10_000, None, false, true),
+        ("no checkpoint at all (unbounded WAL control)", 0, None, false, true),
+        ("manual PASSIVE over 64 MiB", 0, Some(64 * MIB), false, true),
+        ("manual PASSIVE over 16 MiB", 0, Some(16 * MIB), false, true),
+        ("manual PASSIVE over 0 (every page)", 0, Some(0), false, true),
+        ("manual idle TRUNCATE after every page", 0, None, true, true),
+    ];
+    for (case, (label, frames, limit, idle, readers)) in cases.into_iter().enumerate() {
+        let path = dir.join(format!("case-{case}.sqlite"));
+        let (put_ms, wall_ms, between_ms, between_count, max_wal);
+        let final_ms;
         let wal_bytes;
         let checkpoint_busy;
         let requests = AtomicUsize::new(0);
         {
-            let mut store = Store::open(&path).unwrap();
-            store.replace_roots(&["/root".into()], 0.0).unwrap();
-            store.publish_candidate_subtree("/root", &candidates, 0.0).unwrap();
-            AgentStore::replace_deadlines(&mut store, "/root", &deadlines).unwrap();
-            {
-                let c = store.lock().unwrap();
-                c.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)").unwrap();
-                c.pragma_update(None, "wal_autocheckpoint", frames).unwrap();
-            }
+            let store = fixture_store(&path, &fixture);
+            store.lock().unwrap().pragma_update(None, "wal_autocheckpoint", frames).unwrap();
             let stop = AtomicBool::new(false);
             let reader = store.clone();
-            put_ms = std::thread::scope(|scope| {
+            let (mut put, mut between, mut count, mut high) = (0.0, 0.0, 0usize, 0u64);
+            let wall = Instant::now();
+            std::thread::scope(|scope| {
                 let _stop_reader = StopReader(&stop);
                 if readers {
                     scope.spawn(|| {
@@ -128,25 +317,33 @@ fn bench_put_decisions_checkpoint_and_readers() {
                         }
                     });
                 }
-                let started = Instant::now();
-                for (page, batch) in deadlines.chunks(4096).enumerate() {
-                    let offset = page * 4096;
-                    let rows: Vec<_> = batch.iter().enumerate().map(|(n, deadline)| DecisionRow {
-                        identity: &deadline.candidate_identity, scheduled_at: Some(deadline.scheduled_at),
-                        rule_id: Some(&rule_id), preview: false, explanation: &values[offset + n],
-                    }).collect();
-                    store.put_decisions(1.0, &rows).unwrap();
+                for page in 0..ROWS.div_ceil(4096) {
+                    let started = Instant::now();
+                    put_page(&store, &fixture, page, 4096);
+                    put += started.elapsed().as_secs_f64() * 1000.0;
+                    high = high.max(store.wal_bytes());
+                    let started = Instant::now();
+                    let ran = match (limit, idle) {
+                        (Some(limit), _) => store.checkpoint_if_needed(limit).unwrap().is_some(),
+                        (None, true) => store.checkpoint_idle().unwrap().is_some(),
+                        (None, false) => false,
+                    };
+                    if ran {
+                        count += 1;
+                        between += started.elapsed().as_secs_f64() * 1000.0;
+                    }
                 }
-                started.elapsed().as_secs_f64() * 1000.0
             });
-            wal_bytes = std::fs::metadata(path.with_extension("sqlite-wal")).map_or(0, |m| m.len());
+            (put_ms, between_ms, between_count, max_wal) = (put, between, count, high);
+            wall_ms = wall.elapsed().as_secs_f64() * 1000.0;
+            wal_bytes = store.wal_bytes();
             let started = Instant::now();
             checkpoint_busy = store.lock().unwrap().query_row(
                 "PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get::<_, i64>(0)
             ).unwrap();
-            checkpoint_ms = started.elapsed().as_secs_f64() * 1000.0;
+            final_ms = started.elapsed().as_secs_f64() * 1000.0;
         }
-        let row = format!("| {frames} | {readers} | {} | {put_ms:.3} | {checkpoint_ms:.3} | {wal_bytes} | {checkpoint_busy} |\n", requests.load(Ordering::Relaxed));
+        let row = format!("| {label} | {readers} | {} | {put_ms:.3} | {between_count} | {between_ms:.3} | {wall_ms:.3} | {max_wal} | {final_ms:.3} | {wal_bytes} | {checkpoint_busy} |\n", requests.load(Ordering::Relaxed));
         print!("{row}");
         report.push_str(&row);
         std::fs::remove_file(path).unwrap();
