@@ -1,0 +1,13 @@
+[package]
+name = "tinyprune-unix"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "In-development Unix filesystem adapter for TinyPrune"
+
+[dependencies]
+tinyprune-core = { path = "../tinyprune-core" }
+
+[target.'cfg(unix)'.dependencies]
+# std lacks no-replace atomic rename, effective UID, and local calendar conversion.
+libc = "0.2"

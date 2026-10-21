@@ -1,0 +1,1612 @@
+{
+  "VersionRange": {
+    "min": 1,
+    "max": 1
+  },
+  "Handshake": {
+    "protocol_version": 1,
+    "versions": {
+      "min": 1,
+      "max": 1
+    }
+  },
+  "HandshakeReply": {
+    "protocol_version": 1,
+    "versions": {
+      "min": 1,
+      "max": 1
+    }
+  },
+  "Identity": {
+    "volumeIdentifier": "volume",
+    "resourceIdentifier": "cmVzb3VyY2U=",
+    "pathHint": "/managed/item",
+    "creationTime": 1000.0,
+    "generation": 1,
+    "isPersistent": true
+  },
+  "Scope": {
+    "path": "/managed",
+    "recursive": true
+  },
+  "Matcher": {
+    "itemKind": "file",
+    "exactNames": [],
+    "globPatterns": [
+      "*.tmp"
+    ]
+  },
+  "Rule": {
+    "id": "rule",
+    "name": "Temporary files",
+    "scope": {
+      "path": "/managed",
+      "recursive": true
+    },
+    "matcher": {
+      "itemKind": "file",
+      "exactNames": [],
+      "globPatterns": [
+        "*.tmp"
+      ]
+    },
+    "expiryBasis": "modified",
+    "lifetime": 86400.0,
+    "gracePeriod": 3600.0,
+    "action": "trashItem",
+    "state": "preview",
+    "matchMode": "scoped"
+  },
+  "OverridePolicy": {
+    "type": "keep",
+    "protectDescendants": true
+  },
+  "ItemOverride": {
+    "id": "override",
+    "identity": {
+      "volumeIdentifier": "volume",
+      "resourceIdentifier": "cmVzb3VyY2U=",
+      "pathHint": "/managed/item",
+      "creationTime": 1000.0,
+      "generation": 1,
+      "isPersistent": true
+    },
+    "path": "/managed/item",
+    "policy": {
+      "type": "keep",
+      "protectDescendants": true
+    }
+  },
+  "OverrideChange": {
+    "path": "/managed/item",
+    "policy": {
+      "type": "keep",
+      "protectDescendants": true
+    }
+  },
+  "Root": {
+    "id": "root",
+    "path": "/managed",
+    "name": "Managed"
+  },
+  "RootStatus": {
+    "rootId": "root",
+    "path": "/managed",
+    "state": "watching",
+    "detail": null
+  },
+  "Settings": {
+    "defaultGracePeriodSeconds": 3600.0,
+    "protectHiddenFiles": true,
+    "activityRetentionDays": 30
+  },
+  "PolicySnapshot": {
+    "rules": [
+      {
+        "id": "rule",
+        "name": "Temporary files",
+        "scope": {
+          "path": "/managed",
+          "recursive": true
+        },
+        "matcher": {
+          "itemKind": "file",
+          "exactNames": [],
+          "globPatterns": [
+            "*.tmp"
+          ]
+        },
+        "expiryBasis": "modified",
+        "lifetime": 86400.0,
+        "gracePeriod": 3600.0,
+        "action": "trashItem",
+        "state": "preview",
+        "matchMode": "scoped"
+      }
+    ],
+    "overrides": [
+      {
+        "id": "override",
+        "identity": {
+          "volumeIdentifier": "volume",
+          "resourceIdentifier": "cmVzb3VyY2U=",
+          "pathHint": "/managed/item",
+          "creationTime": 1000.0,
+          "generation": 1,
+          "isPersistent": true
+        },
+        "path": "/managed/item",
+        "policy": {
+          "type": "keep",
+          "protectDescendants": true
+        }
+      }
+    ],
+    "managedRoots": [
+      {
+        "id": "root",
+        "path": "/managed",
+        "name": "Managed"
+      }
+    ],
+    "globallyPaused": false,
+    "pausedUntil": null,
+    "revision": 1
+  },
+  "ProjectContext": {
+    "identity": {
+      "volumeIdentifier": "volume",
+      "resourceIdentifier": "cmVzb3VyY2U=",
+      "pathHint": "/managed/item",
+      "creationTime": 1000.0,
+      "generation": 1,
+      "isPersistent": true
+    },
+    "lastActivity": 1000.0
+  },
+  "Explanation": {
+    "item": {
+      "volumeIdentifier": "volume",
+      "resourceIdentifier": "cmVzb3VyY2U=",
+      "pathHint": "/managed/item",
+      "creationTime": 1000.0,
+      "generation": 1,
+      "isPersistent": true
+    },
+    "scheduledAt": 91000.0,
+    "eligibleAt": 87400.0,
+    "rule": {
+      "id": "rule",
+      "name": "Temporary files",
+      "scope": {
+        "path": "/managed",
+        "recursive": true
+      },
+      "matcher": {
+        "itemKind": "file",
+        "exactNames": [],
+        "globPatterns": [
+          "*.tmp"
+        ]
+      },
+      "expiryBasis": "modified",
+      "lifetime": 86400.0,
+      "gracePeriod": 3600.0,
+      "action": "trashItem",
+      "state": "preview",
+      "matchMode": "scoped"
+    },
+    "basis": "modified",
+    "basisDate": 1000.0,
+    "projectContext": {
+      "identity": {
+        "volumeIdentifier": "volume",
+        "resourceIdentifier": "cmVzb3VyY2U=",
+        "pathHint": "/managed/item",
+        "creationTime": 1000.0,
+        "generation": 1,
+        "isPersistent": true
+      },
+      "lastActivity": 1000.0
+    },
+    "itemOverride": null,
+    "suppressionReason": "previewOnly",
+    "disposition": "preview",
+    "globallyPaused": false
+  },
+  "UpcomingItem": {
+    "explanation": {
+      "item": {
+        "volumeIdentifier": "volume",
+        "resourceIdentifier": "cmVzb3VyY2U=",
+        "pathHint": "/managed/item",
+        "creationTime": 1000.0,
+        "generation": 1,
+        "isPersistent": true
+      },
+      "scheduledAt": 91000.0,
+      "eligibleAt": 87400.0,
+      "rule": {
+        "id": "rule",
+        "name": "Temporary files",
+        "scope": {
+          "path": "/managed",
+          "recursive": true
+        },
+        "matcher": {
+          "itemKind": "file",
+          "exactNames": [],
+          "globPatterns": [
+            "*.tmp"
+          ]
+        },
+        "expiryBasis": "modified",
+        "lifetime": 86400.0,
+        "gracePeriod": 3600.0,
+        "action": "trashItem",
+        "state": "preview",
+        "matchMode": "scoped"
+      },
+      "basis": "modified",
+      "basisDate": 1000.0,
+      "projectContext": {
+        "identity": {
+          "volumeIdentifier": "volume",
+          "resourceIdentifier": "cmVzb3VyY2U=",
+          "pathHint": "/managed/item",
+          "creationTime": 1000.0,
+          "generation": 1,
+          "isPersistent": true
+        },
+        "lastActivity": 1000.0
+      },
+      "itemOverride": null,
+      "suppressionReason": "previewOnly",
+      "disposition": "preview",
+      "globallyPaused": false
+    }
+  },
+  "UpcomingCursor": {
+    "scheduledAt": 91000.0,
+    "identityKey": "volume:resource"
+  },
+  "UpcomingPage": {
+    "items": [
+      {
+        "explanation": {
+          "item": {
+            "volumeIdentifier": "volume",
+            "resourceIdentifier": "cmVzb3VyY2U=",
+            "pathHint": "/managed/item",
+            "creationTime": 1000.0,
+            "generation": 1,
+            "isPersistent": true
+          },
+          "scheduledAt": 91000.0,
+          "eligibleAt": 87400.0,
+          "rule": {
+            "id": "rule",
+            "name": "Temporary files",
+            "scope": {
+              "path": "/managed",
+              "recursive": true
+            },
+            "matcher": {
+              "itemKind": "file",
+              "exactNames": [],
+              "globPatterns": [
+                "*.tmp"
+              ]
+            },
+            "expiryBasis": "modified",
+            "lifetime": 86400.0,
+            "gracePeriod": 3600.0,
+            "action": "trashItem",
+            "state": "preview",
+            "matchMode": "scoped"
+          },
+          "basis": "modified",
+          "basisDate": 1000.0,
+          "projectContext": {
+            "identity": {
+              "volumeIdentifier": "volume",
+              "resourceIdentifier": "cmVzb3VyY2U=",
+              "pathHint": "/managed/item",
+              "creationTime": 1000.0,
+              "generation": 1,
+              "isPersistent": true
+            },
+            "lastActivity": 1000.0
+          },
+          "itemOverride": null,
+          "suppressionReason": "previewOnly",
+          "disposition": "preview",
+          "globallyPaused": false
+        }
+      }
+    ],
+    "nextCursor": {
+      "scheduledAt": 91000.0,
+      "identityKey": "volume:resource"
+    },
+    "totalCount": 2
+  },
+  "DeadlineSummary": {
+    "active": 0,
+    "preview": 2,
+    "activeSoon": 0
+  },
+  "RuleStats": {
+    "ruleId": "rule",
+    "matches": 2,
+    "due": 0
+  },
+  "ReclaimedDay": {
+    "day": 0.0,
+    "items": 1,
+    "bytes": 42
+  },
+  "ReclaimedSummary": {
+    "lifetimeItems": 1,
+    "lifetimeBytes": 42,
+    "itemsWithKnownSize": 1,
+    "firstMovedAt": 0.0,
+    "lastMovedAt": 0.0,
+    "days": [
+      {
+        "day": 0.0,
+        "items": 1,
+        "bytes": 42
+      }
+    ],
+    "weekItems": 1,
+    "weekBytes": 42
+  },
+  "Overview": {
+    "policy": {
+      "rules": [
+        {
+          "id": "rule",
+          "name": "Temporary files",
+          "scope": {
+            "path": "/managed",
+            "recursive": true
+          },
+          "matcher": {
+            "itemKind": "file",
+            "exactNames": [],
+            "globPatterns": [
+              "*.tmp"
+            ]
+          },
+          "expiryBasis": "modified",
+          "lifetime": 86400.0,
+          "gracePeriod": 3600.0,
+          "action": "trashItem",
+          "state": "preview",
+          "matchMode": "scoped"
+        }
+      ],
+      "overrides": [
+        {
+          "id": "override",
+          "identity": {
+            "volumeIdentifier": "volume",
+            "resourceIdentifier": "cmVzb3VyY2U=",
+            "pathHint": "/managed/item",
+            "creationTime": 1000.0,
+            "generation": 1,
+            "isPersistent": true
+          },
+          "path": "/managed/item",
+          "policy": {
+            "type": "keep",
+            "protectDescendants": true
+          }
+        }
+      ],
+      "managedRoots": [
+        {
+          "id": "root",
+          "path": "/managed",
+          "name": "Managed"
+        }
+      ],
+      "globallyPaused": false,
+      "pausedUntil": null,
+      "revision": 1
+    },
+    "upcoming": [
+      {
+        "explanation": {
+          "item": {
+            "volumeIdentifier": "volume",
+            "resourceIdentifier": "cmVzb3VyY2U=",
+            "pathHint": "/managed/item",
+            "creationTime": 1000.0,
+            "generation": 1,
+            "isPersistent": true
+          },
+          "scheduledAt": 91000.0,
+          "eligibleAt": 87400.0,
+          "rule": {
+            "id": "rule",
+            "name": "Temporary files",
+            "scope": {
+              "path": "/managed",
+              "recursive": true
+            },
+            "matcher": {
+              "itemKind": "file",
+              "exactNames": [],
+              "globPatterns": [
+                "*.tmp"
+              ]
+            },
+            "expiryBasis": "modified",
+            "lifetime": 86400.0,
+            "gracePeriod": 3600.0,
+            "action": "trashItem",
+            "state": "preview",
+            "matchMode": "scoped"
+          },
+          "basis": "modified",
+          "basisDate": 1000.0,
+          "projectContext": {
+            "identity": {
+              "volumeIdentifier": "volume",
+              "resourceIdentifier": "cmVzb3VyY2U=",
+              "pathHint": "/managed/item",
+              "creationTime": 1000.0,
+              "generation": 1,
+              "isPersistent": true
+            },
+            "lastActivity": 1000.0
+          },
+          "itemOverride": null,
+          "suppressionReason": "previewOnly",
+          "disposition": "preview",
+          "globallyPaused": false
+        }
+      }
+    ],
+    "ruleStats": [
+      {
+        "ruleId": "rule",
+        "matches": 2,
+        "due": 0
+      }
+    ],
+    "indexedItems": 2,
+    "databaseBytes": 4096,
+    "rootStatuses": [
+      {
+        "rootId": "root",
+        "path": "/managed",
+        "state": "watching",
+        "detail": null
+      }
+    ],
+    "reclaimed": {
+      "lifetimeItems": 1,
+      "lifetimeBytes": 42,
+      "itemsWithKnownSize": 1,
+      "firstMovedAt": 0.0,
+      "lastMovedAt": 0.0,
+      "days": [
+        {
+          "day": 0.0,
+          "items": 1,
+          "bytes": 42
+        }
+      ],
+      "weekItems": 1,
+      "weekBytes": 42
+    },
+    "deadlineSummary": {
+      "active": 0,
+      "preview": 2,
+      "activeSoon": 0
+    }
+  },
+  "ActivityItem": {
+    "id": "event",
+    "occurredAt": 1000.0,
+    "kind": "previewSkipped",
+    "identity": {
+      "volumeIdentifier": "volume",
+      "resourceIdentifier": "cmVzb3VyY2U=",
+      "pathHint": "/managed/item",
+      "creationTime": 1000.0,
+      "generation": 1,
+      "isPersistent": true
+    },
+    "ruleId": "rule",
+    "detail": null,
+    "bytes": null,
+    "itemCount": 1,
+    "explanation": {
+      "item": {
+        "volumeIdentifier": "volume",
+        "resourceIdentifier": "cmVzb3VyY2U=",
+        "pathHint": "/managed/item",
+        "creationTime": 1000.0,
+        "generation": 1,
+        "isPersistent": true
+      },
+      "scheduledAt": 91000.0,
+      "eligibleAt": 87400.0,
+      "rule": {
+        "id": "rule",
+        "name": "Temporary files",
+        "scope": {
+          "path": "/managed",
+          "recursive": true
+        },
+        "matcher": {
+          "itemKind": "file",
+          "exactNames": [],
+          "globPatterns": [
+            "*.tmp"
+          ]
+        },
+        "expiryBasis": "modified",
+        "lifetime": 86400.0,
+        "gracePeriod": 3600.0,
+        "action": "trashItem",
+        "state": "preview",
+        "matchMode": "scoped"
+      },
+      "basis": "modified",
+      "basisDate": 1000.0,
+      "projectContext": {
+        "identity": {
+          "volumeIdentifier": "volume",
+          "resourceIdentifier": "cmVzb3VyY2U=",
+          "pathHint": "/managed/item",
+          "creationTime": 1000.0,
+          "generation": 1,
+          "isPersistent": true
+        },
+        "lastActivity": 1000.0
+      },
+      "itemOverride": null,
+      "suppressionReason": "previewOnly",
+      "disposition": "preview",
+      "globallyPaused": false
+    }
+  },
+  "ItemExplanation": {
+    "path": "/managed/item",
+    "explanation": {
+      "item": {
+        "volumeIdentifier": "volume",
+        "resourceIdentifier": "cmVzb3VyY2U=",
+        "pathHint": "/managed/item",
+        "creationTime": 1000.0,
+        "generation": 1,
+        "isPersistent": true
+      },
+      "scheduledAt": 91000.0,
+      "eligibleAt": 87400.0,
+      "rule": {
+        "id": "rule",
+        "name": "Temporary files",
+        "scope": {
+          "path": "/managed",
+          "recursive": true
+        },
+        "matcher": {
+          "itemKind": "file",
+          "exactNames": [],
+          "globPatterns": [
+            "*.tmp"
+          ]
+        },
+        "expiryBasis": "modified",
+        "lifetime": 86400.0,
+        "gracePeriod": 3600.0,
+        "action": "trashItem",
+        "state": "preview",
+        "matchMode": "scoped"
+      },
+      "basis": "modified",
+      "basisDate": 1000.0,
+      "projectContext": {
+        "identity": {
+          "volumeIdentifier": "volume",
+          "resourceIdentifier": "cmVzb3VyY2U=",
+          "pathHint": "/managed/item",
+          "creationTime": 1000.0,
+          "generation": 1,
+          "isPersistent": true
+        },
+        "lastActivity": 1000.0
+      },
+      "itemOverride": null,
+      "suppressionReason": "previewOnly",
+      "disposition": "preview",
+      "globallyPaused": false
+    },
+    "overrides": [
+      {
+        "id": "override",
+        "identity": {
+          "volumeIdentifier": "volume",
+          "resourceIdentifier": "cmVzb3VyY2U=",
+          "pathHint": "/managed/item",
+          "creationTime": 1000.0,
+          "generation": 1,
+          "isPersistent": true
+        },
+        "path": "/managed/item",
+        "policy": {
+          "type": "keep",
+          "protectDescendants": true
+        }
+      }
+    ]
+  },
+  "PreviewSample": {
+    "explanation": {
+      "item": {
+        "volumeIdentifier": "volume",
+        "resourceIdentifier": "cmVzb3VyY2U=",
+        "pathHint": "/managed/item",
+        "creationTime": 1000.0,
+        "generation": 1,
+        "isPersistent": true
+      },
+      "scheduledAt": 91000.0,
+      "eligibleAt": 87400.0,
+      "rule": {
+        "id": "rule",
+        "name": "Temporary files",
+        "scope": {
+          "path": "/managed",
+          "recursive": true
+        },
+        "matcher": {
+          "itemKind": "file",
+          "exactNames": [],
+          "globPatterns": [
+            "*.tmp"
+          ]
+        },
+        "expiryBasis": "modified",
+        "lifetime": 86400.0,
+        "gracePeriod": 3600.0,
+        "action": "trashItem",
+        "state": "preview",
+        "matchMode": "scoped"
+      },
+      "basis": "modified",
+      "basisDate": 1000.0,
+      "projectContext": {
+        "identity": {
+          "volumeIdentifier": "volume",
+          "resourceIdentifier": "cmVzb3VyY2U=",
+          "pathHint": "/managed/item",
+          "creationTime": 1000.0,
+          "generation": 1,
+          "isPersistent": true
+        },
+        "lastActivity": 1000.0
+      },
+      "itemOverride": null,
+      "suppressionReason": "previewOnly",
+      "disposition": "preview",
+      "globallyPaused": false
+    },
+    "bytes": 42
+  },
+  "RulePreview": {
+    "matches": 1,
+    "eligibleNow": 0,
+    "estimatedBytes": 42,
+    "scannedEntries": 2,
+    "truncated": false,
+    "durationSeconds": 0.0,
+    "samples": [
+      {
+        "explanation": {
+          "item": {
+            "volumeIdentifier": "volume",
+            "resourceIdentifier": "cmVzb3VyY2U=",
+            "pathHint": "/managed/item",
+            "creationTime": 1000.0,
+            "generation": 1,
+            "isPersistent": true
+          },
+          "scheduledAt": 91000.0,
+          "eligibleAt": 87400.0,
+          "rule": {
+            "id": "rule",
+            "name": "Temporary files",
+            "scope": {
+              "path": "/managed",
+              "recursive": true
+            },
+            "matcher": {
+              "itemKind": "file",
+              "exactNames": [],
+              "globPatterns": [
+                "*.tmp"
+              ]
+            },
+            "expiryBasis": "modified",
+            "lifetime": 86400.0,
+            "gracePeriod": 3600.0,
+            "action": "trashItem",
+            "state": "preview",
+            "matchMode": "scoped"
+          },
+          "basis": "modified",
+          "basisDate": 1000.0,
+          "projectContext": {
+            "identity": {
+              "volumeIdentifier": "volume",
+              "resourceIdentifier": "cmVzb3VyY2U=",
+              "pathHint": "/managed/item",
+              "creationTime": 1000.0,
+              "generation": 1,
+              "isPersistent": true
+            },
+            "lastActivity": 1000.0
+          },
+          "itemOverride": null,
+          "suppressionReason": "previewOnly",
+          "disposition": "preview",
+          "globallyPaused": false
+        },
+        "bytes": 42
+      }
+    ]
+  },
+  "Health": {
+    "protocolVersion": 1,
+    "serviceVersion": "development"
+  },
+  "ServiceError": {
+    "code": "policyConflict",
+    "message": "Reload policy before applying changes."
+  },
+  "Acknowledgement": {
+    "revision": 2,
+    "auditEventIds": [
+      "event"
+    ]
+  },
+  "requests": [
+    {
+      "operation": "health"
+    },
+    {
+      "operation": "loadPolicy"
+    },
+    {
+      "operation": "loadOverview"
+    },
+    {
+      "operation": "loadSettings"
+    },
+    {
+      "operation": "rebuildIndex"
+    },
+    {
+      "operation": "loadRoots"
+    },
+    {
+      "operation": "cancelPreview"
+    },
+    {
+      "operation": "exportConfig"
+    },
+    {
+      "operation": "quiesceForUpdate",
+      "arguments": {
+        "token": "update-token-0001",
+        "target": "0.2.0",
+        "leaseSeconds": 120
+      }
+    },
+    {
+      "operation": "releaseUpdateQuiesce",
+      "arguments": {
+        "token": "update-token-0001"
+      }
+    },
+    {
+      "operation": "loadUpdateStatus"
+    },
+    {
+      "operation": "loadUpcoming",
+      "arguments": {
+        "ruleId": "rule",
+        "disposition": "preview",
+        "after": {
+          "scheduledAt": 91000.0,
+          "identityKey": "volume:resource"
+        },
+        "limit": 20
+      }
+    },
+    {
+      "operation": "loadActivity",
+      "arguments": {
+        "limit": 20
+      }
+    },
+    {
+      "operation": "explainItem",
+      "arguments": {
+        "path": "/managed/item"
+      }
+    },
+    {
+      "operation": "replacePolicy",
+      "arguments": {
+        "rules": [
+          {
+            "id": "rule",
+            "name": "Temporary files",
+            "scope": {
+              "path": "/managed",
+              "recursive": true
+            },
+            "matcher": {
+              "itemKind": "file",
+              "exactNames": [],
+              "globPatterns": [
+                "*.tmp"
+              ]
+            },
+            "expiryBasis": "modified",
+            "lifetime": 86400.0,
+            "gracePeriod": 3600.0,
+            "action": "trashItem",
+            "state": "preview",
+            "matchMode": "scoped"
+          }
+        ],
+        "overrides": [
+          {
+            "id": "override",
+            "identity": {
+              "volumeIdentifier": "volume",
+              "resourceIdentifier": "cmVzb3VyY2U=",
+              "pathHint": "/managed/item",
+              "creationTime": 1000.0,
+              "generation": 1,
+              "isPersistent": true
+            },
+            "path": "/managed/item",
+            "policy": {
+              "type": "keep",
+              "protectDescendants": true
+            }
+          }
+        ],
+        "managedRoots": [
+          {
+            "id": "root",
+            "path": "/managed",
+            "name": "Managed"
+          }
+        ],
+        "globallyPaused": false,
+        "pausedUntil": null,
+        "revision": 1
+      }
+    },
+    {
+      "operation": "setItemOverride",
+      "arguments": {
+        "path": "/managed/item",
+        "policy": {
+          "type": "keep",
+          "protectDescendants": true
+        }
+      }
+    },
+    {
+      "operation": "clearItemOverride",
+      "arguments": {
+        "path": "/managed/item"
+      }
+    },
+    {
+      "operation": "setItemOverrides",
+      "arguments": {
+        "changes": [
+          {
+            "path": "/managed/item",
+            "policy": {
+              "type": "keep",
+              "protectDescendants": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "operation": "setGlobalPause",
+      "arguments": {
+        "paused": true
+      }
+    },
+    {
+      "operation": "pauseUntil",
+      "arguments": {
+        "until": 2000.0
+      }
+    },
+    {
+      "operation": "updateSettings",
+      "arguments": {
+        "defaultGracePeriodSeconds": 3600.0,
+        "protectHiddenFiles": true,
+        "activityRetentionDays": 30
+      }
+    },
+    {
+      "operation": "itemSize",
+      "arguments": {
+        "path": "/managed/item"
+      }
+    },
+    {
+      "operation": "previewRule",
+      "arguments": {
+        "id": "rule",
+        "name": "Temporary files",
+        "scope": {
+          "path": "/managed",
+          "recursive": true
+        },
+        "matcher": {
+          "itemKind": "file",
+          "exactNames": [],
+          "globPatterns": [
+            "*.tmp"
+          ]
+        },
+        "expiryBasis": "modified",
+        "lifetime": 86400.0,
+        "gracePeriod": 3600.0,
+        "action": "trashItem",
+        "state": "preview",
+        "matchMode": "scoped"
+      }
+    },
+    {
+      "operation": "deleteRule",
+      "arguments": {
+        "id": "rule"
+      }
+    },
+    {
+      "operation": "saveRule",
+      "arguments": {
+        "rule": {
+          "id": "rule",
+          "name": "Temporary files",
+          "scope": {
+            "path": "/managed",
+            "recursive": true
+          },
+          "matcher": {
+            "itemKind": "file",
+            "exactNames": [],
+            "globPatterns": [
+              "*.tmp"
+            ]
+          },
+          "expiryBasis": "modified",
+          "lifetime": 86400.0,
+          "gracePeriod": 3600.0,
+          "action": "trashItem",
+          "state": "preview",
+          "matchMode": "scoped"
+        },
+        "roots": [
+          {
+            "id": "root",
+            "path": "/managed",
+            "name": "Managed"
+          }
+        ],
+        "keepPaths": [],
+        "unkeepPaths": [],
+        "revision": 1
+      }
+    },
+    {
+      "operation": "addRoot",
+      "arguments": {
+        "id": "root",
+        "path": "/managed",
+        "name": "Managed"
+      }
+    },
+    {
+      "operation": "removeRoot",
+      "arguments": {
+        "id": "root"
+      }
+    },
+    {
+      "operation": "importConfig",
+      "arguments": {
+        "text": "version: 1\n",
+        "activate": false,
+        "revision": 1
+      }
+    }
+  ],
+  "responses": [
+    {
+      "type": "health",
+      "data": {
+        "protocolVersion": 1,
+        "serviceVersion": "development"
+      }
+    },
+    {
+      "type": "policy",
+      "data": {
+        "rules": [
+          {
+            "id": "rule",
+            "name": "Temporary files",
+            "scope": {
+              "path": "/managed",
+              "recursive": true
+            },
+            "matcher": {
+              "itemKind": "file",
+              "exactNames": [],
+              "globPatterns": [
+                "*.tmp"
+              ]
+            },
+            "expiryBasis": "modified",
+            "lifetime": 86400.0,
+            "gracePeriod": 3600.0,
+            "action": "trashItem",
+            "state": "preview",
+            "matchMode": "scoped"
+          }
+        ],
+        "overrides": [
+          {
+            "id": "override",
+            "identity": {
+              "volumeIdentifier": "volume",
+              "resourceIdentifier": "cmVzb3VyY2U=",
+              "pathHint": "/managed/item",
+              "creationTime": 1000.0,
+              "generation": 1,
+              "isPersistent": true
+            },
+            "path": "/managed/item",
+            "policy": {
+              "type": "keep",
+              "protectDescendants": true
+            }
+          }
+        ],
+        "managedRoots": [
+          {
+            "id": "root",
+            "path": "/managed",
+            "name": "Managed"
+          }
+        ],
+        "globallyPaused": false,
+        "pausedUntil": null,
+        "revision": 1
+      }
+    },
+    {
+      "type": "overview",
+      "data": {
+        "policy": {
+          "rules": [
+            {
+              "id": "rule",
+              "name": "Temporary files",
+              "scope": {
+                "path": "/managed",
+                "recursive": true
+              },
+              "matcher": {
+                "itemKind": "file",
+                "exactNames": [],
+                "globPatterns": [
+                  "*.tmp"
+                ]
+              },
+              "expiryBasis": "modified",
+              "lifetime": 86400.0,
+              "gracePeriod": 3600.0,
+              "action": "trashItem",
+              "state": "preview",
+              "matchMode": "scoped"
+            }
+          ],
+          "overrides": [
+            {
+              "id": "override",
+              "identity": {
+                "volumeIdentifier": "volume",
+                "resourceIdentifier": "cmVzb3VyY2U=",
+                "pathHint": "/managed/item",
+                "creationTime": 1000.0,
+                "generation": 1,
+                "isPersistent": true
+              },
+              "path": "/managed/item",
+              "policy": {
+                "type": "keep",
+                "protectDescendants": true
+              }
+            }
+          ],
+          "managedRoots": [
+            {
+              "id": "root",
+              "path": "/managed",
+              "name": "Managed"
+            }
+          ],
+          "globallyPaused": false,
+          "pausedUntil": null,
+          "revision": 1
+        },
+        "upcoming": [
+          {
+            "explanation": {
+              "item": {
+                "volumeIdentifier": "volume",
+                "resourceIdentifier": "cmVzb3VyY2U=",
+                "pathHint": "/managed/item",
+                "creationTime": 1000.0,
+                "generation": 1,
+                "isPersistent": true
+              },
+              "scheduledAt": 91000.0,
+              "eligibleAt": 87400.0,
+              "rule": {
+                "id": "rule",
+                "name": "Temporary files",
+                "scope": {
+                  "path": "/managed",
+                  "recursive": true
+                },
+                "matcher": {
+                  "itemKind": "file",
+                  "exactNames": [],
+                  "globPatterns": [
+                    "*.tmp"
+                  ]
+                },
+                "expiryBasis": "modified",
+                "lifetime": 86400.0,
+                "gracePeriod": 3600.0,
+                "action": "trashItem",
+                "state": "preview",
+                "matchMode": "scoped"
+              },
+              "basis": "modified",
+              "basisDate": 1000.0,
+              "projectContext": {
+                "identity": {
+                  "volumeIdentifier": "volume",
+                  "resourceIdentifier": "cmVzb3VyY2U=",
+                  "pathHint": "/managed/item",
+                  "creationTime": 1000.0,
+                  "generation": 1,
+                  "isPersistent": true
+                },
+                "lastActivity": 1000.0
+              },
+              "itemOverride": null,
+              "suppressionReason": "previewOnly",
+              "disposition": "preview",
+              "globallyPaused": false
+            }
+          }
+        ],
+        "ruleStats": [
+          {
+            "ruleId": "rule",
+            "matches": 2,
+            "due": 0
+          }
+        ],
+        "indexedItems": 2,
+        "databaseBytes": 4096,
+        "rootStatuses": [
+          {
+            "rootId": "root",
+            "path": "/managed",
+            "state": "watching",
+            "detail": null
+          }
+        ],
+        "reclaimed": {
+          "lifetimeItems": 1,
+          "lifetimeBytes": 42,
+          "itemsWithKnownSize": 1,
+          "firstMovedAt": 0.0,
+          "lastMovedAt": 0.0,
+          "days": [
+            {
+              "day": 0.0,
+              "items": 1,
+              "bytes": 42
+            }
+          ],
+          "weekItems": 1,
+          "weekBytes": 42
+        },
+        "deadlineSummary": {
+          "active": 0,
+          "preview": 2,
+          "activeSoon": 0
+        }
+      }
+    },
+    {
+      "type": "upcomingPage",
+      "data": {
+        "items": [
+          {
+            "explanation": {
+              "item": {
+                "volumeIdentifier": "volume",
+                "resourceIdentifier": "cmVzb3VyY2U=",
+                "pathHint": "/managed/item",
+                "creationTime": 1000.0,
+                "generation": 1,
+                "isPersistent": true
+              },
+              "scheduledAt": 91000.0,
+              "eligibleAt": 87400.0,
+              "rule": {
+                "id": "rule",
+                "name": "Temporary files",
+                "scope": {
+                  "path": "/managed",
+                  "recursive": true
+                },
+                "matcher": {
+                  "itemKind": "file",
+                  "exactNames": [],
+                  "globPatterns": [
+                    "*.tmp"
+                  ]
+                },
+                "expiryBasis": "modified",
+                "lifetime": 86400.0,
+                "gracePeriod": 3600.0,
+                "action": "trashItem",
+                "state": "preview",
+                "matchMode": "scoped"
+              },
+              "basis": "modified",
+              "basisDate": 1000.0,
+              "projectContext": {
+                "identity": {
+                  "volumeIdentifier": "volume",
+                  "resourceIdentifier": "cmVzb3VyY2U=",
+                  "pathHint": "/managed/item",
+                  "creationTime": 1000.0,
+                  "generation": 1,
+                  "isPersistent": true
+                },
+                "lastActivity": 1000.0
+              },
+              "itemOverride": null,
+              "suppressionReason": "previewOnly",
+              "disposition": "preview",
+              "globallyPaused": false
+            }
+          }
+        ],
+        "nextCursor": {
+          "scheduledAt": 91000.0,
+          "identityKey": "volume:resource"
+        },
+        "totalCount": 2
+      }
+    },
+    {
+      "type": "itemExplanation",
+      "data": {
+        "path": "/managed/item",
+        "explanation": {
+          "item": {
+            "volumeIdentifier": "volume",
+            "resourceIdentifier": "cmVzb3VyY2U=",
+            "pathHint": "/managed/item",
+            "creationTime": 1000.0,
+            "generation": 1,
+            "isPersistent": true
+          },
+          "scheduledAt": 91000.0,
+          "eligibleAt": 87400.0,
+          "rule": {
+            "id": "rule",
+            "name": "Temporary files",
+            "scope": {
+              "path": "/managed",
+              "recursive": true
+            },
+            "matcher": {
+              "itemKind": "file",
+              "exactNames": [],
+              "globPatterns": [
+                "*.tmp"
+              ]
+            },
+            "expiryBasis": "modified",
+            "lifetime": 86400.0,
+            "gracePeriod": 3600.0,
+            "action": "trashItem",
+            "state": "preview",
+            "matchMode": "scoped"
+          },
+          "basis": "modified",
+          "basisDate": 1000.0,
+          "projectContext": {
+            "identity": {
+              "volumeIdentifier": "volume",
+              "resourceIdentifier": "cmVzb3VyY2U=",
+              "pathHint": "/managed/item",
+              "creationTime": 1000.0,
+              "generation": 1,
+              "isPersistent": true
+            },
+            "lastActivity": 1000.0
+          },
+          "itemOverride": null,
+          "suppressionReason": "previewOnly",
+          "disposition": "preview",
+          "globallyPaused": false
+        },
+        "overrides": [
+          {
+            "id": "override",
+            "identity": {
+              "volumeIdentifier": "volume",
+              "resourceIdentifier": "cmVzb3VyY2U=",
+              "pathHint": "/managed/item",
+              "creationTime": 1000.0,
+              "generation": 1,
+              "isPersistent": true
+            },
+            "path": "/managed/item",
+            "policy": {
+              "type": "keep",
+              "protectDescendants": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "settings",
+      "data": {
+        "defaultGracePeriodSeconds": 3600.0,
+        "protectHiddenFiles": true,
+        "activityRetentionDays": 30
+      }
+    },
+    {
+      "type": "rulePreview",
+      "data": {
+        "matches": 1,
+        "eligibleNow": 0,
+        "estimatedBytes": 42,
+        "scannedEntries": 2,
+        "truncated": false,
+        "durationSeconds": 0.0,
+        "samples": [
+          {
+            "explanation": {
+              "item": {
+                "volumeIdentifier": "volume",
+                "resourceIdentifier": "cmVzb3VyY2U=",
+                "pathHint": "/managed/item",
+                "creationTime": 1000.0,
+                "generation": 1,
+                "isPersistent": true
+              },
+              "scheduledAt": 91000.0,
+              "eligibleAt": 87400.0,
+              "rule": {
+                "id": "rule",
+                "name": "Temporary files",
+                "scope": {
+                  "path": "/managed",
+                  "recursive": true
+                },
+                "matcher": {
+                  "itemKind": "file",
+                  "exactNames": [],
+                  "globPatterns": [
+                    "*.tmp"
+                  ]
+                },
+                "expiryBasis": "modified",
+                "lifetime": 86400.0,
+                "gracePeriod": 3600.0,
+                "action": "trashItem",
+                "state": "preview",
+                "matchMode": "scoped"
+              },
+              "basis": "modified",
+              "basisDate": 1000.0,
+              "projectContext": {
+                "identity": {
+                  "volumeIdentifier": "volume",
+                  "resourceIdentifier": "cmVzb3VyY2U=",
+                  "pathHint": "/managed/item",
+                  "creationTime": 1000.0,
+                  "generation": 1,
+                  "isPersistent": true
+                },
+                "lastActivity": 1000.0
+              },
+              "itemOverride": null,
+              "suppressionReason": "previewOnly",
+              "disposition": "preview",
+              "globallyPaused": false
+            },
+            "bytes": 42
+          }
+        ]
+      }
+    },
+    {
+      "type": "acknowledged",
+      "data": {
+        "revision": 2,
+        "auditEventIds": [
+          "event"
+        ]
+      }
+    },
+    {
+      "type": "failure",
+      "data": {
+        "code": "policyConflict",
+        "message": "Reload policy before applying changes."
+      }
+    },
+    {
+      "type": "activity",
+      "data": [
+        {
+          "id": "event",
+          "occurredAt": 1000.0,
+          "kind": "previewSkipped",
+          "identity": {
+            "volumeIdentifier": "volume",
+            "resourceIdentifier": "cmVzb3VyY2U=",
+            "pathHint": "/managed/item",
+            "creationTime": 1000.0,
+            "generation": 1,
+            "isPersistent": true
+          },
+          "ruleId": "rule",
+          "detail": null,
+          "bytes": null,
+          "itemCount": 1,
+          "explanation": {
+            "item": {
+              "volumeIdentifier": "volume",
+              "resourceIdentifier": "cmVzb3VyY2U=",
+              "pathHint": "/managed/item",
+              "creationTime": 1000.0,
+              "generation": 1,
+              "isPersistent": true
+            },
+            "scheduledAt": 91000.0,
+            "eligibleAt": 87400.0,
+            "rule": {
+              "id": "rule",
+              "name": "Temporary files",
+              "scope": {
+                "path": "/managed",
+                "recursive": true
+              },
+              "matcher": {
+                "itemKind": "file",
+                "exactNames": [],
+                "globPatterns": [
+                  "*.tmp"
+                ]
+              },
+              "expiryBasis": "modified",
+              "lifetime": 86400.0,
+              "gracePeriod": 3600.0,
+              "action": "trashItem",
+              "state": "preview",
+              "matchMode": "scoped"
+            },
+            "basis": "modified",
+            "basisDate": 1000.0,
+            "projectContext": {
+              "identity": {
+                "volumeIdentifier": "volume",
+                "resourceIdentifier": "cmVzb3VyY2U=",
+                "pathHint": "/managed/item",
+                "creationTime": 1000.0,
+                "generation": 1,
+                "isPersistent": true
+              },
+              "lastActivity": 1000.0
+            },
+            "itemOverride": null,
+            "suppressionReason": "previewOnly",
+            "disposition": "preview",
+            "globallyPaused": false
+          }
+        }
+      ]
+    },
+    {
+      "type": "roots",
+      "data": [
+        {
+          "id": "root",
+          "path": "/managed",
+          "name": "Managed"
+        }
+      ]
+    },
+    {
+      "type": "itemSize",
+      "data": {
+        "path": "/managed/item",
+        "bytes": 42,
+        "items": 1,
+        "truncated": false
+      }
+    },
+    {
+      "type": "config",
+      "data": {
+        "text": "version: 1\n"
+      }
+    },
+    {
+      "type": "updateStatus",
+      "data": {
+        "phase": "draining",
+        "target": "0.2.0",
+        "trashInFlight": 1,
+        "leaseRemainingSeconds": 59.5
+      }
+    }
+  ],
+  "RequestEnvelope": {
+    "protocolVersion": 1,
+    "request": {
+      "operation": "health"
+    }
+  },
+  "ResponseEnvelope": {
+    "protocolVersion": 1,
+    "response": {
+      "type": "health",
+      "data": {
+        "protocolVersion": 1,
+        "serviceVersion": "development"
+      }
+    }
+  }
+}

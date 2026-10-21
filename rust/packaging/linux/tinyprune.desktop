@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=TinyPrune (development)
+Comment=Unreleased development UI for the TinyPrune background agent
+Exec=@BINDIR@/tinyprune-ui
+Terminal=false
+Categories=Utility;
+StartupNotify=true

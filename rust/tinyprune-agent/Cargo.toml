@@ -1,0 +1,13 @@
+[package]
+name = "tinyprune-agent"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+tinyprune-core = { path = "../tinyprune-core" }
+tinyprune-watch = { path = "../tinyprune-watch" }
+tinyprune-update = { path = "../tinyprune-update", default-features = false }
+
+[target.'cfg(unix)'.dev-dependencies]
+tinyprune-unix = { path = "../tinyprune-unix" }

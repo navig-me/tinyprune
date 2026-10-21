@@ -1,0 +1,22 @@
+[package]
+name = "tinyprune-cli"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Unreleased IPC-only TinyPrune command-line client"
+
+[[bin]]
+name = "tinyprune"
+path = "src/main.rs"
+
+[dependencies]
+tinyprune-ipc = { path = "../tinyprune-ipc" }
+serde = "1"
+serde_json = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+tinyprune-update = { path = "../tinyprune-update" }
+
+[features]
+# Test builds only (Docker end-to-end): lets `update` use a loopback http feed via TINYPRUNE_UPDATE_FEED_URL.
+# Never enabled for release artifacts.
+update-test-overrides = ["tinyprune-update/test-overrides"]

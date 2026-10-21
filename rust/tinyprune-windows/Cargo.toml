@@ -1,0 +1,13 @@
+[package]
+name = "tinyprune-windows"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "In-development Windows filesystem adapter for TinyPrune"
+
+[target.'cfg(windows)'.dependencies]
+tinyprune-core = { path = "../tinyprune-core" }
+# std cannot query 128-bit FileIdInfo or call the Shell's recycle-only COM operation.
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_Registry", "Win32_System_WindowsProgramming", "Win32_UI_Shell"] }
+# Required by windows' COM implementation macro, using the same locked bindings version.
+windows-core = "0.62"

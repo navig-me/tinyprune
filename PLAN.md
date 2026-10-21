@@ -6,6 +6,23 @@ Deliver the deterministic, local-first macOS v1 in `spec.md`: lifecycle rules sc
 
 **Release target:** macOS 14+ (Sonoma) on Apple Silicon and Intel, pending a first compatibility spike for the Finder Sync extension and chosen Sparkle release.
 
+## Cross-platform core (in development)
+
+This is an unreleased engineering effort under [ADR 0010](ADRs/0010-cross-platform-core-and-golden-fixtures.md) and [ADR 0011](ADRs/0011-rust-runtime-store-scan-ipc-daemon-cli-ui.md), not an expansion of the macOS product contract. **No Linux or Windows build is released.** Swift remains the reference implementation and the only shipping macOS implementation; passing core fixtures alone does not establish platform safety or end-to-end parity.
+
+| Status | Work |
+|---|---|
+| Implemented | Rust domain decisions, config codec, synchronous trait-based Trash coordinator, scheduler scan decisions; 577 golden cases across 13 JSONL files |
+| Implemented, CI-tested at the last pushed commit | `tinyprune-unix` (freedesktop Trash), `tinyprune-windows` (Recycle Bin/IFileOperation), `tinyprune-agent` synchronous engine |
+| Implemented, tested only on the development Mac | `tinyprune-store` (SQLite, bundled), `tinyprune-scan` (bounded traversal, read-only Preview; 35,761 entries/s measured there), `tinyprune-ipc` (length-prefixed JSON; Unix socket and Windows named pipe), `tinyprune-daemon` (`tinyprune-agentd`), `tinyprune-cli` (`tinyprune`), Tauri UI in the separate `rust/ui` workspace (9 Node frontend tests) |
+| Implemented, never executed natively | Linux inotify watcher, Windows `ReadDirectoryChangesW` watcher, Windows named pipes, all store/scan/ipc/daemon/CLI behavior on Linux and Windows, UI on Linux and Windows |
+| Configured, not yet run on GitHub | `ci.yml` end-to-end smoke of the real agent and CLI (`rust/tests-e2e`), non-gating 100k-entry benchmark, `rust-ui` job (frontend tests, Tauri check on Linux); `rust-artifacts.yml` unsigned development archives (`rust/packaging`) |
+| Not started | Installers/releases, accessibility audit, native acceptance on Linux/Windows, performance measurement on those systems |
+
+The Rust daemon is still a development runtime: macOS has no native watcher so it falls back to a periodic reconcile, and config import/export is POSIX-only. Item identity is restart-stable only on volumes with a durable id (macOS volume UUID, Linux filesystem UUID, Windows volume serial) plus inode/file ID and creation time; tmpfs, overlayfs, FUSE, network filesystems without a UUID, filesystems without creation time and cloned volumes are re-observed after restart. That logic is tested on the development Mac only; the Linux path was never executed and Windows was only compile-checked. Index enumeration and per-tick event/execution work are bounded, but full snapshot decision evaluation and retained metadata grow with root size. The core's additive `platform_hidden` flag and explicit Windows `PathFlavor` have Rust-only tests with no Swift counterpart; default `Posix` behavior leaves all 577 shared golden cases unchanged. POSIX rename and Windows Shell cannot atomically condition a move on identity; see the adapter READMEs before treating either as a production executor.
+
+Keep platform I/O outside `tinyprune-core`; every adapter must preserve the product safety invariants (Trash only, metadata only, Keep wins, store schedules but never authorizes, Preview never trashes). The `rust-core` CI job runs workspace tests and Clippy on Ubuntu/Windows/macOS, but configured CI is not native acceptance evidence. The `rust/ui` workspace is outside that job and is covered by a separate Linux `rust-ui` job (frontend tests and a Tauri compile check). The macOS delivery plan below remains unchanged. See [rust/README.md](rust/README.md#status-matrix) and [AGENTS.md](AGENTS.md#rust-core-and-shared-golden-fixtures) for the full matrix and verification contract.
+
 ## Principles and non-negotiable invariants
 
 1. The database schedules work; it never authorizes a Trash operation. Re-evaluate identity, permissions, current rule resolution, protection, pause state, deadline, and volume availability immediately before every move.

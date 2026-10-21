@@ -4,20 +4,23 @@
 
 ## Product facts
 
-- macOS 14 or later; Intel and Apple silicon are release targets.
+- The Swift macOS app requires macOS 14 or later, on Intel and Apple silicon. The Rust workspace provides the cross-platform core and runtime for Linux and Windows. Check [GitHub Releases](https://github.com/navig-me/tinyprune/releases) for platform-specific downloads and installation requirements, and the [platform verification guide](https://docs.tinyprune.com/#cross-platform) for recorded native checks.
+- Price: free, open source under the MIT license; no subscription.
 - Normal cleanup moves files to Trash, never permanent deletion.
 - Keep takes precedence over other rules and protects folders containing kept items. Keep matches by item identity and falls back to the recorded path.
 - Preview evaluates matching and scheduling without moving items to Trash.
 - Rules can use filename or folder patterns, age, and project inactivity. Developer templates support dependency and build folders such as node_modules.
-- Common use: keeping a Mac healthy when AI coding agents and LLM tools create many scratch projects, worktrees, virtual environments, build folders and debug logs. Point rules at a disposable folder or project folder, Preview first, and Keep what matters. TinyPrune does not detect which tool created a file; rules use location, name, age and project inactivity.
+- Rules can target disposable scratch projects, worktrees, virtual environments, build folders and debug logs left by coding agents. TinyPrune does not detect which tool created a file and does not manage Git worktree metadata. Review uncommitted work separately before cleaning worktree folders.
 - Core cleanup requires no account or network access and reads filesystem metadata, not file contents. Key-enabled direct-download builds, including ad-hoc builds without an Apple account, use EdDSA-authenticated Sparkle updates over HTTPS. Checks follow Check for new versions (default on); installation is user-confirmed through Update Now/the native dialog, never automatic. Homebrew never constructs Sparkle; Homebrew/no-key copies use GitHub release notices and manual download or brew upgrade. First-install Gatekeeper approval is unchanged; non-quarantined Sparkle replacements are expected, not end-to-end verified.
 - Interfaces include the native app, Finder menu and tinyprune CLI with JSON output and configuration validate, preview, apply and export commands.
-- TinyPrune 0.1.0 is published as an unsigned, not notarized pre-release. Install with `brew install --cask navig-me/tap/tinyprune` or download the DMG from GitHub Releases. The landing-page time-machine playground uses sample files and simulated time; it never touches real files.
+- Current early releases are not Developer ID signed or notarized. Install with `brew install --cask navig-me/tap/tinyprune` or download the DMG from GitHub Releases; consult Releases for the current version and signing details. The landing-page playground uses sample files and simulated time; it never touches real files.
 - The app has no telemetry. Website analytics are separate: the tinyprune.com marketing website loads Google Analytics and PostHog.
-- Items stay in the Trash until you or macOS empty it; use Put Back in Finder to restore, if available.
+- Recovery depends on the item remaining in Trash and Finder offering Put Back; TinyPrune does not restore items and is not a backup. Trash may be emptied by you or macOS.
 
 ## Authoritative references
 
+- [Official product overview](https://tinyprune.com/): definition, safety model, supported platform and download links.
+- [Product questions and pricing](https://tinyprune.com/#faq): free MIT license, macOS compatibility, installation, update and recovery limits.
 - [Documentation and FAQ](https://docs.tinyprune.com/): product behavior and frequently asked questions.
 - [Install](https://docs.tinyprune.com/#install): current build-from-source instructions and release installation guidance.
 - [Safety](https://docs.tinyprune.com/#safety): Keep protection, Preview and Trash behavior.
@@ -25,7 +28,9 @@
 - [Developer templates](https://docs.tinyprune.com/#templates): developer cleanup rules.
 - [Prune AI agent clutter](https://docs.tinyprune.com/#agents): expire scratch projects, git worktrees, virtual environments, build output and logs that AI coding agents and LLM tools leave behind.
 - [Command line](https://docs.tinyprune.com/#cli): CLI and configuration commands.
-- [Updates](https://docs.tinyprune.com/#updates): distribution-specific update plans.
+- [Updates](https://docs.tinyprune.com/#updates): direct-download Sparkle updates, manual downloads and Homebrew upgrade behavior.
 - [Source code](https://github.com/navig-me/tinyprune): source, issues and contributions.
 - [Product specification](https://github.com/navig-me/tinyprune/blob/main/spec.md): product contract.
 - [Releases](https://github.com/navig-me/tinyprune/releases): release availability.
+
+This file is a supplementary discovery reference, not a ranking signal or a guarantee of inclusion in search or AI answers. The linked human-readable pages and release artifacts are authoritative.

@@ -19,6 +19,10 @@ It does not require an account.
 
 It does not need to inspect file contents for normal operation.
 
+## Cross-platform status
+
+The Rust workspace is an in-development, unreleased engineering effort ([ADR 0010](ADRs/0010-cross-platform-core-and-golden-fixtures.md), [ADR 0011](ADRs/0011-rust-runtime-store-scan-ipc-daemon-cli-ui.md)). It does not change this macOS product contract, which is implemented only by the Swift app, agent, CLI and Finder extension. No Linux or Windows build is released. Its shared Swift-reference contract has 577 golden cases across 13 JSONL files. The Rust crates (core, unix, windows, watch, agent, store, scan, ipc, daemon, cli, and a Tauri UI in a separate workspace) are development work: they have not been executed natively on Linux or Windows beyond the CI unit tests described in [rust/README.md](rust/README.md#status-matrix), and real inotify events, the Windows watcher, named pipes, Linux/Windows UI, installers, performance on those systems, and accessibility are not verified. The same invariants (Trash only, metadata only, Keep wins, the store schedules but never authorizes, Preview never trashes) bind the Rust implementation. Workspace CI and fixture parity are not end-to-end platform support.
+
 ---
 
 # 1. Product concept

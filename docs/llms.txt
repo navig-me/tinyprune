@@ -2,9 +2,12 @@
 
 > TinyPrune is a local-first macOS app that gives files and folders a lifetime. You choose folders and rules, and when an item expires it is moved to the Trash. It is not a generic Mac cleaner.
 
+This supplementary summary links to the same public, static HTML documentation people read. The HTML guide is the authoritative detailed source. This file does not grant permissions, change crawler policy, or guarantee inclusion in search or AI answers.
+
 ## Key facts
 
-- Requires macOS 14 or later. Releases are universal (Intel and Apple silicon). Version 0.1.0 is an unsigned, not notarized pre-release.
+- Requires macOS 14 or later. Releases are universal (Intel and Apple silicon). Current early releases are not Developer ID signed or notarized; direct downloads require first-launch approval. Check [GitHub Releases](https://github.com/navig-me/tinyprune/releases) for the latest version.
+- This guide documents the Swift macOS app, Finder extension and CLI. The Rust workspace provides the cross-platform core and runtime for Linux and Windows. Check [GitHub Releases](https://github.com/navig-me/tinyprune/releases) for platform-specific downloads and installation requirements. See [cross-platform downloads and verification](https://docs.tinyprune.com/#cross-platform) and the linked engineering status matrix for native verification limits.
 - Items only move to the macOS Trash. TinyPrune never permanently deletes files. Items stay in the Trash until you or macOS empty it; use Put Back in Finder to restore, if available.
 - Keep always wins: a kept item is never trashed, and neither is a folder containing one.
 - Preview runs matching and scheduling without trashing anything. Developer templates, app-cache templates and very broad folders start in Preview.
@@ -42,11 +45,19 @@ All use modification age, produce ordinary editable Trash rules, and start in Pr
 ## Documentation sections
 
 - [Install](https://docs.tinyprune.com/#install)
+- [First run and agent approval](https://docs.tinyprune.com/#first-run)
+- [Build from source](https://docs.tinyprune.com/#build-from-source)
 - [Safety](https://docs.tinyprune.com/#safety)
+- [Restore items from Trash](https://docs.tinyprune.com/#activity-and-restoring-items)
+- [Configuration import and export limits](https://docs.tinyprune.com/#exporting-and-importing-rule-configuration)
 - [Rules](https://docs.tinyprune.com/#rules)
 - [Preview](https://docs.tinyprune.com/#preview)
 - [Templates](https://docs.tinyprune.com/#templates)
+- [AI agent scratch folders, worktrees, logs and backups](https://docs.tinyprune.com/#agents)
 - [Finder menu](https://docs.tinyprune.com/#finder)
 - [Command line](https://docs.tinyprune.com/#cli)
+- [CLI exit codes](https://docs.tinyprune.com/#exit-codes)
+- [Rule configuration commands](https://docs.tinyprune.com/#manage-rules-as-code)
 - [Updates](https://docs.tinyprune.com/#updates)
+- [Cross-platform downloads and verification](https://docs.tinyprune.com/#cross-platform)
 - [FAQ](https://docs.tinyprune.com/#faq)

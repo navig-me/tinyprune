@@ -1,3 +1,6 @@
+# Public pages remain available to all crawlers.
+# Search discovery, user-triggered retrieval and model training are distinct uses;
+# this site's existing allow-all policy applies to all of them.
 User-agent: *
 Allow: /
 

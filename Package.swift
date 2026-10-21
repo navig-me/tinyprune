@@ -49,6 +49,7 @@ let package = Package(
         .testTarget(name: "TinyPruneEngineTests", dependencies: ["TinyPruneEngine", "TinyPruneDomain"]),
         .executableTarget(name: "TinyPruneEngineCheck", dependencies: ["TinyPruneEngine", "TinyPruneDomain", "TinyPrunePersistence", "TinyPruneAgentCore", "TinyPruneIPC"]),
         .testTarget(name: "TinyPruneDomainTests", dependencies: ["TinyPruneDomain"]),
+        .testTarget(name: "TinyPruneGoldenTests", dependencies: ["TinyPruneDomain", "TinyPrunePersistence", "TinyPruneEngine", "TinyPruneIPC"]),
         .testTarget(name: "TinyPruneIPCTests", dependencies: ["TinyPruneIPC"]),
     ]
 )

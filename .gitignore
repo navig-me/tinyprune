@@ -1,4 +1,5 @@
 .build/
+rust/target/
 .DS_Store
 .cloudflare/
 .wrangler/

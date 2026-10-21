@@ -1,3 +1,6 @@
+# Search and user-triggered retrieval are allowed by the wildcard group.
+# The explicit groups below preserve the existing allow-training policy;
+# search discovery and model-training controls are separate decisions.
 User-agent: *
 Allow: /
 

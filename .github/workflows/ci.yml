@@ -38,7 +38,7 @@ jobs:
           native=true
           if [[ -n "$base" && "$base" != 0000000000000000000000000000000000000000 ]] \
              && files="$(git diff --name-only "$base" "$GITHUB_SHA" 2>/dev/null)" && [[ -n "$files" ]]; then
-            if ! grep -qvE '^(website/|docs/|[^/]+\.md$|\.github/workflows/(deploy-pages|publish-update-feed|homebrew)\.yml$)' <<<"$files"; then
+            if ! grep -qvE '^(website/|docs/|rust/|[^/]+\.md$|\.github/workflows/(deploy-pages|publish-update-feed|homebrew)\.yml$)' <<<"$files"; then
               native=false
             fi
           fi
@@ -59,6 +59,80 @@ jobs:
           node-version: 22.14.0
       - name: Validate static site
         run: npm --prefix ${{ matrix.site }} run check
+
+  # The Rust core must reproduce the Swift reference exactly on every platform it will ship for (ADR 0010).
+  rust-core:
+    name: Rust core golden fixtures (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, windows-2022, macos-14]
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - name: Install pinned Rust toolchain
+        shell: bash
+        run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal --component clippy
+      - name: Golden fixtures
+        run: cargo test --locked --no-fail-fast
+      - name: Lint
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Build release binaries (agent and CLI)
+        run: cargo build --release --locked -p tinyprune-daemon -p tinyprune-cli
+      # Real tinyprune-agentd + tinyprune against a temp fixture with isolated data/socket/Trash dirs.
+      - name: End-to-end smoke (Unix)
+        if: runner.os != 'Windows'
+        env:
+          SMOKE_SKIP_BUILD: "1"
+        run: bash tests-e2e/smoke.sh
+      - name: End-to-end smoke (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          SMOKE_SKIP_BUILD: "1"
+        run: ./tests-e2e/smoke.ps1
+      # 100k-entry benchmark against the real agent. Numbers are reported, not gated: thresholds are only compared
+      # with the Swift PhaseTwoBenchmarkTests bounds in the table, and a benchmark failure never fails CI.
+      - name: Benchmark (non-gating; table goes to the job summary)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        shell: bash
+        run: |
+          export TINYPRUNE_BENCH_OUT="$GITHUB_STEP_SUMMARY"
+          cargo test --release --locked -p tinyprune-daemon --test bench -- --ignored --nocapture
+      - name: SQLite durability and index microbenchmark (non-gating)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        shell: bash
+        run: |
+          export TINYPRUNE_BENCH_OUT="$GITHUB_STEP_SUMMARY"
+          cargo test --release --locked -p tinyprune-store --test bench -- --ignored --nocapture
+          cargo test --release --locked -p tinyprune-store --lib bench_put_decisions_checkpoint_and_readers -- --ignored --nocapture
+
+  # Frontend tests plus a Tauri 2 compile check of the in-development desktop shell (rust/ui is its own workspace).
+  rust-ui:
+    name: Rust UI (frontend tests, Tauri check)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 22.14.0
+      - name: Frontend tests
+        run: node --test rust/ui/frontend/tests/frontend.test.js
+      # Package list from https://v2.tauri.app/start/prerequisites/#linux (Debian/Ubuntu).
+      - name: Install Tauri 2 Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust/rust-toolchain.toml)" --profile minimal
+      - name: Check Tauri shell
+        run: cargo check --locked --manifest-path rust/ui/Cargo.toml
 
   native:
     name: Native acceptance (${{ matrix.runner }})

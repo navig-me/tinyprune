@@ -47,15 +47,8 @@ document.querySelectorAll('pre').forEach(pre => {
   pre.append(button);
   enableCopy(button, () => code.textContent, 'Copied', 'Copy');
 });
-// Existing section IDs remain canonical. Subheadings gain stable, readable deep links.
+// Heading IDs live in HTML so copied links also work without JavaScript.
 document.querySelectorAll('article h2, article h3').forEach(heading => {
-  if (!heading.id) {
-    const base = heading.tagName === 'H2' ? `${heading.closest('section').id}-title` : heading.textContent.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-    let id = base;
-    let suffix = 2;
-    while (document.getElementById(id)) id = `${base}-${suffix++}`;
-    heading.id = id;
-  }
   const link = document.createElement('a');
   link.className = 'heading-anchor';
   link.href = `#${heading.id}`;
@@ -70,7 +63,6 @@ const searchRows = rows.map(row => ({row, text: row.textContent.toLowerCase()}))
 const filter = document.createElement('div');
 filter.className = 'template-filter';
 filter.innerHTML = '<label for="template-search">Filter templates</label><input id="template-search" type="search" autocomplete="off" aria-controls="template-table" aria-describedby="template-count"><p class="filter-count" id="template-count" role="status" aria-live="polite" aria-atomic="true"></p>';
-tableRegion.id = 'template-table';
 tableRegion.before(filter);
 const empty = document.createElement('p');
 empty.className = 'template-empty';

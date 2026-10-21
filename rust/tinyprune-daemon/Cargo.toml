@@ -1,0 +1,27 @@
+[package]
+name = "tinyprune-daemon"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "tinyprune-agentd"
+path = "src/main.rs"
+
+[dependencies]
+tinyprune-core = { path = "../tinyprune-core" }
+tinyprune-agent = { path = "../tinyprune-agent" }
+tinyprune-store = { path = "../tinyprune-store" }
+tinyprune-scan = { path = "../tinyprune-scan" }
+tinyprune-watch = { path = "../tinyprune-watch" }
+tinyprune-ipc = { path = "../tinyprune-ipc" }
+# Interlock only: no HTTP/TLS in the agent (its unit allows AF_UNIX only).
+tinyprune-update = { path = "../tinyprune-update", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ctrlc = "3.5"
+
+[target.'cfg(unix)'.dependencies]
+tinyprune-unix = { path = "../tinyprune-unix" }
+
+[target.'cfg(windows)'.dependencies]
+tinyprune-windows = { path = "../tinyprune-windows" }
