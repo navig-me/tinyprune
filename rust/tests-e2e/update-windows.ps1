@@ -222,7 +222,7 @@ fn main() {
     # Phase 2: the scenario, as the current user, against the real Scheduled Task
     # ---------------------------------------------------------------------------------------------
     $shim = Join-Path $data 'bin\tinyprune.cmd'
-    function Cli { # native output as one string; exit code in $script:rc (and $global:rc)
+    function Tp { # native output as one string; exit code in $script:rc (and $global:rc); `cli` is a Clear-Item alias
         $out = & $shim @args 2>&1 | Out-String
         $global:rc = $LASTEXITCODE
         $script:rc = $global:rc
@@ -230,7 +230,7 @@ fn main() {
     }
     function Upd($scenario) {
         $env:TINYPRUNE_UPDATE_FEED_URL = "$BASE/$scenario/rust-update-feed.json"
-        try { return (Cli update @args) } finally { Remove-Item Env:TINYPRUNE_UPDATE_FEED_URL -ErrorAction SilentlyContinue }
+        try { return (Tp update @args) } finally { Remove-Item Env:TINYPRUNE_UPDATE_FEED_URL -ErrorAction SilentlyContinue }
     }
     function Cur { [IO.File]::ReadAllText((Join-Path $data 'current')).Trim() }
     function AgentProcs { @(Get-CimInstance Win32_Process -Filter "Name='tinyprune-agentd.exe'") }
@@ -257,7 +257,7 @@ fn main() {
     WaitFor 90 'old agent answers' { Healthy }
     if ((Cur) -notmatch '^0\.1\.0.*-b1$') { Fail "unexpected current: $(Cur)" }
     WaitFor 30 'old agent runs from the old version dir via the launcher' { RunsFrom '0.1.0*-b1' }
-    $status = (Cli update status --json) | ConvertFrom-Json
+    $status = (Tp update status --json) | ConvertFrom-Json
     if ($status.installedBuild -ne 1) { Fail 'old build is not build 1' }
     if ($status.updatesEnabled -ne $true) { Fail "managed old build has updates disabled: $($status.disabledReason)" }
     if ($status.managedInstall -ne $true) { Fail 'CLI does not consider itself managed' }
@@ -273,7 +273,7 @@ fn main() {
     Set-Content (Join-Path $root 'old.txt') 'old'
     $longAgo = [datetime]'2020-01-01T00:00:00'
     foreach ($f in 'keep.txt', 'old.txt') { (Get-Item (Join-Path $root $f)).LastWriteTime = $longAgo }
-    Cli roots add e2e-root $root E2E | Out-Null
+    Tp roots add e2e-root $root E2E | Out-Null
     if ($script:rc -ne 0) { Fail 'roots add' }
     $ruleJson = @{
         id = $rule; name = 'Update e2e'
@@ -283,13 +283,13 @@ fn main() {
     } | ConvertTo-Json -Depth 5
     $ruleFile = Join-Path $work 'rule.json'
     [IO.File]::WriteAllText($ruleFile, $ruleJson, $utf8)
-    Cli rules add $ruleFile | Out-Null
+    Tp rules add $ruleFile | Out-Null
     if ($script:rc -ne 0) { Fail 'rules add' }
-    Cli keep (Join-Path $root 'keep.txt') | Out-Null
+    Tp keep (Join-Path $root 'keep.txt') | Out-Null
     if ($script:rc -ne 0) { Fail 'keep' }
     Start-Sleep -Seconds 3
     if (-not ((Test-Path (Join-Path $root 'old.txt')) -and (Test-Path (Join-Path $root 'keep.txt')))) { Fail 'Preview must not trash' }
-    if ((Cli explain (Join-Path $root 'keep.txt')) -notmatch '(?i)keep') { Fail 'Keep not recorded before the update' }
+    if ((Tp explain (Join-Path $root 'keep.txt')) -notmatch '(?i)keep') { Fail 'Keep not recorded before the update' }
     Ok 'root, Preview rule and Keep recorded'
 
     # --- the feed server (tinyprune-feed test-serve: loopback only, test-overrides build) ---
@@ -308,10 +308,10 @@ fn main() {
     $out = Upd good install --confirm 00000000000000000000000000000000 --json
     if ($script:rc -ne 65) { Fail "wrong confirmation exit $($script:rc): $out" }
     if ((Cur) -notmatch '-b1$') { Fail 'wrong confirmation changed current' }
-    Cli update settings --check-for-new-versions off | Out-Null
+    Tp update settings --check-for-new-versions off | Out-Null
     $out = Upd good check --auto --json
     if (($out | ConvertFrom-Json).reason -ne 'disabled') { Fail "--auto ignored checkForNewVersions=off: $out" }
-    Cli update settings --check-for-new-versions on | Out-Null
+    Tp update settings --check-for-new-versions on | Out-Null
     Ok 'check is read-only; install needs the exact confirmation token; the setting gates --auto'
 
     # --- tampering is rejected and changes nothing ---
@@ -342,16 +342,16 @@ fn main() {
     if (Get-Process -Id $pidBefore -ErrorAction SilentlyContinue) { Fail 'the old agent process is still alive' }
     WaitFor 60 'new agent answers' { Healthy }
     if ((Get-ScheduledTask -TaskName $TaskName).State -ne 'Running') { Fail 'the Scheduled Task is not running after the update' }
-    $status = (Cli update status --json) | ConvertFrom-Json
+    $status = (Tp update status --json) | ConvertFrom-Json
     if ($status.installedBuild -ne 2 -or $status.installedVersion -ne '0.2.0') { Fail 'CLI is not 0.2.0 build 2 after the update' }
     Ok 'updated 0.1.0 build 1 -> 0.2.0 build 2; the task restarted the agent from versions\0.2.0-b2 via the launcher; previous kept'
 
     # --- state survived: Keep still wins, the Preview rule activates, pruning resumes ---
-    if ((Cli explain (Join-Path $root 'keep.txt')) -notmatch '(?i)keep') { Fail 'Keep lost across the update' }
-    if ((Cli rules list) -notmatch [regex]::Escape($rule)) { Fail 'rule lost across the update' }
-    $rootsText = (Cli roots list).Replace('\', '/')
+    if ((Tp explain (Join-Path $root 'keep.txt')) -notmatch '(?i)keep') { Fail 'Keep lost across the update' }
+    if ((Tp rules list) -notmatch [regex]::Escape($rule)) { Fail 'rule lost across the update' }
+    $rootsText = (Tp roots list).Replace('\', '/')
     if ($rootsText -notmatch [regex]::Escape($root.Replace('\', '/').TrimStart('/'))) { Fail "root lost across the update: $rootsText" }
-    Cli rules activate $rule | Out-Null
+    Tp rules activate $rule | Out-Null
     if ($script:rc -ne 0) { Fail 'rules activate' }
     WaitFor 60 'expired file trashed by the NEW agent' { -not (Test-Path (Join-Path $root 'old.txt')) }
     Start-Sleep -Seconds 2
@@ -367,14 +367,14 @@ fn main() {
     WaitFor 90 'control file trashed (agent prunes new due files)' { -not (Test-Path $control) }
     $controlSeconds = [math]::Ceiling(((Get-Date) - $t0).TotalSeconds)
     $hold = [math]::Max(10, 3 * $controlSeconds)
-    $q = (Cli update test-quiesce --token e2e-hold --seconds 120 --json) | ConvertFrom-Json
+    $q = (Tp update test-quiesce --token e2e-hold --seconds 120 --json) | ConvertFrom-Json
     if ($script:rc -ne 0 -or $q.phase -ne 'Quiesced') { Fail "agent did not quiesce: $($q | ConvertTo-Json -Compress)" }
     $held = Join-Path $root 'held.txt'
     Set-Content $held 'held'
     (Get-Item $held).LastWriteTime = $longAgo
     Start-Sleep -Seconds $hold
     if (-not (Test-Path $held)) { Fail "a due file was trashed while the agent was quiesced (waited ${hold}s; unblocked control took ${controlSeconds}s)" }
-    $r = (Cli update test-release --token e2e-hold --json) | ConvertFrom-Json
+    $r = (Tp update test-release --token e2e-hold --json) | ConvertFrom-Json
     if ($script:rc -ne 0 -or $r.phase -ne 'Idle') { Fail "release: $($r | ConvertTo-Json -Compress)" }
     WaitFor 90 'held file trashed after the lease was released' { -not (Test-Path $held) }
     Ok "Trash blocked for ${hold}s while quiesced (unblocked control: ${controlSeconds}s), resumed after release"
@@ -396,7 +396,7 @@ fn main() {
     if (Test-Path (Join-Path $data 'versions\0.3.0-b3')) { Fail 'failed build directory left behind' }
     $stages = @(DirNames (Join-Path $data 'versions') | Where-Object { $_ -like '.stage*' })
     if ($stages.Count -ne 0) { Fail "staging leftovers: $($stages -join ', ')" }
-    if (((Cli update status --json) | ConvertFrom-Json).installedBuild -ne 2) { Fail 'installed build after rollback' }
+    if (((Tp update status --json) | ConvertFrom-Json).installedBuild -ne 2) { Fail 'installed build after rollback' }
     Ok 'bad build rolled back automatically; the build 2 agent runs again'
 
     # --- a build whose `--version` fails is refused before anything is touched ---
