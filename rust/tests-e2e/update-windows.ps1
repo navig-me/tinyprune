@@ -75,9 +75,9 @@ function WaitFor($seconds, $what, [scriptblock]$test) {
     $end = (Get-Date).AddSeconds($seconds)
     while ($true) {
         $ok = $false
-        try { $ok = [bool](& $test) } catch { $ok = $false }
+        try { $ok = [bool](& $test) } catch { $ok = $false; $lastError = "$_" }
         if ($ok) { return }
-        if ((Get-Date) -gt $end) { Fail "timeout (${seconds}s) waiting for: $what" }
+        if ((Get-Date) -gt $end) { Fail "timeout (${seconds}s) waiting for: $what (last error: $lastError)" }
         Start-Sleep -Milliseconds 250
     }
 }
@@ -222,9 +222,10 @@ fn main() {
     # Phase 2: the scenario, as the current user, against the real Scheduled Task
     # ---------------------------------------------------------------------------------------------
     $shim = Join-Path $data 'bin\tinyprune.cmd'
-    function Cli { # native stdout as one string; exit code in $script:rc
-        $out = (& $shim @args 2>$null | Out-String)
-        $script:rc = $LASTEXITCODE
+    function Cli { # native output as one string; exit code in $script:rc (and $global:rc)
+        $out = & $shim @args 2>&1 | Out-String
+        $global:rc = $LASTEXITCODE
+        $script:rc = $global:rc
         return $out.Trim()
     }
     function Upd($scenario) {
@@ -233,7 +234,10 @@ fn main() {
     }
     function Cur { [IO.File]::ReadAllText((Join-Path $data 'current')).Trim() }
     function AgentProcs { @(Get-CimInstance Win32_Process -Filter "Name='tinyprune-agentd.exe'") }
-    function Healthy { Cli status | Out-Null; $script:rc -eq 0 }
+    function Healthy {
+        $null = & $shim status 2>&1
+        return ($LASTEXITCODE -eq 0)
+    }
     function DirNames($path) { @(Get-ChildItem -LiteralPath $path -Force -ErrorAction SilentlyContinue | ForEach-Object Name | Sort-Object) }
     function RunsFrom($version) {
         # Exactly one agent, started by the launcher, whose image is in this version directory.
