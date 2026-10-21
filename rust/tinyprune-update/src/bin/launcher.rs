@@ -19,6 +19,7 @@ const PROGRAMS: [&str; 3] = ["tinyprune-agentd", "tinyprune", "tinyprune-ui"];
 
 fn fail(message: String) -> ! {
     eprintln!("tinyprune-launcher: {message}");
+    trace::line(&message);
     exit(1);
 }
 
@@ -39,6 +40,10 @@ fn main() {
         fail(format!("refusing to launch {program:?}"));
     }
     let layout = Layout::from_environment().unwrap_or_else(|e| fail(e.to_string()));
+    #[cfg(windows)]
+    if program != "tinyprune" {
+        trace::init(&layout.root);
+    }
     let fs = StdFs::native();
     let mut attempt = 0;
     let name = loop {
@@ -68,6 +73,7 @@ fn main() {
     #[cfg(windows)]
     {
         let background = program != "tinyprune";
+        trace::line(&format!("starting {}", target.display()));
         let job = background.then(background::prepare);
         if background {
             use std::os::windows::process::CommandExt;
@@ -83,17 +89,75 @@ fn main() {
             Ok(child) => child,
             Err(error) => fail(format!("cannot start {}: {error}", target.display())),
         };
+        trace::line(&format!("spawned {program} pid {}", child.id()));
         if let Some(job) = &job {
             if let Err(error) = background::adopt(job, &child) {
                 let _ = child.kill();
                 fail(format!("cannot place the program in its job: {error}"));
             }
         }
-        match child.wait() {
-            Ok(status) => exit(status.code().unwrap_or(1)),
+        let waited = child.wait();
+        match waited {
+            Ok(status) => {
+                trace::line(&format!("{program} exited with {status}"));
+                exit(status.code().unwrap_or(1))
+            }
             Err(error) => fail(format!("cannot wait for {}: {error}", target.display())),
         }
     }
+}
+
+/// `<root>/logs/launcher.log`: the launcher has no console or stdio when it runs a background program under
+/// the Scheduled Task, so this is the only record of why an agent did not start or when it exited.
+/// Best effort and bounded (truncated at 256 KiB); only background programs (not the CLI) write to it.
+#[cfg(windows)]
+mod trace {
+    use std::io::Write;
+    use std::path::{Path, PathBuf};
+    use std::sync::OnceLock;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    // Set once at runtime: the path depends on the resolved data root.
+    static LOG: OnceLock<PathBuf> = OnceLock::new();
+    const MAX_BYTES: u64 = 256 * 1024;
+
+    pub fn init(root: &Path) {
+        let dir = root.join("logs");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("launcher.log");
+        if std::fs::metadata(&path).is_ok_and(|m| m.len() > MAX_BYTES) {
+            let _ = std::fs::remove_file(&path);
+        }
+        let _ = LOG.set(path);
+    }
+
+    pub fn line(message: &str) {
+        let Some(path) = LOG.get() else { return };
+        let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        else {
+            return;
+        };
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default();
+        let day = now.as_secs() % 86_400;
+        let _ = writeln!(
+            file,
+            "{:02}:{:02}:{:02}.{:03} utc launcher pid {}: {message}",
+            day / 3600,
+            day % 3600 / 60,
+            day % 60,
+            now.subsec_millis(),
+            std::process::id()
+        );
+    }
+}
+#[cfg(not(windows))]
+mod trace {
+    pub fn line(_: &str) {}
 }
 
 #[cfg(windows)]

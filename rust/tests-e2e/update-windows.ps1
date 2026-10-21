@@ -54,10 +54,16 @@ function Dump {
         }
         $state = Join-Path $data 'update\state.json'
         if (Test-Path -LiteralPath $state) { Write-Host '--- update state'; Get-Content -LiteralPath $state }
+        if ($script:procLog -and (Test-Path -LiteralPath $script:procLog)) {
+            Write-Host '--- tinyprune process timeline'; Get-Content -LiteralPath $script:procLog -Tail 120
+        }
     }
 }
+$script:procLog = $null
+$script:poller = $null
 function Cleanup {
     if ($script:server -and -not $script:server.HasExited) { Stop-Process -Id $script:server.Id -Force -ErrorAction SilentlyContinue }
+    if ($script:poller) { Stop-Job $script:poller -ErrorAction SilentlyContinue; Remove-Job $script:poller -Force -ErrorAction SilentlyContinue }
     if ($script:oldPkg -and (Test-Path -LiteralPath (Join-Path $script:oldPkg 'uninstall-managed.ps1'))) {
         $uninstall = Join-Path $script:oldPkg 'uninstall-managed.ps1'
         try { & $uninstall -Purge | Out-Null } catch { Write-Host "cleanup uninstall: $_" }
@@ -253,6 +259,22 @@ fn main() {
     Expand-Archive -LiteralPath (Join-Path $pkgDir 'v1\pkg.zip') -DestinationPath $old
     $script:oldPkg = (Get-ChildItem $old -Directory | Select-Object -First 1).FullName
     # The hosted runner user is an administrator; -AllowElevated still registers a Limited-token task.
+    # Timestamped timeline of every tinyprune process (pid <- parent), for diagnosing restarts on failure.
+    $script:procLog = Join-Path $work 'procs.log'
+    $script:poller = Start-Job -ArgumentList $script:procLog -ScriptBlock {
+        param($log)
+        $last = ''
+        while ($true) {
+            $lines = @(Get-CimInstance Win32_Process -Filter "Name like 'tinyprune%'" -ErrorAction SilentlyContinue |
+                Sort-Object ProcessId | ForEach-Object { "  $($_.ProcessId)<-$($_.ParentProcessId) $($_.Name) $($_.ExecutablePath)" })
+            $text = $lines -join "`n"
+            if ($text -ne $last) {
+                Add-Content -LiteralPath $log -Value ("[{0} utc]`n{1}" -f [DateTime]::UtcNow.ToString('HH:mm:ss.fff'), $text)
+                $last = $text
+            }
+            Start-Sleep -Milliseconds 100
+        }
+    }
     & (Join-Path $script:oldPkg 'install-managed.ps1') -AllowElevated -Start
     WaitFor 90 'old agent answers' { Healthy }
     if ((Cur) -notmatch '^0\.1\.0.*-b1$') { Fail "unexpected current: $(Cur)" }
