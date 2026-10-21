@@ -45,6 +45,29 @@ fn scope_matching_and_keep_use_windows_flavor() {
     assert!(matcher.matches_with_flavor("file.txt", "sub/file.txt", ItemKind::File, f));
 }
 
+#[test]
+fn windows_matcher_cache_does_not_invalidate_an_unchanged_snapshot() {
+    use tinyprune_core::scheduler::{ScanPolicy, SnapshotIndex};
+    let original = rule(r"C:\Data", PathFlavor::Windows);
+    let rules = [original];
+    let settings = settings();
+    let policy = ScanPolicy { root: "C:/Data", rules: &rules, overrides: &[], settings: &settings };
+    let snapshot = SnapshotIndex::build(vec![item("C:/Data/Report.TXT")], &policy);
+    // A real Windows scan warms the lazy matcher. The store reconstructs a cold
+    // matcher on every policy read; neither operation changes policy semantics.
+    assert!(rules[0].matcher.matches_with_flavor(
+        "Report.TXT", "Report.TXT", ItemKind::File, PathFlavor::Windows
+    ));
+    assert!(snapshot.matches(&policy), "warming a derived cache changed the policy fingerprint");
+    let fresh = [rule(r"C:\Data", PathFlavor::Windows)];
+    let reloaded = ScanPolicy { root: "C:/Data", rules: &fresh, overrides: &[], settings: &settings };
+    assert!(snapshot.matches(&reloaded), "reloaded cold matcher invalidated the warm snapshot");
+    let mut changed = fresh;
+    changed[0].lifetime = RuleDuration(2.0);
+    let modified = ScanPolicy { root: "C:/Data", rules: &changed, overrides: &[], settings: &settings };
+    assert!(!snapshot.matches(&modified), "a real policy change must still invalidate the snapshot");
+}
+
 struct Resolver;
 impl PathResolver for Resolver {
     fn canonical_path(&self, path: &str) -> String { if path == "C:/alias" { r"C:\Windows\System32".into() } else { path.into() } }

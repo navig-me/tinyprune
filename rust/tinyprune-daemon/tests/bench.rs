@@ -156,22 +156,6 @@ fn cpu_seconds(pid: u32) -> Option<f64> {
     }
 }
 
-/// Waits until the agent used under 50 ms of CPU in each of three consecutive 500 ms intervals (at most 120 s).
-/// Without a CPU source it waits a fixed 8 s.
-fn wait_until_idle(pid: u32) {
-    let Some(mut last) = cpu_seconds(pid) else {
-        std::thread::sleep(Duration::from_secs(8));
-        return;
-    };
-    let deadline = Instant::now() + Duration::from_secs(120);
-    let mut quiet = 0;
-    while quiet < 3 && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(500));
-        let Some(now) = cpu_seconds(pid) else { return };
-        quiet = if now - last < 0.05 { quiet + 1 } else { 0 };
-        last = now;
-    }
-}
 
 fn epoch_ms() -> f64 {
     SystemTime::now()
@@ -201,6 +185,26 @@ fn read_phases(path: &Path) -> Vec<PhaseRecord> {
             })
         })
         .collect()
+}
+
+fn decision_byte_table(path: &Path, title: &str) -> String {
+    let mut totals = [0u64; 4];
+    for line in fs::read_to_string(path).unwrap_or_default().lines() {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        // Each successful transaction repeats these counters on begin/sql/commit; count SQL once.
+        if value["phase"] != "store.decisions.sql" {
+            continue;
+        }
+        for (total, field) in totals.iter_mut().zip(["items", "changed_rows", "payload_bytes", "audit_bytes"]) {
+            *total += value[field].as_u64().unwrap_or(0);
+        }
+    }
+    let [input, changed, payload, audit] = totals;
+    let bytes_per_row = |bytes| if changed == 0 { 0.0 } else { bytes as f64 / changed as f64 };
+    format!(
+        "### {title}\n\n| Input rows | Changed rows | Full payload bytes | Audit bytes | Full bytes/changed row | Audit bytes/changed row |\n|---:|---:|---:|---:|---:|---:|\n| {input} | {changed} | {payload} | {audit} | {:.3} | {:.3} |\n\n",
+        bytes_per_row(payload), bytes_per_row(audit)
+    )
 }
 
 /// Per-phase totals in order of first appearance; `origin_ms` is the wall-clock zero of the "ended at" column.
@@ -558,7 +562,6 @@ fn bench_100k_index_memory_latency_ipc() {
     let restart_ready_secs = restart.elapsed().as_secs_f64();
     // A low CPU sample can mean an outstanding Windows fsync, not a settled startup job.
     let settle_start = Instant::now();
-    wait_until_idle(agent.pid());
     let phase2_path = base.join("phases-2.jsonl");
     let settled = wait_for_decision_settle(&phase2_path);
     assert!(
@@ -645,7 +648,7 @@ fn bench_100k_index_memory_latency_ipc() {
     milestones += "\nPhases: enumerate = filesystem metadata traversal; publish = candidate rows to SQLite; record = change fingerprints; evaluate = agent snapshot merge + hydration + rule evaluation (scheduler scan) up to the deadline write; deadlines = deadline rows to SQLite; explain = per-item hydration + resolution + explanation; decisions_store = decision rows to SQLite.\n";
     let phase2_records = read_phases(&phase2_path);
     let phase_report = format!(
-        "{}{}{}",
+        "{}{}{}{}{}",
         phase_table(
             "Rust daemon phase timing, first index of the rule (phase 1; passes after the first mean repeated full evaluations)",
             &read_phases(&base.join("phases-3600.jsonl")),
@@ -656,7 +659,9 @@ fn bench_100k_index_memory_latency_ipc() {
             &phase2_records,
             phase2_epoch_ms
         ),
-        event_phase_table(&phase2_records, event_epoch_ms, event_observed_epoch_ms)
+        event_phase_table(&phase2_records, event_epoch_ms, event_observed_epoch_ms),
+        decision_byte_table(&base.join("phases-3600.jsonl"), "Decision payload sizes, initial publication"),
+        decision_byte_table(&phase2_path, "Decision payload sizes, restart and event")
     );
     println!("\n{table}\n{milestones}\n{phase_report}");
     if let Some(path) = std::env::var_os("TINYPRUNE_BENCH_OUT") {

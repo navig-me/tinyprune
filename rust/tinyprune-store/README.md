@@ -78,6 +78,10 @@ Local release measurements (100k synthetic rows, all secondary indexes, 25 commi
 
 The synthetic full explanation averages 1,107.889 bytes/row; compact audit averages 340.889 bytes/row instead of another 1,107.889 bytes. These are fixture sizes, not a claim about every real explanation. COMMIT includes SQLite auto-checkpoint work and does not isolate a kernel `fsync` syscall. NORMAL/OFF did not uniformly improve these local runs; no production durability setting or decision page size was changed based on them.
 
+Windows Server 2022 diagnostic run 39535868984 (`a65a430`) isolated the runtime bottleneck as COMMIT/checkpoint, not SQL: 100,101 decision rows in 25 batches took 8.80 s in the SQL phase and 188.63 s in COMMIT (longest 13.98 s), 197.43 s total. The raw synthetic FULL/WAL/indexed control took SQL 1.265 s + COMMIT 14.038 s with duplicated audit, versus SQL 1.100 s + COMMIT 9.301 s with compact audit. FULL/default-delete/indexed controls were 2.410 s + 8.796 s (duplicate) and 2.462 s + 9.524 s (compact); NORMAL/WAL/indexed was 1.218 s + 13.860 s (duplicate) and 1.219 s + 10.760 s (compact). OFF/WAL/indexed COMMIT was 0.785 s (duplicate) and 0.916 s (compact). The runtime-to-raw gap is not explained by these controls; no antivirus/storage-driver or individual fsync attribution is claimed.
+
+The additional ignored `cargo test --release --locked -p tinyprune-store --lib bench_put_decisions_checkpoint_and_readers -- --ignored --nocapture` exercises the real Store schema/API after preloading 100k candidates and deadlines. It compares default 1,000-frame autocheckpoint with and without IPC-like upcoming reads, then 0 and 10,000-frame controls with readers. Durability stays FULL/WAL throughout. Deterministically shuffled schedule keys exercise index writes unlike the raw matrix's constant deadline. Each case reports total `put_decisions` time, final checkpoint time and WAL bytes; final TRUNCATE happens only after readers stop. These are isolated benchmark controls, not production configuration changes.
+
 ## Verification
 
 From `rust/`:

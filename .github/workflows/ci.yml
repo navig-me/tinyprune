@@ -110,6 +110,7 @@ jobs:
         run: |
           export TINYPRUNE_BENCH_OUT="$GITHUB_STEP_SUMMARY"
           cargo test --release --locked -p tinyprune-store --test bench -- --ignored --nocapture
+          cargo test --release --locked -p tinyprune-store --lib bench_put_decisions_checkpoint_and_readers -- --ignored --nocapture
 
   # Frontend tests plus a Tauri 2 compile check of the in-development desktop shell (rust/ui is its own workspace).
   rust-ui:

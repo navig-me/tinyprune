@@ -57,6 +57,106 @@ fn candidate(n: u8) -> RuleCandidate {
         },
     )
 }
+
+#[test]
+#[ignore = "100k production Store API checkpoint/read-traffic diagnostic"]
+fn bench_put_decisions_checkpoint_and_readers() {
+    use std::io::Write as _;
+    use std::sync::atomic::AtomicBool;
+    use std::time::{Duration, Instant};
+    const ROWS: usize = 100_000;
+    let dir = std::env::temp_dir().join(format!(
+        "tinyprune-store-api-{}-{}", std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let candidates: Vec<_> = (0..ROWS).map(|n| {
+        let mut item = candidate(0);
+        item.identity.resource = (n as u128).to_be_bytes().to_vec();
+        item.identity.path_hint = format!("/root/group-{:04}/item-{n:06}.dat", n / 1000);
+        item
+    }).collect();
+    let deadlines: Vec<_> = candidates.iter().enumerate().map(|(n, item)| TrashRequest {
+        candidate_identity: item.identity.clone(),
+        source: ScheduledSource::Rule(Uuid(2)),
+        scheduled_at: 2_000_000.0 + ((n * 7919) % ROWS) as f64,
+    }).collect();
+    let values: Vec<_> = deadlines.iter().map(|deadline| serde_json::json!({
+        "item": {
+            "volumeIdentifier": deadline.candidate_identity.volume.to_string(),
+            "resourceIdentifier": hex(&deadline.candidate_identity.resource),
+            "pathHint": deadline.candidate_identity.path_hint,
+            "creationTime": 0.0, "generation": 1, "isPersistent": true
+        },
+        "scheduledAt": deadline.scheduled_at, "rule": {"id": Uuid(2).to_string()},
+        "basis": "modified", "diagnosticContext": "x".repeat(768)
+    })).collect();
+    let rule_id = Uuid(2).to_string();
+    let mut report = String::from("\n### Production Store 100k decision checkpoint/read-traffic controls\n\nReal Store schema/API with preloaded candidates and deadlines, FULL/WAL throughout. Twenty-five 4096-row pages, deterministic shuffled schedule keys. Preparation excluded; reader requests reproduce upcoming COUNT + one-row reads every 10 ms. Autocheckpoint changes are isolated benchmark controls, not production settings. Final TRUNCATE checkpoint runs after readers stop and is timed separately.\n\n| Auto-checkpoint frames | IPC-like readers | read requests | put_decisions total ms | final checkpoint ms | WAL bytes before checkpoint | checkpoint busy |\n|---:|---|---:|---:|---:|---:|---:|\n");
+    print!("{report}");
+    struct StopReader<'a>(&'a AtomicBool);
+    impl Drop for StopReader<'_> {
+        fn drop(&mut self) { self.0.store(true, Ordering::Release); }
+    }
+    for (frames, readers) in [(1000, false), (1000, true), (0, true), (10_000, true)] {
+        let path = dir.join(format!("case-{frames}-{readers}.sqlite"));
+        let put_ms;
+        let checkpoint_ms;
+        let wal_bytes;
+        let checkpoint_busy;
+        let requests = AtomicUsize::new(0);
+        {
+            let mut store = Store::open(&path).unwrap();
+            store.replace_roots(&["/root".into()], 0.0).unwrap();
+            store.publish_candidate_subtree("/root", &candidates, 0.0).unwrap();
+            AgentStore::replace_deadlines(&mut store, "/root", &deadlines).unwrap();
+            {
+                let c = store.lock().unwrap();
+                c.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)").unwrap();
+                c.pragma_update(None, "wal_autocheckpoint", frames).unwrap();
+            }
+            let stop = AtomicBool::new(false);
+            let reader = store.clone();
+            put_ms = std::thread::scope(|scope| {
+                let _stop_reader = StopReader(&stop);
+                if readers {
+                    scope.spawn(|| {
+                        while !stop.load(Ordering::Acquire) {
+                            reader.decision_page(None, None, None, NonZeroUsize::new(1).unwrap()).unwrap();
+                            requests.fetch_add(1, Ordering::Relaxed);
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                    });
+                }
+                let started = Instant::now();
+                for (page, batch) in deadlines.chunks(4096).enumerate() {
+                    let offset = page * 4096;
+                    let rows: Vec<_> = batch.iter().enumerate().map(|(n, deadline)| DecisionRow {
+                        identity: &deadline.candidate_identity, scheduled_at: Some(deadline.scheduled_at),
+                        rule_id: Some(&rule_id), preview: false, explanation: &values[offset + n],
+                    }).collect();
+                    store.put_decisions(1.0, &rows).unwrap();
+                }
+                started.elapsed().as_secs_f64() * 1000.0
+            });
+            wal_bytes = std::fs::metadata(path.with_extension("sqlite-wal")).map_or(0, |m| m.len());
+            let started = Instant::now();
+            checkpoint_busy = store.lock().unwrap().query_row(
+                "PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get::<_, i64>(0)
+            ).unwrap();
+            checkpoint_ms = started.elapsed().as_secs_f64() * 1000.0;
+        }
+        let row = format!("| {frames} | {readers} | {} | {put_ms:.3} | {checkpoint_ms:.3} | {wal_bytes} | {checkpoint_busy} |\n", requests.load(Ordering::Relaxed));
+        print!("{row}");
+        report.push_str(&row);
+        std::fs::remove_file(path).unwrap();
+    }
+    if let Some(path) = std::env::var_os("TINYPRUNE_BENCH_OUT") {
+        std::fs::OpenOptions::new().create(true).append(true).open(path).unwrap()
+            .write_all(report.as_bytes()).unwrap();
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
 #[test]
 fn windows_subtree_publication_and_removal_use_lexical_flavor() {
     for (root, native, alias) in [

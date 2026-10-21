@@ -301,7 +301,17 @@ fn policy_print(policy: &ScanPolicy<'_>) -> u64 {
         fn write_str(&mut self, text: &str) -> std::fmt::Result { self.0.write(text.as_bytes()); Ok(()) }
     }
     let mut hasher = Sip(std::collections::hash_map::DefaultHasher::new());
-    let _ = write!(hasher, "{:?}|{:?}|{:?}|{}", policy.rules, policy.overrides, policy.settings, policy.root);
+    // Hash semantic inputs only. ItemMatcher's Debug also includes its lazy Windows glob cache:
+    // evaluating a rule warms that cache, while decoding the same stored policy constructs a cold
+    // cache. Including it made an unchanged Windows policy invalidate every incremental snapshot.
+    for rule in policy.rules {
+        let _ = write!(hasher, "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?};",
+            rule.id, rule.name, rule.scope, rule.matcher.item_kind,
+            rule.matcher.exact_names, rule.matcher.glob_patterns,
+            rule.expiry_basis, rule.lifetime, rule.grace_period, rule.action,
+            rule.state, rule.match_mode);
+    }
+    let _ = write!(hasher, "|{:?}|{:?}|{}", policy.overrides, policy.settings, policy.root);
     hasher.0.finish()
 }
 
