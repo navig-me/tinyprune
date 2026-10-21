@@ -643,15 +643,35 @@ fn changed_candidates_get_decisions_without_a_full_pass_and_trashed_ones_leave_n
         other => panic!("{other:?}"),
     };
     assert_eq!(total(service), 1);
+    let expected = match service.handle(Request::LoadUpcoming {
+        rule_id: None,
+        disposition: None,
+        after: None,
+        limit: 10,
+    }) {
+        Response::UpcomingPage(mut page) => page.items.remove(0).explanation.item,
+        other => panic!("{other:?}"),
+    };
     let history = match service.handle(Request::LoadActivity { limit: 1000 }) {
         Response::Activity(items) => items,
         other => panic!("{other:?}"),
     };
     let expected_rule = fixture.rule().id;
     assert!(history.iter().any(|item| {
-        item.identity.as_ref().is_some_and(|identity| codec::flavor().equal(&identity.path_hint, &a))
+        item.identity.as_ref().is_some_and(|identity| {
+            identity.volume_identifier == expected.volume_identifier
+                && identity.resource_identifier == expected.resource_identifier
+                && identity.creation_time == expected.creation_time
+                && identity.generation == expected.generation
+        })
             && item.rule_id.as_deref() == Some(expected_rule.as_str())
-    }), "compact scheduling activity lost its identity or rule");
+    }), "compact scheduling activity lost identity/rule; fields (identity, path, rule, expected rule): {:?}",
+        history.iter().map(|item| (
+            item.identity.is_some(),
+            item.identity.as_ref().is_some_and(|identity| codec::flavor().equal(&identity.path_hint, &a)),
+            item.rule_id.is_some(),
+            item.rule_id.as_deref() == Some(expected_rule.as_str()),
+        )).collect::<Vec<_>>());
     fs::write(fixture.item("b.tmp"), b"y").unwrap();
     acknowledged(service.handle(Request::RebuildIndex));
     settle(&daemon);

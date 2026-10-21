@@ -97,12 +97,14 @@ jobs:
       # 100k-entry benchmark against the real agent. Numbers are reported, not gated: thresholds are only compared
       # with the Swift PhaseTwoBenchmarkTests bounds in the table, and a benchmark failure never fails CI.
       - name: Benchmark (non-gating; table goes to the job summary)
+        if: ${{ !cancelled() }}
         continue-on-error: true
         shell: bash
         run: |
           export TINYPRUNE_BENCH_OUT="$GITHUB_STEP_SUMMARY"
           cargo test --release --locked -p tinyprune-daemon --test bench -- --ignored --nocapture
       - name: SQLite durability and index microbenchmark (non-gating)
+        if: ${{ !cancelled() }}
         continue-on-error: true
         shell: bash
         run: |
