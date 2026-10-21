@@ -199,6 +199,7 @@ impl Daemon {
             match self.tick() {
                 // More bounded work is queued: continue immediately, but let a waiting mutation in first.
                 Ok(report) if report.pending_work => {
+                    self.service.checkpoint_between_pages();
                     while self.service.has_waiters() && !shutdown.load(Ordering::Acquire) {
                         std::thread::sleep(Duration::from_millis(1));
                     }

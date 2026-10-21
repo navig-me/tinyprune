@@ -246,19 +246,26 @@ impl Service {
         report.pending_work |= pending;
         Ok(report)
     }
-    /// One WAL maintenance step, run by the daemon's maintenance thread (never inside a write
-    /// transaction and never holding the writer mutex: checkpoints use the store's own connection).
-    /// Autocheckpoint is off on the writer, so while scans/decisions are queued the WAL is only
-    /// backfilled once it exceeds the default limit (checkpoint cost grows with the number of
-    /// distinct pages in the log, not commits); when idle it is fully backfilled and truncated.
-    /// Best effort: a failed or incomplete checkpoint only leaves the WAL larger until the next step.
+    /// Called by the engine thread between ticks while work is queued, with no engine/decision lock
+    /// held and no write transaction of ours open: a PASSIVE checkpoint that starts here can reach the
+    /// end of the log, which lets SQLite restart the WAL from the beginning. A checkpoint that races a
+    /// continuously committing writer never reaches the end, so the WAL would only grow (measured in the
+    /// store README). Autocheckpoint is off on the writer, so this is the only checkpoint while work is
+    /// queued, and it runs only once the log passes the default limit (cost grows with the distinct pages
+    /// in the log, not with commits). Best effort: a failed or incomplete checkpoint only leaves the WAL
+    /// larger until the next turn.
+    pub(crate) fn checkpoint_between_pages(&self) {
+        let _ = self
+            .store
+            .checkpoint_if_needed(tinyprune_store::DEFAULT_WAL_CHECKPOINT_BYTES);
+    }
+    /// One idle WAL maintenance step, run by the daemon's maintenance thread: when no scan or decision
+    /// work is queued, backfill the whole WAL and truncate it. Uses the store's own checkpoint
+    /// connection, never the writer mutex; a concurrent writer or reader just makes it a no-op.
     pub(crate) fn maintain_wal(&self) {
-        let _ = if self.shared.pace.busy() {
-            self.store
-                .checkpoint_if_needed(tinyprune_store::DEFAULT_WAL_CHECKPOINT_BYTES)
-        } else {
-            self.store.checkpoint_idle()
-        };
+        if !self.shared.pace.busy() {
+            let _ = self.store.checkpoint_idle();
+        }
     }
     pub(crate) fn stop(&self) -> std::io::Result<()> {
         self.stopped.store(true, Ordering::Release);
