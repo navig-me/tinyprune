@@ -144,10 +144,13 @@ jobs:
     env:
       TINYPRUNE_BIN_DIR: ${{ github.workspace }}\rust\target\release
       TINYPRUNE_UI_APP: ${{ github.workspace }}\rust\ui\target\release\tinyprune-ui.exe
-      TINYPRUNE_UI_AXE: ${{ runner.temp }}\a11y\node_modules\axe-core\axe.min.js
-      TINYPRUNE_UI_OUT: ${{ runner.temp }}\ui-out
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - name: Paths under the runner temp directory
+        shell: pwsh
+        run: |
+          "TINYPRUNE_UI_AXE=$env:RUNNER_TEMP\a11y\node_modules\axe-core\axe.min.js" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "TINYPRUNE_UI_OUT=$env:RUNNER_TEMP\ui-out" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: 22.14.0
