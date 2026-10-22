@@ -4,6 +4,15 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>TinyPrune</title>
         <item>
+            <title>0.2.3</title>
+            <pubDate>Thu, 22 Oct 2026 07:22:09 +0000</pubDate>
+            <sparkle:version>26</sparkle:version>
+            <sparkle:shortVersionString>0.2.3</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:releaseNotesLink sparkle:edSignature="bMyRGW5NUMS8kI9zvPLkVU7l/16u9cLKdd4MAX23vry3ojaRONgYmtaGTY61WQGMROJp2M/ATl0zdgRoAc+IDw==" sparkle:length="3586">https://tinyprune.com/updates/0.2.3.html</sparkle:releaseNotesLink>
+            <enclosure url="https://github.com/navig-me/tinyprune/releases/download/v0.2.3/TinyPrune-0.2.3.dmg" length="12233404" type="application/octet-stream" sparkle:edSignature="Hi3015grF4fhx6FtjEuJA4kAnx0zhT4zD5lENPpU9yojVO9lFqFgAC5K+QAX4NhHeQXjss7/JyiUUoV7wnYxDA=="></enclosure>
+        </item>
+        <item>
             <title>0.2.2</title>
             <pubDate>Thu, 22 Oct 2026 04:33:08 +0000</pubDate>
             <sparkle:version>25</sparkle:version>
@@ -131,6 +140,6 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
         </item>
     </channel>
 </rss><!-- sparkle-signatures:
-edSignature: oW7Tl6BhVCh4v7UvU3aiSD7KARnOtsWQs0mHcxsPOTj+rbQYLNnGrlN3T9FgFD5RLWNNRn9cCp9ryFzrx2gKDQ==
-length: 12432
+edSignature: AdpAZ4vXfErVMl/DF/xyst5hiCgCLVQok1vy+gRkNUWCFH+HZsT2NTT/ENjtuSotGFS0hCuYbkb+/A14/1/kCg==
+length: 13287
 -->
