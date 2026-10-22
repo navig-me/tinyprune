@@ -1,0 +1,19 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>TinyPrune 0.2.2</title><style>body{font:14px -apple-system,BlinkMacSystemFont,sans-serif;line-height:1.5;margin:20px}pre{font:inherit;white-space:pre-wrap;overflow-wrap:anywhere}</style><body><h2>TinyPrune 0.2.2</h2><p>Choose Install Update to download, verify and install this release. TinyPrune will relaunch when it finishes. Your rules and settings are kept.</p><pre>## What&#x27;s changed
+
+- Fix the app crashing on launch after a Homebrew upgrade. Re-registering the background agent trapped in `SMAppSystemServices.restartAgent()`: the `unregister` completion handler inherited `@MainActor` isolation inside a `@MainActor` class, and ServiceManagement calls it on an XPC queue, so Swift&#x27;s isolation assertion aborted the app (`_dispatch_assert_queue_fail`). The handler is now `@Sendable`. The 0.2.1 change made this path run for an agent removed by the cask, which exposed the crash; 0.2.0 crashed in the same call after an upgrade.
+- Verified by launching a local build on a Mac in the failing state: the app stayed running, re-registered the agent, and the agent answered `status`. No automated test reproduces the trap; it needs a real ServiceManagement reply.
+- macOS-only patch. The Linux and Windows Rust developer preview stays at 0.2.0 (build 29); its crates carry the 0.2.2 version number but were not rebuilt or republished.
+
+## Install and trust
+
+This preview is ad-hoc signed, NOT Developer ID signed, and NOT notarized. Download only from this repository and verify the SHA-256 checksum.
+
+On macOS 15 Sequoia and macOS 26 Tahoe: copy TinyPrune.app into /Applications, try opening it once, dismiss the Gatekeeper alert, then open System Settings &gt; Privacy &amp; Security &gt; Open Anyway. Confirm Open and authenticate if prompted. Control-click Open is not a substitute on these macOS versions.
+
+If you deliberately trust this preview and Open Anyway is unavailable, run exactly:
+
+    xattr -dr com.apple.quarantine /Applications/TinyPrune.app
+
+Then open /Applications/TinyPrune.app again. This removes quarantine, not proof of safety; it does not notarize the app. Finder extension and launch-at-login may need separate approval in System Settings &gt; General &gt; Login Items &amp; Extensions. Direct builds with a configured update public key support EdDSA-authenticated in-app updates; without that key, download updates manually. Homebrew updates only through the cask. EdDSA authentication is not Apple trust or notarization. Preview signing does not guarantee Finder extension or login-item activation on every Mac.
+
+</pre></body></html>
