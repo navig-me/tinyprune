@@ -6,7 +6,7 @@
 
 TinyPrune is a free, MIT-licensed macOS app for automatic file cleanup with expiry rules. Choose folders, preview which downloads, screenshots or developer artifacts will expire, and protect important items with Keep. Eligible items move to **macOS Trash**, never permanent deletion.
 
-**macOS 14+ on Intel and Apple silicon.** macOS is the only supported product; the latest published macOS release is **0.1.13**. **0.2.0 is prepared, not published**, including a Linux/Windows developer preview with no downloads available yet. See the [release log](https://github.com/navig-me/tinyprune/blob/main/RELEASES.md#020) and [cross-platform status](#cross-platform-core).
+**macOS 14+ on Intel and Apple silicon.** macOS is the only supported product; the latest published macOS release is **[0.2.0](https://github.com/navig-me/tinyprune/releases/tag/v0.2.0)**. Unsigned Linux x86_64 and Windows x86_64 **[0.2.0 developer-preview downloads](https://github.com/navig-me/tinyprune/releases/tag/rust-preview-0.2.0)** are also available, not supported general-desktop releases. See the [release log](https://github.com/navig-me/tinyprune/blob/main/RELEASES.md#020) and [cross-platform status](#cross-platform-core).
 
 <p align="center"><a href="https://tinyprune.com"><picture><source media="(prefers-color-scheme: dark)" srcset="website/assets/screens/preview-dark.png"><img src="website/assets/screens/preview-light.png" alt="TinyPrune Preview showing which files match a rule, when they expire and why" width="900"></picture></a></p>
 
@@ -40,6 +40,8 @@ Requires macOS 14 or later (Intel and Apple silicon).
 ```sh
 brew install --cask navig-me/tap/tinyprune
 ```
+
+**Homebrew currently installs 0.1.11.** Its automated 0.2.0 tap update was skipped because the release token was unavailable; the [manual tap update](https://github.com/navig-me/homebrew-tap/pull/1) is awaiting merge. For 0.2.0 now, use the [direct macOS download](https://github.com/navig-me/tinyprune/releases/tag/v0.2.0).
 
 Early releases are **unsigned, not notarized pre-releases**. The Homebrew cask clears quarantine for you. If you download the DMG directly, copy `TinyPrune.app` to Applications, try opening it once, then allow it under System Settings → Privacy & Security → **Open Anyway**. Homebrew installs update only with `brew upgrade --cask tinyprune`.
 
@@ -85,11 +87,11 @@ Tests: see [AGENTS.md](AGENTS.md#running-tests). Architecture and release proces
 
 ## Cross-platform core
 
-**0.2.0 is prepared, not published.** The Swift macOS app remains the only supported product. The Linux x86_64 and Windows x86_64 Rust runtime is a developer preview being prepared for 0.2.0, not an available download or a supported-platform release. No production Rust update feed exists.
+**[0.2.0 developer-preview downloads](https://github.com/navig-me/tinyprune/releases/tag/rust-preview-0.2.0) are available for Linux x86_64 and Windows x86_64.** The unsigned Rust archives are not supported general-desktop releases; the Swift macOS app remains the only supported product. The production signed Rust update feed is deployed and independently verified against the published archives. The protected public-verification workflow still awaits Environment approval; production update installation on either OS remains unverified.
 
 Native Linux inotify and Windows `ReadDirectoryChangesW`, filesystem/Trash adapters, stores, IPC, daemon/CLI, developer installs, and the Windows managed updater have been exercised in recorded CI or container runs. The Tauri UI ran against the real agent in Linux aarch64 Docker and on a Windows CI runner. These checks are not desktop acceptance or production release evidence. See the [Rust workspace status matrix](https://github.com/navig-me/tinyprune/blob/main/rust/README.md#status-matrix) for exact environments, evidence and remaining limits, rather than a second copy here.
 
-Swift remains the behavioral reference; shared golden fixtures pin parity ([ADR 0010](ADRs/0010-cross-platform-core-and-golden-fixtures.md)). The Rust agent does not replace the macOS agent. Preparation, intended artifacts and publication prerequisites are recorded in the [release log](https://github.com/navig-me/tinyprune/blob/main/RELEASES.md#020); maintainers follow the [release runbook](https://github.com/navig-me/tinyprune/blob/main/.github/RELEASING.md).
+Swift remains the behavioral reference; shared golden fixtures pin parity ([ADR 0010](ADRs/0010-cross-platform-core-and-golden-fixtures.md)). The Rust agent does not replace the macOS agent. Published artifacts, feed status and verification evidence are recorded in the [release log](https://github.com/navig-me/tinyprune/blob/main/RELEASES.md#020); maintainers follow the [release runbook](https://github.com/navig-me/tinyprune/blob/main/.github/RELEASING.md).
 
 ## License
 

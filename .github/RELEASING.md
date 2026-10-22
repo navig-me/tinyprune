@@ -13,6 +13,15 @@ gh api repos/:owner/:repo/environments/update-feed --jq '{rules: [.protection_ru
 gh api repos/:owner/:repo/branches/main/protection --jq .required_pull_request_reviews   # 404 means unprotected
 ```
 
+### Published 0.2.0 state (2026-10-22)
+
+- The macOS GitHub prerelease [`v0.2.0`](https://github.com/navig-me/tinyprune/releases/tag/v0.2.0) was published at `2026-10-22T01:16:33Z`, build **23**. Package and Homebrew jobs passed in [release run 39598318323](https://github.com/navig-me/tinyprune/actions/runs/39598318323); its `update-feed / publish` job still awaits user Environment approval. The live Sparkle appcast therefore remains **0.1.13 / build 22**, despite the new DMGs being downloadable.
+- The separate [`rust-preview-0.2.0`](https://github.com/navig-me/tinyprune/releases/tag/rust-preview-0.2.0) prerelease hosts build **29** Linux and Windows archives, their `.sha256` sidecars and combined `SHA256SUMS`. [Production signing run 39598352481](https://github.com/navig-me/tinyprune/actions/runs/39598352481) passed, including Sparkle and Rust verification and tamper rejection, using the **existing** ADR 0009 key, not a new or rotated key.
+- Rust feed PR [#20](https://github.com/navig-me/tinyprune/pull/20) merged as `0fea75e`; [Pages deployment 39704695956](https://github.com/navig-me/tinyprune/actions/runs/39704695956) passed. The live `https://tinyprune.com/updates/rust/rust-update-feed.json` and `.sig` were verified locally against the expected production public key and actual public-release archive downloads; both archive hashes matched.
+- Protected Rust [`verify_public` run 39704822483](https://github.com/navig-me/tinyprune/actions/runs/39704822483) is dispatched and **waiting for user approval**. Local verification does not mean that workflow passed, an Environment was manually approved, or an OS install/production update end-to-end test ran. macOS Sparkle install end-to-end remains unverified.
+
+Keep these trust claims separate: Rust archives and their executables remain **unsigned developer previews**; the signed manifest authenticates feed contents and archive hashes, not OS executable signatures. macOS DMGs are ad-hoc signed and not notarized (`signing: unsigned` in metadata); their pending Sparkle feed is a separate publication gate. Full artifact names, checksums, historical evidence and remaining limitations are in [RELEASES.md](../RELEASES.md#020).
+
 ## 1. Signing key custody
 
 - One Ed25519 key (the one from [ADR 0009](../ADRs/0009-eddsa-only-updates-for-adhoc-builds.md)) signs the Sparkle appcast and the Rust update feed. There is no separate Rust key.
@@ -78,7 +87,7 @@ gh variable set TINYPRUNE_UPDATE_PUBLIC_KEY --body "$(gh api repos/:owner/:repo/
 
 ## 4. macOS release procedure
 
-Build numbers: the macOS build number is the `release.yml` `github.run_number` (`CFBundleVersion`); it must exceed every appcast entry (last published: 22, 0.1.13).
+Build numbers: the macOS build number is the `release.yml` `github.run_number` (`CFBundleVersion`); it must exceed every appcast entry. Published 0.2.0 DMGs carry **23**, while the live appcast still tops out at **22 / 0.1.13** pending the 0.2.0 feed approval.
 
 1. Merge the release PR (version bump, CHANGELOG, RELEASES.md) into `main` after review and green CI. Do not tag a commit that is not on `main`.
 2. There is no pre-tag dry run: `release.yml`'s `workflow_dispatch` needs an existing `vX.Y.Z` tag. Pre-tag confidence comes from the `native` CI job, which packages both channels. After tagging, `release.yml` publishes directly (tag pushes publish); a dispatch with `publish=false` is only for re-inspecting an existing tag.
@@ -93,7 +102,7 @@ Build numbers: the macOS build number is the `release.yml` `github.run_number` (
 
 ## 5. Rust developer-preview procedure
 
-Archives are unsigned; the **feed** is signed. Build number: `github.run_number` of the `rust-artifacts.yml` dispatch run you promote; `tinyprune-feed generate` refuses a number not above the retained feed entries.
+Archives and executables are unsigned; the **feed** is signed to authenticate its contents and archive hashes. This is not OS code signing, notarization or a supported-platform claim. Build number: `github.run_number` of the `rust-artifacts.yml` dispatch run you promote; `tinyprune-feed generate` refuses a number not above the retained feed entries.
 
 1. Prerequisites: release PR merged to `main`; the repository variable `TINYPRUNE_UPDATE_PUBLIC_KEY` set (section 3).
 2. Build: `gh workflow run rust-artifacts.yml --ref main`, wait for success, and note the run ID. This run embeds the key (it is a dispatch on `main`) and produces `tinyprune-rust-dev-ubuntu-24.04` (`.tar.gz`, `.sha256`, `SHA256SUMS`) and `tinyprune-rust-dev-windows-2022` (`.zip` and sums) artifacts, and runs the Windows Scheduled Task install test and the `windows-update-e2e` job. A run from a branch or pull request cannot be promoted.
@@ -104,7 +113,7 @@ Archives are unsigned; the **feed** is signed. Build number: `github.run_number`
 7. Verify: `gh workflow run rust-update-feed.yml --ref main -f release_tag=rust-preview-X.Y.Z -f verify_public=true` (approve `update-feed`). It downloads the live feed and signature from `https://tinyprune.com/updates/rust/` and every archive the feed names, and verifies hashes and signature against the public key. Do not announce before this passes.
 8. Record SHA-256 values (from the prerelease's `.sha256` files), the artifacts run ID, the feed run IDs and the approvals in RELEASES.md.
 
-Note: archive names and the `VERSION` stamp currently say `tinyprune-dev` and `status=unreleased-development-artifact`, and no real production feed has ever been published, so the first run is also the first test of `rust-update-feed.yml` against GitHub. Treat step 7 as the acceptance test and expect to fix workflow problems then.
+Note: archive names and the `VERSION` stamp currently say `tinyprune-dev` and `status=unreleased-development-artifact`; these labels remain even for published developer previews. The first production-key Rust feed, version 0.2.0/build 29, is now live and locally authenticated (section 0). The protected public verification workflow is still awaiting approval; retain step 7 as a separate required acceptance gate rather than treating signing, deployment or a local check as its success.
 
 ## 6. Post-release checklist
 
@@ -128,7 +137,7 @@ Version and build numbers only go up. Clients refuse downgrades and replayed fee
 
 - Retain and verify the configured approval/branch gates on `release` and `update-feed` (section 0). Review `homebrew`, `cloudflare-pages-production` and `main` protections separately; they were not changed as part of these signing-gate approvals.
 - Verify the configured repository variable `TINYPRUNE_UPDATE_PUBLIC_KEY` still equals both Environment public keys (sections 1 and 3); never replace or rotate it as routine release preparation.
-- Approve every Environment-gated job (`release` once; `update-feed` for the appcast publish, the appcast verify, the Rust sign and the Rust verify; `cloudflare-pages-production` for each Pages deploy), merge the feed PRs, and push the tag. A tag push is irreversible in practice; nothing in this PR creates one.
+- Approve each Environment-gated job when appropriate (`release` once; `update-feed` for the appcast publish, the appcast verify, the Rust sign and the Rust verify; `cloudflare-pages-production` for each Pages deploy), merge the feed PRs, and push the tag. These are maintainer actions, not approvals implied by this runbook. For 0.2.0 the tag, macOS artifacts and Rust feed are already published; the macOS appcast publish and protected Rust public verification still await user approval (section 0).
 - Create the Rust hosting prerelease (section 5, step 3).
 - Apple Developer ID signing and notarization: not available. Without all six Apple secrets in `release` every macOS release is ad-hoc and not notarized; providing them is an account-level maintainer action (DEPLOYMENT.md).
 - Keep the private key backup offline and verify it is restorable. No tool in this repository can verify that for you.
