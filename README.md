@@ -77,6 +77,10 @@ tinyprune resume
 
 Paths above are examples; use an item inside a folder you already manage. See the [CLI reference](https://docs.tinyprune.com/#cli) for expiry overrides, configuration, JSON output, and exit codes.
 
+### Linux and Windows (developer preview)
+
+Unsigned x86_64 archives for Linux and Windows are on the [preview release](https://github.com/navig-me/tinyprune/releases/tag/rust-preview-0.2.0). They use the separate Rust runtime, not the Swift app, and are **not a supported release**: verify the SHA-256 in the attached checksum files, expect an OS trust prompt (Windows SmartScreen), and start with disposable folders in Preview. Install steps for a managed, updatable user-scope install are in the [packaging guide](rust/packaging/README.md#install-the-published-developer-preview-with-updates).
+
 ## Build from source
 
 ```sh

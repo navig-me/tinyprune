@@ -12,7 +12,7 @@ Facts below were taken from `git tag`, `git log -1 --format=%cs <tag>`, `gh rele
 
 | Version | Status | Date | Channel |
 | --- | --- | --- | --- |
-| [0.2.1](#021) | **prepared, publication in progress** | 2026-10-22 | macOS (agent re-registration fix after `brew upgrade`); Rust preview unchanged at 0.2.0 |
+| [0.2.1](#021) | **published prerelease; Sparkle feed and Homebrew cask updated and verified** | 2026-10-22 | macOS (agent re-registration fix after `brew upgrade`); Rust preview unchanged at 0.2.0 |
 | [0.2.0](#020) | **published prereleases; both signed feeds live and verified** | 2026-10-22 | macOS (unchanged code) and Rust developer preview (Linux x86_64, Windows x86_64) |
 | 0.1.13 | published prerelease | 2026-10-13 | macOS ad-hoc |
 | 0.1.12 | published prerelease, not in the update feed | 2026-10-09 | macOS ad-hoc |
@@ -24,11 +24,15 @@ Published macOS releases so far are **GitHub prereleases** with ad-hoc signed, *
 
 ## 0.2.1
 
-**Status: prepared, publication in progress.** Patch release for the "Agent unavailable" screen after `brew upgrade` (see [CHANGELOG](CHANGELOG.md#021---2026-10-22)). Owner-requested on 2026-10-22; evidence is added after the tag run. macOS only: the Linux/Windows Rust preview stays at 0.2.0 build 29 (not rebuilt or republished, feed unchanged). Version declarations (Swift default, serviceVersion and its two tests, all workspace crates, `rust/ui`, Tauri, both lockfiles) are 0.2.1.
+**Status: published prerelease; macOS Sparkle feed live and verified; Homebrew cask at 0.2.1.** Patch release for the "Agent unavailable" screen after `brew upgrade` (see [CHANGELOG](CHANGELOG.md#021---2026-10-22)). Owner-requested and approved on 2026-10-22; the owner explicitly authorized the assistant to merge, approve the `release` and `update-feed` Environment gates and release. macOS only: the Linux/Windows Rust preview stays at 0.2.0 build 29 (not rebuilt or republished, feed unchanged). Version declarations (Swift default, serviceVersion and its two tests, all workspace crates, `rust/ui`, Tauri, both lockfiles) are 0.2.1.
 
-**Why a patch bump.** One behavior fix in `reconcileAgentAfterUpdate` plus a decision check; no schema, XPC protocol or rule-engine change.
+**Why a patch bump.** One behavior fix in `reconcileAgentAfterUpdate` plus decision checks; no schema, XPC protocol or rule-engine change. Cause: the Homebrew cask's `uninstall launchctl:` step removes the agent job during `brew upgrade`, and the app only repaired agents macOS still listed as enabled. A previously registered agent (the `agentRegisteredByBuild` marker) is now registered again; first launch and Login Items approval are unchanged. The fix ships in the new app, so upgrading from 0.2.0 through Homebrew can still show the unavailable screen once.
 
-**Intended artifacts.** `TinyPrune-0.2.1.dmg`, `TinyPrune-0.2.1-homebrew.dmg`, `.sha256` sidecars and `TinyPrune-0.2.1.json`; ad-hoc signed, not notarized; GitHub prerelease; EdDSA-signed Sparkle appcast entry (build number above 23, assigned by the `release.yml` run); Homebrew cask via tap PR. Existing ADR 0009 key, no rotation.
+**Tag and build.** Tag `v0.2.1` points to `0953ced3cd31aff2632a56cd07213a81ff011e37` (PR #23 merge). Build **24** from [release run 39713530775](https://github.com/navig-me/tinyprune/actions/runs/39713530775); published prerelease at `2026-10-22T03:01:51Z`. Artifacts (ad-hoc signed, not notarized, `signing: unsigned`): `TinyPrune-0.2.1.dmg` SHA-256 `fc55aafad44a56db38d84ed153e359e81127d4a8688b31452ca15ba74e4c2fed`; `TinyPrune-0.2.1-homebrew.dmg` SHA-256 `edc0d3c079cbd4acf7632d2c46d5e705eb12871069b25e534fbd74b2b4c8b88f`; both verified against the published sidecars after download.
+
+**Feed and Homebrew.** Signed feed [PR #24](https://github.com/navig-me/tinyprune/pull/24) merged as `2b38a73526b5d4bb02f3adc04d2c880bdb77d66a`; the appcast lists 0.2.1 / build 24 first, retaining 0.2.0 / 23 and 0.1.13 / 22. Appcast XML, release notes and DMG signatures were independently checked with CryptoKit against the existing public key; [Pages deployment 39715021131](https://github.com/navig-me/tinyprune/actions/runs/39715021131) passed; protected [`verify_public` run 39715516052](https://github.com/navig-me/tinyprune/actions/runs/39715516052) passed with no skipped steps. Existing ADR 0009 key, no rotation. The release run's Homebrew job again skipped publication (`HOMEBREW_TAP_TOKEN` unset); [homebrew-tap PR #2](https://github.com/navig-me/homebrew-tap/pull/2) was merged by hand and the public cask now reads 0.2.1 with the verified Homebrew DMG hash. Ruby syntax only; no fresh tap installation was run.
+
+**Verification.** [PR #23 CI run 39711481860](https://github.com/navig-me/tinyprune/actions/runs/39711481860) (all checks, including native acceptance on macOS 14, 15 and 15-intel, and the Rust matrix) passed on the pre-merge head; the `main` CI on the tagged commit was cancelled by the next push, so that run is not claimed. `TinyPruneUISnapshots` passed 130 assertions locally, including five new checks of the re-registration decision. **Not verified:** an actual `brew upgrade` or Sparkle update on a Mac with the fixed build; that decision is covered by a pure-function check, not by a real launchd registration.
 
 ## 0.2.0
 
