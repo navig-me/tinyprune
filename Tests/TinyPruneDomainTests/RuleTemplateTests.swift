@@ -8,7 +8,7 @@ import Testing
 
     @Test func everyTemplateProducesUsableScopedTrashRules() throws {
         for template in RuleTemplate.allCases {
-            let folder = template.suggestedFolder.map { home + $0.dropFirst() } ?? home + "/Work"
+            let folder = template.suggestedFolders.first.map { home + $0.path.dropFirst() } ?? home + "/Work"
             _ = try ManagedRoot(displayName: template.title, path: folder, bookmarkData: Data([1]))
             let rules = try template.rules(in: folder, state: .preview)
             #expect(!rules.isEmpty)
@@ -39,7 +39,7 @@ import Testing
             (.agentEditBackups, "~/.claude/file-history", 30, .file, true),
         ]
         for (template, suggestion, days, kind, recursive) in presets {
-            #expect(template.suggestedFolder == suggestion)
+            #expect(template.suggestedFolders.first?.path == suggestion)
             #expect(template.isBroad)
             let folder = home + suggestion.dropFirst()
             let rules = try template.rules(in: folder, state: .active)
@@ -54,12 +54,12 @@ import Testing
         }
         for template in [RuleTemplate.downloads, .screenshots, .temporaryWorkspace] {
             #expect(!template.isBroad)
-            #expect(template.suggestedFolder == nil)
+            #expect(template.suggestedFolders.isEmpty)
             #expect(try template.rules(in: home + "/Work", state: .active).allSatisfy { $0.state == .active })
         }
         for template in [RuleTemplate.developerCleanup, .buildArtifacts, .agentDebugLogs] {
             #expect(template.isBroad)
-            #expect(template.suggestedFolder == nil)
+            #expect(template.suggestedFolders.isEmpty == (template != .agentDebugLogs))
             #expect(try template.rules(in: home + "/Work", state: .active).allSatisfy { $0.state == .preview })
         }
     }
@@ -73,6 +73,46 @@ import Testing
         #expect(logs.state == .preview)
         for name in ["debug.log", "run.trace"] { #expect(logs.matcher.matches(name: name, relativePath: "a/" + name, kind: .file)) }
         for name in ["notes.md", "main.swift", "log"] { #expect(!logs.matcher.matches(name: name, relativePath: name, kind: .file)) }
+    }
+
+    @Test func everySuggestedAgentFolderIsAUsableRootAndNamed() throws {
+        for template in RuleTemplate.allCases {
+            let paths = template.suggestedFolders.map(\.path)
+            #expect(Set(paths).count == paths.count)
+            #expect(Set(template.suggestedFolders.map(\.name)).count == paths.count)
+            for folder in template.suggestedFolders {
+                #expect(!folder.name.isEmpty)
+                #expect(folder.path.hasPrefix("~/"))
+                _ = try ManagedRoot(displayName: folder.name, path: home + folder.path.dropFirst(), bookmarkData: Data([1]))
+            }
+        }
+        let sessionTools = Set(RuleTemplate.agentSessionLogs.suggestedFolders.map(\.name))
+        #expect(sessionTools.isSuperset(of: ["Claude Code", "Codex", "OMP", "pi"]))
+        #expect(Set(RuleTemplate.agentDebugLogs.suggestedFolders.map(\.name)).isSuperset(of: ["OMP", "Codex"]))
+    }
+
+    @Test func sessionRuleCoversNestedAndCompressedTranscriptsButNotAgentMemory() throws {
+        let rule = try #require(RuleTemplate.agentSessionLogs.rules(in: home + "/.codex/sessions", state: .preview).first)
+        #expect(rule.scope.recursive)
+        for path in ["2026/07/12/rollout-2026-07-12T19-59-10-abc.jsonl", "2026/07/12/rollout-x.jsonl.zst", "-Users-me-proj/uuid.jsonl"] {
+            let name = String(path.split(separator: "/").last!)
+            #expect(rule.matcher.matches(name: name, relativePath: path, kind: .file))
+        }
+        // Claude keeps hand-curated memory and spilled tool output beside transcripts; neither is a transcript.
+        for path in ["-Users-me-proj/memory/MEMORY.md", "-Users-me-proj/uuid/tool-results/out.json", "state_5.sqlite", "session_index.jsonl.bak"] {
+            let name = String(path.split(separator: "/").last!)
+            #expect(!rule.matcher.matches(name: name, relativePath: path, kind: .file))
+        }
+    }
+
+    @Test func debugLogRuleAgesOutOmpToolOutputButNeverReportsTranscriptsOrImages() throws {
+        let rule = try #require(RuleTemplate.agentDebugLogs.rules(in: home + "/.omp/agent/sessions", state: .preview).first)
+        let session = "-proj/2026-10-10T02-14-45-018Z_abc"
+        #expect(rule.matcher.matches(name: "5.bash.log", relativePath: session + "/5.bash.log", kind: .file))
+        for path in [session + ".jsonl", session + "/ModelComparison.md", session + "/local/ai-comparison.json", session + "/local/pasted-image-1.png", "-proj/." + "x.jsonl.lock.os"] {
+            let name = String(path.split(separator: "/").last!)
+            #expect(!rule.matcher.matches(name: name, relativePath: path, kind: .file))
+        }
     }
 
     @Test func cacheGlobsExcludeIncompleteAndUnrelatedFiles() throws {
@@ -93,7 +133,7 @@ import Testing
 
     @Test func xcodeOnlyTargetsImmediateChildDirectories() throws {
         for template in [RuleTemplate.xcodeDerivedData, .xcodeDeviceSupport] {
-            let folder = home + (try #require(template.suggestedFolder)).dropFirst()
+            let folder = home + (try #require(template.suggestedFolders.first)).path.dropFirst()
             let rule = try #require(template.rules(in: folder, state: .preview).first)
             #expect(rule.scope.relativePath(of: folder + "/Project-cache") == "Project-cache")
             #expect(rule.scope.relativePath(of: folder + "/Project-cache/Build") == nil)

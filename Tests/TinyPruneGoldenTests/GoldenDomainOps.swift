@@ -17,7 +17,7 @@ extension GoldenOps {
                 throw FixtureFormatError(description: "invalid template or state")
             }
             let rules = try template.rules(in: string(input, "path"), state: state, temporaryLifetime: input["temporaryLifetime"] as? Double ?? 259200)
-            return ["title": template.title, "summary": template.summary, "suggestedFolder": template.suggestedFolder as Any? ?? NSNull(), "isBroad": template.isBroad,
+            return ["title": template.title, "summary": template.summary, "suggestedFolders": template.suggestedFolders.map { ["name": $0.name, "path": $0.path] }, "isBroad": template.isBroad,
                     "rules": rules.map { rule -> FixtureObject in var value = encodeRule(rule); value.removeValue(forKey: "id"); return value }]
         case "broadness":
             if let value = input["rule"] as? FixtureObject {

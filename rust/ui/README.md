@@ -91,15 +91,15 @@ Limits and known flakiness:
 
 Pin the base image digest and add a cargo cache step (`~/.cargo/registry` and the target volume) before enabling it; the cold build is the cost (the first full run on the development Mac, image plus workspace and Tauri compile, took about 13 minutes). Because of the tauri-driver flake, start it as non-gating (`continue-on-error: true`) until a few GitHub runs show its stability. `run.sh` mounts the repo into the container, so on CI the artifacts appear under `rust/ui/docker/out/`.
 
-## Update hook (design only, not implemented)
+## Update hook (manual check implemented; the rest is design only)
 
-Nothing in `rust/ui` calls the updater yet, and none of the following was built or run in the Docker harness. It is the contract the UI would follow ([ADR 0012](../../ADRs/0012-rust-runtime-signed-updates.md), [tinyprune-update](../tinyprune-update/README.md)); the UI stays an IPC/CLI client and contains no update, download or install code.
+Settings has a "Version and updates" panel: the app version (`ui_version` Tauri command, the UI crate version), the agent version (`health` IPC request, `serviceVersion`; a note appears when it differs from the app's) and a **Check for updates** button. The button calls the `update_check` Tauri command, which runs the `tinyprune` CLI beside the UI executable (else on PATH) as `tinyprune update check --json` and returns its stdout; the frontend (`interpretUpdateCheck` in `state.js`) words checking / up to date / update available (version, build, size, release notes URL as plain text, and the `tinyprune update install --confirm <token>` command to run yourself) / unsupported / updates off / error (offline, feed rejected). The UI itself contains no network, signature, download or install code, and has no install button. Covered by `frontend/tests/frontend.test.js` (fixtures: `?mock=1&update=current|available|offline|rejected|disabled`); the Tauri command compiles under `cargo check` but was not run against a real feed or in the Docker/Windows harness. The rest of this section is still the unbuilt contract ([ADR 0012](../../ADRs/0012-rust-runtime-signed-updates.md), [tinyprune-update](../tinyprune-update/README.md)).
 
 - At start and about hourly: `tinyprune update check --auto --json`. It exits silently (`status: skipped`) unless `checkForNewVersions` is on (default) and 24 hours have passed, and it never installs.
-- A manual "Check for Updates" runs `tinyprune update check --json` and shows version, size and notes from `status: available`.
+- Done (manual button above): a manual "Check for Updates" runs `tinyprune update check --json` and shows version, size and notes from `status: available`.
 - Only after the user clicks a confirm button: `tinyprune update install --confirm <confirmationToken> --json` (the token comes from that check). Never install without that click.
 - While `LoadUpdateStatus` reports a phase other than `idle`, show "pruning paused for update". The agent restarts during an install, so the UI must reconnect.
 - Settings toggle: `tinyprune update settings --check-for-new-versions on|off`.
 - Exit codes to handle: 65 (feed or package rejected), 69 (network unavailable), 70 (install failed or rolled back), 75 (a Trash operation is in flight, retry), 78 (updates disabled: a package-manager or development copy).
 
-Building it needs a Tauri command that runs the `tinyprune` CLI with `TINYPRUNE_ENDPOINT` inherited (like `agent_request`), handling for those exit codes, and harness coverage in `docker/smoke.py` against a fake feed.
+Still to build: the automatic check, an install confirm button, the update-in-progress banner, the Settings toggle, and harness coverage in `docker/smoke.py` against a fake feed.

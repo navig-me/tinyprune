@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { createApi } from '../api.js';
+import { createApi, createUpdates } from '../api.js';
 import { createMock, sampleRule } from '../mock.js';
-import { escapeHtml, bytes, sparklineDays } from '../state.js';
+import { escapeHtml, bytes, sparklineDays, interpretUpdateCheck } from '../state.js';
 test('production API uses one typed IPC boundary and forwards failures',async()=>{const calls=[];const api=createApi({search:'',invoke:async(...args)=>{calls.push(args);return {type:'settings',data:{protectHiddenFiles:true}};}});assert.deepEqual(await api('loadSettings'),{protectHiddenFiles:true});assert.deepEqual(calls,[['agent_request',{request:{operation:'loadSettings'}}]]);await assert.rejects(createApi({search:'',invoke:async()=>({type:'failure',data:{message:'Revision conflict'}})})('saveRule'),/Revision conflict/);});
 test('plain browser does not silently select mock',async()=>{await assert.rejects(createApi({search:'',invoke:null})('loadOverview'),/Agent not connected/);});
 test('Preview does not mutate policy and save requires current revision',async()=>{const mock=createMock();const before=await mock('loadPolicy');const preview=await mock('previewRule',{...sampleRule,state:'preview'});assert.ok(preview.samples[0].explanation.item);assert.deepEqual(await mock('loadPolicy'),before);await assert.rejects(mock('saveRule',{rule:sampleRule,revision:0}),/Policy changed/);await mock('saveRule',{rule:{...sampleRule,state:'preview'},revision:before.revision});assert.equal((await mock('loadPolicy')).rules[1].state,'preview');});
@@ -14,3 +14,23 @@ test('HTML semantic accessibility and offline asset contract',()=>{const html=re
 test('explanation triggers inside Preview never submit the rule form',()=>{const app=readFileSync(new URL('../app.js',import.meta.url),'utf8');assert.match(app,/<button type="button" data-explain=/);});
 test('empty ledger has no invented scheduled counts',async()=>{const overview=await createMock('empty')('loadOverview');assert.deepEqual(overview.deadlineSummary,{active:0,preview:0,activeSoon:0});});
 test('defects found in the Linux webview stay fixed',()=>{const css=readFileSync(new URL('../styles.css',import.meta.url),'utf8');const app=readFileSync(new URL('../app.js',import.meta.url),'utf8');assert.ok(css.includes('[hidden]{display:none!important}'),'button display must not defeat the hidden attribute');assert.ok(app.includes("plural(rule.lifetime/86400,'day')"));assert.ok(!app.includes('aria-pressed'),'pause button already changes its label');assert.ok(app.includes('explainTrigger.focus()'),'drawer restores focus');});
+test('update check states: up to date, available with notes and confirm-only install, offline, rejected, disabled',async()=>{
+  const check=async kind=>interpretUpdateCheck(await createUpdates({search:`?mock=1&update=${kind}`,delay:0}).check());
+  assert.deepEqual(await check('current'),{state:'upToDate',message:'TinyPrune 0.2.2 is up to date.'});
+  const available=await check('available');
+  assert.equal(available.state,'available');assert.equal(available.version,'0.2.3');assert.match(available.notesUrl,/^https:\/\//);assert.equal(available.installCommand,'tinyprune update install --confirm fixture-token');
+  assert.match((await check('offline')).message,/Could not reach the update server.*Nothing was changed/);
+  assert.match((await check('rejected')).message,/could not be verified, so it was ignored/);
+  const disabled=await check('disabled');assert.equal(disabled.state,'disabled');assert.match(disabled.message,/not in a managed install/);
+  assert.equal((await check('nonsense')).state,'error');
+  assert.equal(interpretUpdateCheck('not json').state,'error');
+  assert.equal(interpretUpdateCheck('{"status":"unsupported","platform":"x"}').state,'unsupported');
+});
+test('production update commands invoke the Tauri shell and the Settings page shows checking, version and button',async()=>{
+  const calls=[];const updates=createUpdates({search:'',invoke:async name=>{calls.push(name);return name==='ui_version'?'0.2.2':'{"status":"upToDate","installedVersion":"0.2.2"}';}});
+  assert.equal(await updates.version(),'0.2.2');assert.equal(interpretUpdateCheck(await updates.check()).state,'upToDate');assert.deepEqual(calls,['ui_version','update_check']);
+  await assert.rejects(createUpdates({search:'',invoke:null}).check(),/desktop application/);
+  const app=readFileSync(new URL('../app.js',import.meta.url),'utf8');
+  for(const token of ['Check for updates','Checking for updates…',"api('health')",'button.disabled=true','button.disabled=false'])assert.ok(app.includes(token),token);
+  assert.ok(!/fetch\(|XMLHttpRequest/.test(app),'the UI itself never touches the network');
+});

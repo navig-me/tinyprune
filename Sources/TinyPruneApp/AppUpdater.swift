@@ -224,6 +224,17 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
     /// Publishes the halt state to the app model (Overview headline, header pill, menu bar) and keeps it current.
     func bind(to model: AgentViewModel) {
         releases.bind(to: model)
+        $canCheckForUpdates
+            .sink { [weak self, weak model] canCheck in
+                MainActor.assumeIsolated {
+                    guard let self, let model else { return }
+                    model.updateCheck = UpdateCheckAction(
+                        isEnabled: self.availabilityReason != nil || canCheck,
+                        help: self.availabilityReason ?? "Check the EdDSA-verified direct-download update feed"
+                    ) { [weak self] in self?.checkForUpdates() }
+                }
+            }
+            .store(in: &cancellables)
         if usesReleaseNotifier { releases.startAutomaticChecks() }
         $safetyStatus
             .removeDuplicates()

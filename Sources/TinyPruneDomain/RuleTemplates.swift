@@ -1,5 +1,17 @@
 import Foundation
 
+/// A tool's usual data folder for a template, shown as "Detected" when it exists. Never a grant of access.
+public struct TemplateFolder: Sendable, Equatable, Codable {
+    public let name: String
+    /// Home-relative (`~/…`).
+    public let path: String
+
+    public init(_ name: String, _ path: String) {
+        self.name = name
+        self.path = path
+    }
+}
+
 /// Built-in starting points. Templates only ever produce ordinary, editable `LifetimeRule`s.
 public enum RuleTemplate: String, CaseIterable, Codable, Sendable, Identifiable {
     case developerCleanup
@@ -57,26 +69,41 @@ public enum RuleTemplate: String, CaseIterable, Codable, Sendable, Identifiable 
         case .pipCache: "HTTP and wheel cache files after 90 days without modification; pip downloads or rebuilds them."
         case .cargoRegistryCache: "Downloaded .crate archives after 90 days without modification; leaves sources, credentials, and tools alone."
         case .gradleCaches: "Generated and downloaded cache files after 90 days without modification; leaves Gradle settings and wrappers alone."
-        case .agentSessionLogs: "Conversation transcripts (.jsonl) that coding agents keep, after 60 days without modification. Old sessions can no longer be resumed."
-        case .agentEditBackups: "Per-session file backups that coding agents keep for undo, after 30 days without modification."
-        case .agentDebugLogs: "Log and trace files (.log, .trace) in a folder you choose, after 14 days without modification."
+        case .agentSessionLogs: "Conversation transcripts (.jsonl, .jsonl.zst) kept by Claude Code, Codex, OMP, pi, and Gemini CLI, after 60 days without modification. Old sessions can no longer be resumed. Choose one agent's folder at a time."
+        case .agentEditBackups: "Per-session file backups that Claude Code keeps for undo, after 30 days without modification."
+        case .agentDebugLogs: "Log and trace files (.log, .trace) written by OMP (including per-session tool output), Codex, GitHub Copilot, and opencode, after 14 days without modification. Session transcripts, reports, and images are not matched."
         }
     }
 
-    /// Home-relative suggestion only; users must choose and authorize the actual folder.
-    public var suggestedFolder: String? {
+    /// Home-relative suggestions only; users must choose and authorize the actual folder. The first entry is the
+    /// conventional default; each agent or tool that shares a template has its own entry.
+    public var suggestedFolders: [TemplateFolder] {
         switch self {
-        case .xcodeDerivedData: "~/Library/Developer/Xcode/DerivedData"
-        case .xcodeDeviceSupport: "~/Library/Developer/Xcode/iOS DeviceSupport"
-        case .homebrewDownloads: "~/Library/Caches/Homebrew/downloads"
-        case .npmCache: "~/.npm/_cacache"
-        case .yarnClassicCache: "~/Library/Caches/Yarn"
-        case .pipCache: "~/Library/Caches/pip"
-        case .cargoRegistryCache: "~/.cargo/registry/cache"
-        case .gradleCaches: "~/.gradle/caches"
-        case .agentSessionLogs: "~/.claude/projects"
-        case .agentEditBackups: "~/.claude/file-history"
-        default: nil
+        case .xcodeDerivedData: [TemplateFolder("Xcode", "~/Library/Developer/Xcode/DerivedData")]
+        case .xcodeDeviceSupport: [TemplateFolder("Xcode", "~/Library/Developer/Xcode/iOS DeviceSupport")]
+        case .homebrewDownloads: [TemplateFolder("Homebrew", "~/Library/Caches/Homebrew/downloads")]
+        case .npmCache: [TemplateFolder("npm", "~/.npm/_cacache")]
+        case .yarnClassicCache: [TemplateFolder("Yarn", "~/Library/Caches/Yarn")]
+        case .pipCache: [TemplateFolder("pip", "~/Library/Caches/pip")]
+        case .cargoRegistryCache: [TemplateFolder("Cargo", "~/.cargo/registry/cache")]
+        case .gradleCaches: [TemplateFolder("Gradle", "~/.gradle/caches")]
+        case .agentSessionLogs: [
+            TemplateFolder("Claude Code", "~/.claude/projects"),
+            TemplateFolder("Codex", "~/.codex/sessions"),
+            TemplateFolder("Codex (archived)", "~/.codex/archived_sessions"),
+            TemplateFolder("OMP", "~/.omp/agent/sessions"),
+            TemplateFolder("pi", "~/.pi/agent/sessions"),
+            TemplateFolder("Gemini CLI", "~/.gemini/tmp"),
+        ]
+        case .agentEditBackups: [TemplateFolder("Claude Code", "~/.claude/file-history")]
+        case .agentDebugLogs: [
+            TemplateFolder("OMP", "~/.omp/logs"),
+            TemplateFolder("OMP session tool output", "~/.omp/agent/sessions"),
+            TemplateFolder("Codex", "~/.codex/log"),
+            TemplateFolder("GitHub Copilot", "~/.copilot/logs"),
+            TemplateFolder("opencode", "~/.local/share/opencode/log"),
+        ]
+        default: []
         }
     }
 
@@ -156,7 +183,7 @@ public enum RuleTemplate: String, CaseIterable, Codable, Sendable, Identifiable 
         case .gradleCaches:
             return [try rule("Old Gradle cache files", kind: .file, basis: .modified, days: 90)]
         case .agentSessionLogs:
-            return [try rule("Old agent session logs", kind: .file, globs: ["*.jsonl"], basis: .modified, days: 60)]
+            return [try rule("Old agent session logs", kind: .file, globs: ["*.jsonl", "*.jsonl.zst"], basis: .modified, days: 60)]
         case .agentEditBackups:
             return [try rule("Old agent edit backups", kind: .file, basis: .modified, days: 30)]
         case .agentDebugLogs:

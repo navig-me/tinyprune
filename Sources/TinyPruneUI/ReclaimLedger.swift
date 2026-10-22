@@ -60,38 +60,39 @@ struct ReclaimLedger: View {
     let overview: AgentOverviewSnapshot
     @State private var movedPulse = false
 
-    private var active: [AgentUpcomingItem] { model.activeUpcoming.sorted { $0.explanation.scheduledAt < $1.explanation.scheduledAt } }
-    private var soon: [AgentUpcomingItem] { active.filter { $0.explanation.scheduledAt <= model.currentDate.addingTimeInterval(86_400) } }
-    private var scheduled: ScheduledLedgerEstimate { ScheduledLedgerEstimate(items: active, sizes: model.ledgerSizes, failures: model.ledgerSizeFailures) }
-    private var soonEstimate: ScheduledLedgerEstimate { ScheduledLedgerEstimate(items: soon, sizes: model.ledgerSizes, failures: model.ledgerSizeFailures) }
-    private var measurementID: [String] { active.prefix(100).map(AgentViewModel.ledgerKey) }
+    private var measurementID: [String] { model.activeUpcomingByDeadline.prefix(100).map(AgentViewModel.ledgerKey) }
     private var moving: Bool {
         guard let attempt = model.activity.filter({ $0.kind == .trashAttempted }).max(by: { $0.occurredAt < $1.occurredAt }) else { return false }
         return !model.activity.contains { ($0.kind == .movedToTrash || $0.kind == .trashFailed) && $0.identity == attempt.identity && $0.occurredAt >= attempt.occurredAt }
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        // Derived once per evaluation: the width-adaptive layout below instantiates each cell twice.
+        let active = model.activeUpcomingByDeadline
+        let cutoff = model.currentDate.addingTimeInterval(86_400)
+        let soonEstimate = ScheduledLedgerEstimate(items: active.filter { $0.explanation.scheduledAt <= cutoff }, sizes: model.ledgerSizes, failures: model.ledgerSizeFailures)
+        let scheduled = ScheduledLedgerEstimate(items: active, sizes: model.ledgerSizes, failures: model.ledgerSizeFailures)
+        return VStack(alignment: .leading, spacing: 14) {
             ViewThatFits(in: .horizontal) {
                 if !typeSize.isAccessibilitySize {
                     HStack(alignment: .top, spacing: 0) {
                         movedCell.frame(minWidth: 230, maxWidth: .infinity, alignment: .leading)
-                        soonCell.frame(minWidth: 195, maxWidth: .infinity, alignment: .leading)
-                        scheduledCell.frame(minWidth: 195, maxWidth: .infinity, alignment: .leading)
+                        soonCell(soonEstimate).frame(minWidth: 195, maxWidth: .infinity, alignment: .leading)
+                        scheduledCell(scheduled).frame(minWidth: 195, maxWidth: .infinity, alignment: .leading)
                     }
                 }
                 VStack(alignment: .leading, spacing: 20) {
                     movedCell
                     Divider()
-                    soonCell
+                    soonCell(soonEstimate)
                     Divider()
-                    scheduledCell
+                    scheduledCell(scheduled)
                 }
             }
             Text("Space frees up when you empty the Trash.")
                 .font(Typography.body(size: 11, relativeTo: .caption)).foregroundStyle(.secondary)
             if !overview.policy.rules.contains(where: { $0.state == .active }) {
-                Button("Choose an Active rule in Rules or browse Templates") { router.selection = .rules }
+                Button("Add an Active rule") { router.selection = .rules }
                     .buttonStyle(PruneLinkStyle()).font(.subheadline)
             }
         }
@@ -117,8 +118,8 @@ struct ReclaimLedger: View {
             if let summary = overview.reclaimed, summary.lifetimeItems > 0 {
                 if summary.itemsWithKnownSize > 0 { LedgerNumber(value: summary.lifetimeBytes) }
                 else { Text("Size not tracked").font(Typography.panelTitle).foregroundStyle(.secondary) }
-                Text("\(summary.lifetimeItems.formatted()) items").font(Typography.body(size: 13))
-                if let first = summary.firstMovedAt { Text("since \(first.formatted(.dateTime.month(.abbreviated).day()))").font(.caption).foregroundStyle(.secondary) }
+                Text("\(summary.lifetimeItems.formatted()) items" + (summary.firstMovedAt.map { " since \($0.formatted(.dateTime.month(.abbreviated).day()))" } ?? ""))
+                    .font(Typography.body(size: 13))
                 if summary.weekItems > 0 {
                     Text(summary.weekBytes > 0 ? "This week: \(summary.weekItems) items, \(ledgerBytes(summary.weekBytes)) tracked" : "This week: \(summary.weekItems) items")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -128,13 +129,9 @@ struct ReclaimLedger: View {
                     Text("Sizes tracked since this update").font(.caption2).foregroundStyle(.secondary)
                 }
             } else if overview.reclaimed == nil {
-                Text("Trash history is unavailable").font(Typography.panelTitle)
-                Text("Reconnect to the updated agent to see your history.")
-                    .font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Text("History unavailable").font(Typography.panelTitle)
             } else {
-                Text("A little lighter, in time.").font(Typography.panelTitle)
-                Text("Your first items will appear here once a rule moves them.")
-                    .font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Text("Nothing moved yet").font(Typography.panelTitle)
             }
         }
         .padding(.trailing, 18)
@@ -143,11 +140,11 @@ struct ReclaimLedger: View {
         .accessibilityElement(children: .combine)
     }
 
-    private var soonCell: some View {
+    private func soonCell(_ soonEstimate: ScheduledLedgerEstimate) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             Text(model.unreadyRoots.isEmpty ? "Moving soon" : "Scheduled soon").font(Typography.body(size: 13, weight: .semibold))
             LedgerNumber(value: Int64(model.activeSoonCount), isSize: false)
-            Text("items in the next 24 hours").font(.subheadline).foregroundStyle(.secondary)
+            Text("in the next 24 hours").font(.subheadline).foregroundStyle(.secondary)
             sizeLine(soonEstimate)
             if moving {
                 TimelineView(.animation(minimumInterval: 1, paused: reduced)) { context in
@@ -161,20 +158,13 @@ struct ReclaimLedger: View {
         .accessibilityElement(children: .combine)
     }
 
-    private var scheduledCell: some View {
+    private func scheduledCell(_ scheduled: ScheduledLedgerEstimate) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             Text("Scheduled").font(Typography.body(size: 13, weight: .semibold))
             LedgerNumber(value: Int64(model.activeCount), isSize: false)
-            Text("items under Active rules").font(.subheadline).foregroundStyle(.secondary)
+            Text("under Active rules").font(.subheadline).foregroundStyle(.secondary)
             sizeLine(scheduled)
-            Text("Size estimate covers up to 100 sampled Active items, not the full schedule.")
-                .font(.caption).foregroundStyle(.secondary)
-            if let next = active.first {
-                Text("Next: \(displayName(next.explanation.candidateIdentity.pathHint))")
-                    .font(.caption).lineLimit(2)
-                Text(next.explanation.scheduledAt.formatted(.dateTime.month(.abbreviated).day().hour().minute()))
-                    .font(.caption).foregroundStyle(.secondary)
-            }
+            Text("Size from up to 100 sampled items.").font(.caption).foregroundStyle(.secondary)
         }
         .padding(8)
         .accessibilityElement(children: .combine)
