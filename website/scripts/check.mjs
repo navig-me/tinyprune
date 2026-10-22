@@ -96,7 +96,12 @@ const software = nodes.find(node => node['@type'] === 'SoftwareApplication');
 const website = nodes.find(node => node['@type'] === 'WebSite');
 if (software?.['@id'] !== `${origin}/#software` || software?.url !== `${origin}/` || website?.url !== `${origin}/`) fail('Schema must describe the canonical website and software');
 if (software.operatingSystem !== 'macOS 14 or later' || software.offers?.price !== '0' || !software.offers?.priceCurrency) fail('Software schema must reflect the free macOS release');
-if (software.softwareHelp !== `${docsOrigin}/` || software.downloadUrl !== 'https://github.com/navig-me/tinyprune/releases') fail('Schema must link real help and download destinations');
+if (software.softwareHelp !== `${docsOrigin}/`) fail('Schema must link the published help site');
+const download = new URL(software.downloadUrl);
+if (download.origin !== 'https://github.com' || download.username || download.password || download.search || download.hash ||
+    !/^\/navig-me\/tinyprune\/releases(?:\/tag\/v\d+\.\d+\.\d+)?\/?$/.test(download.pathname)) {
+  fail('Schema downloads must stay on this repository’s macOS release channel');
+}
 
 const robots = await load('robots.txt');
 if (!/^Sitemap:\s*https:\/\/tinyprune\.com\/sitemap\.xml\s*$/m.test(robots)) fail('robots.txt must discover the canonical sitemap');

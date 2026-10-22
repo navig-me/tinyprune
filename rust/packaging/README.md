@@ -1,6 +1,6 @@
-# Rust dev-artifact packaging (unreleased)
+# Rust developer-preview packaging
 
-Scaffolding that turns the Rust daemon (`tinyprune-agentd`), CLI (`tinyprune`) and, best effort, the Tauri UI (`tinyprune-ui`) into **unreleased development archives** for Linux and Windows. TinyPrune remains macOS-only; the Swift app is the product and owns the macOS agent. Nothing here is a release: no signing, no publishing, no tags, no secrets, no installer UI, no auto-update. Do not link these archives from public pages.
+Packages the Rust daemon (`tinyprune-agentd`), CLI (`tinyprune`) and, when built, Tauri UI (`tinyprune-ui`) into unsigned Linux and Windows archives. The [0.2.0 developer preview](https://github.com/navig-me/tinyprune/releases/tag/rust-preview-0.2.0) is published; these platforms are not supported general-desktop products. macOS uses the separate Swift application. The artifact-build workflow uses no secrets and does not publish releases; the separate reviewed signing workflow authenticates the update feed with the existing production key. See the [release log](../../RELEASES.md#020) for published artifacts, hashes and verification evidence.
 
 **macOS is deliberately not packaged.** The macOS CI leg only builds and runs `--version` on the binaries.
 
@@ -10,8 +10,8 @@ Scaffolding that turns the Rust daemon (`tinyprune-agentd`), CLI (`tinyprune`) a
 packaging/
   common/stamp.sh          VERSION stamp (crate versions from Cargo.toml + git sha)
   linux/                   tinyprune-agentd.service, tinyprune.desktop, install.sh, uninstall.sh,
-                           package.sh, test-install.sh (hermetic test, fake systemctl)
-  windows/                 install.ps1, uninstall.ps1, package.ps1
+                           install-managed.sh, uninstall-managed.sh, package.sh, test-install.sh
+  windows/                 install.ps1, uninstall.ps1, install-managed.ps1, uninstall-managed.ps1, package.ps1
 ```
 
 CI: `.github/workflows/rust-artifacts.yml` (`workflow_dispatch` and `pull_request` touching `rust/**`; `contents: read`; pinned action SHAs; 7-day artifact retention; no release/publish step).
@@ -25,6 +25,28 @@ CI: `.github/workflows/rust-artifacts.yml` (`workflow_dispatch` and `pull_reques
 ### Doctor-friendly layout
 
 Binaries install to `<prefix>/bin` (Linux `~/.local/bin`, Windows `%LOCALAPPDATA%\Programs\TinyPrune\bin`); the CLI finds the agent through the same default endpoint the agent uses (Linux `${XDG_DATA_HOME:-~/.local/share}/tinyprune/agent.sock`; Windows per-user named pipe). Installers end by printing `tinyprune doctor`. Agent state is separate from the install: Linux `${XDG_DATA_HOME:-~/.local/share}/tinyprune`, Windows `%LOCALAPPDATA%\TinyPrune`.
+
+## Install the published developer preview with updates
+
+Download and extract the archive for your platform from the [preview release](https://github.com/navig-me/tinyprune/releases/tag/rust-preview-0.2.0), and verify its SHA-256 against the attached checksum files. The signed feed authenticates those archive hashes; it does not OS-sign the executables or remove trust warnings.
+
+For a managed, updatable installation, run from the extracted archive as your normal user:
+
+```sh
+# Linux: install the managed layout and start the systemd user service.
+./install-managed.sh --enable-service
+# For an isolated CLI-only inspection without a service, use --no-systemd instead.
+```
+
+```powershell
+# Windows: normal, non-administrator PowerShell.
+powershell -ExecutionPolicy Bypass -File .\install-managed.ps1 -Start -AddToPath
+# Open a new terminal so the PATH change is visible.
+```
+
+Then run `tinyprune update check --json`. A current installation reports `upToDate`; an available update supplies a confirmation token for `tinyprune update install --confirm <token>`. Installation requires explicit confirmation. Both live production feeds passed protected public verification; the published Linux managed client also consumed the real feed in an isolated non-root container. This is not proof of production OS update installation on every platform.
+
+Managed installers use version directories and a current-version pointer rather than overwriting running binaries. Use the corresponding `uninstall-managed.sh` or `uninstall-managed.ps1` for that layout. The `install.sh` / `install.ps1` examples below are **unmanaged** developer installs and are deliberately excluded from in-app updates, as are package-manager installations. Do not overlay a managed installation onto a plain-copy installation; use its own uninstaller first, preserving data unless you explicitly choose a purge.
 
 ## Linux
 
@@ -90,8 +112,8 @@ Update identity: every run stamps `TINYPRUNE_BUILD` (the run's `github.run_numbe
 
 ## What is NOT verified
 
-- Linux scripts: the Docker test above ran locally (Docker Desktop, aarch64 Ubuntu 24.04, systemd 255) and passed with a real `systemd --user`; it is also a step in `rust-artifacts.yml` (not yet run on GitHub, x86_64). The desktop entry is validated from the template, not from an archive, because the headless archive has no UI. Not covered: distro variety, SELinux/AppArmor, `.Trash` (shared sticky directory) handling, and x86_64 locally.
-- Windows scripts: the workflow now runs install, task start, `tinyprune status`, root/rule creation, uninstall and `-Purge` on `windows-2022`, but it has never run; the scripts were not executed by the author. `install.ps1 -AllowElevated` exists solely because hosted runners run as an administrator; whether an Interactive-logon task starts there is untested.
-- The workflow was validated with `actionlint` and YAML parsing only; it has not run on GitHub. The apt package list for the UI, the Windows UI build (the UI has only `icons/icon.png`; `tauri-build` on Windows typically requires `icons/icon.ico`) and Linux UI link are unverified.
+- Linux scripts and UI builds ran in recorded local/CI checks, including the x86_64 build 29 Docker installation check. A separate non-root Ubuntu 24.04 container installed the published managed archive and successfully checked the live production feed without starting systemd or installing an update. Distro variety, SELinux/AppArmor and desktop acceptance remain outside this evidence.
+- Windows install/task/uninstall and managed update/rollback paths ran on hosted `windows-2022` with real binaries. The update end-to-end check used a throwaway key and loopback feed; it does not prove a production-key update installation, non-admin acceptance, or logon/reboot-trigger behavior.
+- Both 0.2.0 archive builds included the UI. See the [status matrix](../README.md#status-matrix) and [release log](../../RELEASES.md#020) for exact runs, native UI checks and remaining screen-reader/general-desktop limits; a green build alone is not that acceptance.
 - Tauri bundling, `.deb`, AppImage, MSI: not attempted.
 - Archives are unsigned and unreproducible beyond a stable VERSION stamp (tar/zip metadata is not normalised on Windows).
