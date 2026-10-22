@@ -1,0 +1,24 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>TinyPrune 0.2.3</title><style>body{font:14px -apple-system,BlinkMacSystemFont,sans-serif;line-height:1.5;margin:20px}pre{font:inherit;white-space:pre-wrap;overflow-wrap:anywhere}</style><body><h2>TinyPrune 0.2.3</h2><p>Choose Install Update to download, verify and install this release. TinyPrune will relaunch when it finishes. Your rules and settings are kept.</p><pre>## What&#x27;s changed
+
+- Add the website privacy policy at https://tinyprune.com/privacy, linked from the footer, covering local app data, update checks, website analytics, and voluntary support disclosures.
+- Settings shows the app version and a **Check for Updates…** button on macOS (Sparkle, or the GitHub notifier for Homebrew copies). The Linux/Windows Rust UI source adds a Version and updates panel that runs the signed-feed `tinyprune update check`; it never installs without the confirmation command. Rust preview downloads remain 0.2.0 build 29.
+- AI agent templates now suggest each tool&#x27;s own folder and mark which exist on this Mac: session transcripts for Claude Code, Codex (active and archived), OMP, pi and Gemini CLI; debug logs for OMP, Codex, GitHub Copilot and opencode. Session rule also matches `.jsonl.zst`. Folders are suggestions only; you still choose and authorize each. Template shape changed to `suggestedFolders` in Swift, Rust and golden fixtures.
+- Faster sidebar switching on macOS: navigation no longer reloads all agent state on every click (reload only if state is older than 10 s), unchanged values no longer republish, derived upcoming lists are cached, and Activity rows are lazy.
+- Overview shows less text: shorter status lines, empty states and ledger captions.
+- OMP session tool-output logs can be matched using the debug-logs template. Reports, images, session transcripts and lock files are excluded; broad templates remain Preview-first.
+- Refine the privacy page into a readable document with section navigation. Shorten FAQ answers into native expandable disclosures and add direct Windows/Linux preview download buttons beside the Mac option.
+- Not measured: a drop in main-thread stall time (page construction still dominates), real feed checks from the Rust UI button, or the new Settings button in the shipped app.
+
+## Install and trust
+
+This preview is ad-hoc signed, NOT Developer ID signed, and NOT notarized. Download only from this repository and verify the SHA-256 checksum.
+
+On macOS 15 Sequoia and macOS 26 Tahoe: copy TinyPrune.app into /Applications, try opening it once, dismiss the Gatekeeper alert, then open System Settings &gt; Privacy &amp; Security &gt; Open Anyway. Confirm Open and authenticate if prompted. Control-click Open is not a substitute on these macOS versions.
+
+If you deliberately trust this preview and Open Anyway is unavailable, run exactly:
+
+    xattr -dr com.apple.quarantine /Applications/TinyPrune.app
+
+Then open /Applications/TinyPrune.app again. This removes quarantine, not proof of safety; it does not notarize the app. Finder extension and launch-at-login may need separate approval in System Settings &gt; General &gt; Login Items &amp; Extensions. Direct builds with a configured update public key support EdDSA-authenticated in-app updates; without that key, download updates manually. Homebrew updates only through the cask. EdDSA authentication is not Apple trust or notarization. Preview signing does not guarantee Finder extension or login-item activation on every Mac.
+
+</pre></body></html>
