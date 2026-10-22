@@ -120,7 +120,7 @@ package struct TinyPruneRootView: View {
             await model.refresh()
             model.startBackgroundRefresh()
         }
-        .onChange(of: router.selection) { _, _ in Task { await model.refresh() } }
+        .onChange(of: router.selection) { _, _ in Task { await model.refreshAfterNavigation() } }
     }
 
     /// Reactive: follows every policy refresh. Completing onboarding (or any managed folder or rule appearing) ends it.

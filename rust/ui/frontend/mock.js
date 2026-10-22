@@ -23,7 +23,21 @@ export function createMock(state) {
       case 'saveRule': if (args.revision !== policy.revision) throw new Error('Policy changed. Reload before saving.'); policy.rules = [...policy.rules.filter(r=>r.id!==args.rule.id),structuredClone(args.rule)]; policy.revision++; return {revision:policy.revision,auditEventIds:['fixture-audit']};
       case 'setGlobalPause': policy.globallyPaused=args.paused; policy.revision++; return {revision:policy.revision,auditEventIds:['fixture-pause']};
       case 'updateSettings': settings=structuredClone(args); return {revision:policy.revision,auditEventIds:['fixture-settings']};
+      case 'health': return { protocolVersion: 1, serviceVersion: MOCK_UI_VERSION };
       default: throw new Error(`Mock operation not implemented: ${operation}`);
     }
   };
+}
+export const MOCK_UI_VERSION = '0.2.2';
+// Fixture outputs shaped like `tinyprune update check --json` (exit codes are in the `exitCode` field on failures).
+export function mockUpdateCheck(kind) {
+  const failure = (code, message, exitCode, status = 'error') => ({ schemaVersion: 1, status, code, message, exitCode });
+  const outputs = {
+    current: { schemaVersion: 1, status: 'upToDate', installedVersion: MOCK_UI_VERSION, installedBuild: 41 },
+    available: { schemaVersion: 1, status: 'available', version: '0.2.3', build: 42, notesUrl: 'https://tinyprune.com/releases/0.2.3', published: '2026-10-22T00:00:00Z', platform: 'linux-x86_64', sizeBytes: 9437184, confirmationToken: 'fixture-token', installCommand: 'tinyprune update install --confirm fixture-token' },
+    offline: failure('unavailable', 'fixture: network unreachable', 69),
+    rejected: failure('feedRejected', 'fixture: bad signature', 65),
+    disabled: failure('disabled', 'This copy is not in a managed install.', 78, 'disabled'),
+  };
+  return JSON.stringify(outputs[kind] ?? failure('unknown', 'Fixture update state not implemented.', 1));
 }

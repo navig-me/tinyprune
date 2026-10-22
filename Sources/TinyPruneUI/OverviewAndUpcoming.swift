@@ -73,7 +73,7 @@ struct OverviewPage: View {
                     Text(headline)
                         .font(Typography.headline)
                         .accessibilityAddTraits(.isHeader)
-                    Text(subline).foregroundStyle(.secondary)
+                    if !subline.isEmpty { Text(subline).foregroundStyle(.secondary) }
                     ScheduleReadinessNotice()
                     if needsAttention && model.pruningHaltedReason == nil {
                         Button("See Activity") {
@@ -89,7 +89,7 @@ struct OverviewPage: View {
                 VStack(alignment: .leading, spacing: 0) {
                     SectionTitle("Managed places").padding(.bottom, 12)
                     if places.isEmpty {
-                        PruneEmptyState(title: "Choose your first place", message: "Give a folder’s disposable contents a lifetime. Start with a template, then review its matches.", symbol: "folder.badge.plus")
+                        PruneEmptyState(title: "Choose your first place", message: "Start with a template, then review its matches.", symbol: "folder.badge.plus")
                         Button("Browse templates") { router.selection = .templates }
                     }
                     ForEach(places) { root in
@@ -124,12 +124,8 @@ struct OverviewPage: View {
 
                 VStack(alignment: .leading, spacing: 10) {
                     SectionTitle(nextIsPreviewOnly ? "Preview matches" : "Next to prune")
-                    if nextIsPreviewOnly {
-                        Text("These come from Preview rules. Nothing will move to Trash until you activate a rule.")
-                            .font(.subheadline).foregroundStyle(.secondary)
-                    }
                     if nextItems.isEmpty {
-                        PruneEmptyState(title: "Nothing waiting", message: "When a matching item gets a deadline, it appears here. Keep protections take precedence over every rule.", symbol: "clock.badge.checkmark")
+                        PruneEmptyState(title: "Nothing waiting", message: "Items appear here once they have a deadline.", symbol: "clock.badge.checkmark")
                     }
                     ForEach(nextItems.prefix(3)) { item in
                         HStack {
@@ -151,7 +147,7 @@ struct OverviewPage: View {
                             .buttonStyle(PruneLinkStyle())
                     }
                     if !nextIsPreviewOnly && model.previewCount > 0 {
-                        Text("\(model.previewCount) more match\(model.previewCount == 1 ? "" : "es") from Preview rules will not move.")
+                        Text("+\(model.previewCount) in Preview, not moving")
                             .font(.subheadline).foregroundStyle(.secondary)
                     }
                 }
@@ -181,16 +177,15 @@ struct OverviewPage: View {
         if let reason = model.pruningHaltedReason { return reason }
         if needsAttention {
             let count = model.attentionItems.count
-            return "\(count == 1 ? "A cleanup" : "\(count) cleanups") in the last 24 hours could not move an item to Trash. See Activity for details."
+            return "\(count == 1 ? "A cleanup" : "\(count) cleanups") in the last 24 hours could not move an item to Trash."
         }
-        if overview.policy.globallyPaused { return "Nothing will move to Trash until you resume." }
+        if overview.policy.globallyPaused { return "Resume to move items to Trash." }
         if overview.policy.rules.contains(where: { $0.state == .preview }) {
             return overview.policy.rules.contains(where: { $0.state == .active })
-                ? "Active rules move due items to Trash. Preview rules schedule matches but never touch your files."
-                : "Preview rules schedule matches but never touch your files. Activate a rule to start pruning."
+                ? "Preview rules never touch your files."
+                : "Activate a rule to start pruning."
         }
-        if places.isEmpty { return "Choose a folder to give its contents a lifetime." }
-        return "TinyPrune is running quietly."
+        return ""
     }
 
     /// Active and Preview can both apply to one place; show both so Preview never hides Active.
@@ -261,8 +256,19 @@ struct UpcomingPage: View {
 
     private var selectedItem: AgentUpcomingItem? { items.first { $0.id == router.inspectedItemID } }
 
+    /// One pass over the loaded page. Bucketing per group with a filter per group evaluated a calendar lookup
+    /// for every item four times on every body evaluation.
+    private static func grouped(_ items: [AgentUpcomingItem]) -> [(group: UpcomingGroup, rows: [AgentUpcomingItem])] {
+        let now = Date()
+        var buckets: [UpcomingGroup: [AgentUpcomingItem]] = [:]
+        for item in items { buckets[UpcomingGroup(item.explanation.scheduledAt, now: now), default: []].append(item) }
+        return UpcomingGroup.allCases.compactMap { group in buckets[group].map { (group, $0) } }
+    }
+
     var body: some View {
-        HStack(spacing: 0) {
+        let grouped = Self.grouped(items)
+        let customPaths = self.customPaths
+        return HStack(spacing: 0) {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 22, pinnedViews: []) {
                 if let rule = filterRule {
@@ -287,10 +293,11 @@ struct UpcomingPage: View {
                             : "Matches appear here once a rule finds items. Preview rules list them without touching your files.",
                         symbol: "clock")
                 }
-                ForEach(UpcomingGroup.allCases, id: \.rawValue) { group in
-                    let rows = items.filter { UpcomingGroup($0.explanation.scheduledAt) == group }
+                ForEach(grouped, id: \.group.rawValue) { entry in
+                    let group = entry.group
+                    let rows = entry.rows
                     if !rows.isEmpty {
-                        VStack(alignment: .leading, spacing: 0) {
+                        LazyVStack(alignment: .leading, spacing: 0) {
                             SectionTitle(group.title).padding(.bottom, 8)
                             ForEach(Array(rows.enumerated()), id: \.element.id) { index, item in
                                 Button {

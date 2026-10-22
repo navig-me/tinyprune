@@ -72,7 +72,7 @@ guard GlobPattern("**/node_modules").matches("node_modules"),
 
 // Templates must produce ordinary valid rules that resolve without ambiguity.
 for template in RuleTemplate.allCases {
-    let folder = template.suggestedFolder.map { "/Users/example" + $0.dropFirst() } ?? "/Users/example/Work"
+    let folder = template.suggestedFolders.first.map { "/Users/example" + $0.path.dropFirst() } ?? "/Users/example/Work"
     _ = try ManagedRoot(displayName: template.title, path: folder, bookmarkData: Data([1]))
     let produced = try template.rules(in: folder, state: .preview)
     guard !produced.isEmpty, produced.allSatisfy({ $0.state == .preview && !$0.naturalDescription().isEmpty }) else {
@@ -80,12 +80,13 @@ for template in RuleTemplate.allCases {
     }
 }
 // Exercise actual app-cache evaluation, not just template construction.
-for template in RuleTemplate.allCases where template.suggestedFolder != nil {
-    let folder = "/Users/example" + template.suggestedFolder!.dropFirst()
+for template in RuleTemplate.allCases where !template.suggestedFolders.isEmpty {
+    let folder = "/Users/example" + template.suggestedFolders[0].path.dropFirst()
     let rule = try template.rules(in: folder, state: .active)[0]
     let name = template == .cargoRegistryCache ? "registry/package.crate" :
         template == .homebrewDownloads ? "hash--package.tar.gz" :
-        template == .agentSessionLogs ? "project/session.jsonl" : "old-cache"
+        template == .agentSessionLogs ? "project/session.jsonl" :
+        template == .agentDebugLogs ? "debug.log" : "old-cache"
     let modified = Date(timeIntervalSince1970: 0)
     let item = RuleCandidate(
         identity: FilesystemIdentity(volumeIdentifier: UUID(), resourceIdentifier: Data(name.utf8), pathHint: folder + "/" + name),

@@ -83,13 +83,10 @@ package struct ActivityTrashRecovery: View {
                 .keyboardShortcut(shortcut)
                 .disabled(!available)
                 .accessibilityLabel("Show \(item.identity?.pathHint ?? "item") in Trash")
-                .help("Reveal the recorded Trash location in Finder. This does not restore the item.")
+                .help("Reveal the recorded Trash location in Finder. This does not restore the item; use Put Back in Finder to restore, if available.")
             if !available {
                 Text("No longer in Trash").font(.manropeCaption).foregroundStyle(.secondary)
             }
-            Text("To restore, use Finder’s Put Back in Trash, if available. TinyPrune does not restore items.")
-                .font(.manropeCaption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
         }
         .onAppear { available = action.destination(for: item) != nil }
         .onChange(of: scenePhase) { _, phase in
@@ -118,7 +115,7 @@ struct ActivityPage: View {
                     PruneEmptyState(title: "A quiet beginning", message: "Rule changes, protections, and every move to Trash are recorded here. Audit history stays on this Mac.", symbol: "list.bullet.rectangle")
                 }
                 ForEach(days, id: \.day) { group in
-                    VStack(alignment: .leading, spacing: 0) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
                         SectionTitle(group.day.formatted(date: .complete, time: .omitted)).padding(.bottom, 8)
                         ForEach(group.items) { item in
                             HStack(alignment: .firstTextBaseline, spacing: 14) {
@@ -162,6 +159,7 @@ struct ActivityPage: View {
 
 struct TemplatesPage: View {
     @State private var applying: RuleTemplate?
+    @State private var foundFolders: [String: [DetectedTemplateFolder]] = [:]
 
     var body: some View {
         ScrollView {
@@ -177,6 +175,10 @@ struct TemplatesPage: View {
                                 if template.isBroad { Pill(text: "Starts in Preview", color: PrunePalette.caution) }
                             }
                             Text(template.summary).foregroundStyle(.secondary)
+                            if let found = foundFolders[template.id], !found.isEmpty {
+                                Text("Found on this Mac: " + found.map(\.folder.name).joined(separator: ", "))
+                                    .font(.manropeSubheadline).foregroundStyle(PrunePalette.safe)
+                            }
                         }
                         Spacer()
                         Button("Use template…") { applying = template }
@@ -192,6 +194,31 @@ struct TemplatesPage: View {
         }
         .font(.manropeBody)
         .sheet(item: $applying) { TemplateApplySheet(template: $0) }
+        .task {
+            // Existence checks stay off the main actor so switching to this page never waits on the filesystem.
+            var found: [String: [DetectedTemplateFolder]] = [:]
+            for template in RuleTemplate.allCases where !template.suggestedFolders.isEmpty {
+                found[template.id] = await DetectedTemplateFolder.find(for: template)
+            }
+            foundFolders = found
+        }
+    }
+}
+
+/// A suggested template folder that exists on this Mac (metadata check only; no access is granted by this).
+struct DetectedTemplateFolder: Sendable {
+    let folder: TemplateFolder
+    let url: URL
+
+    static func find(for template: RuleTemplate) async -> [DetectedTemplateFolder] {
+        await Task.detached(priority: .utility) {
+            template.suggestedFolders.compactMap { folder in
+                let url = URL(fileURLWithPath: NSString(string: folder.path).expandingTildeInPath)
+                var isDirectory: ObjCBool = false
+                guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue else { return nil }
+                return DetectedTemplateFolder(folder: folder, url: url)
+            }
+        }.value
     }
 }
 
@@ -214,6 +241,7 @@ package struct TemplateApplySheet: View {
     @State private var temporaryDays = 3.0
     @State private var isSaving = false
     @State private var errorMessage: String?
+    @State private var detected: [DetectedTemplateFolder] = []
 
     package var body: some View {
         ScrollView {
@@ -232,6 +260,28 @@ package struct TemplateApplySheet: View {
                 }
                 Spacer()
                 Button("Choose folder…") { choose() }
+            }
+            if folder == nil, prefillPath == nil, !template.suggestedFolders.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(detected.isEmpty ? "Usual folders (none found on this Mac)" : "Found on this Mac")
+                        .font(.manropeSubheadline).foregroundStyle(.secondary)
+                    ForEach(detected.isEmpty ? [] : detected, id: \.folder.path) { item in
+                        Button { choose(startingAt: item.url) } label: {
+                            HStack {
+                                Text(item.folder.name)
+                                Spacer()
+                                Text(item.folder.path).font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
+                            }
+                        }
+                        .accessibilityLabel("Use \(item.folder.name) folder \(item.folder.path)")
+                    }
+                    if detected.isEmpty {
+                        Text(template.suggestedFolders.map { "\($0.name): \($0.path)" }.joined(separator: "\n"))
+                            .font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
+                    }
+                    Text("You still confirm the folder in the next step; TinyPrune only gets access to what you choose.")
+                        .font(.manropeSubheadline).foregroundStyle(.secondary)
+                }
             }
             if template == .temporaryWorkspace {
                 Stepper("Expire after \(Int(temporaryDays)) day\(temporaryDays == 1 ? "" : "s")", value: $temporaryDays, in: 1...365)
@@ -269,21 +319,23 @@ package struct TemplateApplySheet: View {
         .font(.manropeBody)
         .frame(minWidth: 540, idealWidth: 540, maxWidth: 760, maxHeight: 700)
         .onAppear { startInPreview = previewByDefault || forcesPreview }
+        .task { detected = await DetectedTemplateFolder.find(for: template) }
         .alert("Could not create rules", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
             Button("OK", role: .cancel) { errorMessage = nil }
         } message: { Text(errorMessage ?? "") }
     }
 
-    private func choose() {
+    private func choose(startingAt folderURL: URL? = nil) {
         do {
-            let start: URL? = switch template {
-            case .downloads: FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
-            case .screenshots: FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first
-            default:
-                // Presets for tools such as Xcode or pip name their usual folder; open there only if it exists.
-                template.suggestedFolder
-                    .map { URL(fileURLWithPath: NSString(string: $0).expandingTildeInPath) }
-                    .flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
+            let start: URL?
+            if let folderURL {
+                start = folderURL
+            } else {
+                switch template {
+                case .downloads: start = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+                case .screenshots: start = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first
+                default: start = detected.first?.url
+                }
             }
             if let chosen = try ChosenFolder.choose(startingAt: start) { folder = chosen }
         } catch { errorMessage = error.localizedDescription }
@@ -405,6 +457,13 @@ struct SettingsPage: View {
         "mkdir -p /usr/local/bin && ln -s \"\(cliPath)\" /usr/local/bin/tinyprune"
     }
 
+    private static var versionText: String {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "unknown"
+        let build = info?["CFBundleVersion"] as? String
+        return build.map { "\(version) (build \($0))" } ?? version
+    }
+
     var body: some View {
         Form {
             Section("General") {
@@ -416,6 +475,17 @@ struct SettingsPage: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 LabeledContent("Background agent", value: agentStatus)
+                LabeledContent("Version", value: Self.versionText)
+                if let check = model.updateCheck {
+                    HStack {
+                        Button("Check for Updates…") { check.perform() }
+                            .disabled(!check.isEnabled)
+                            .help(check.help)
+                        if let notice = model.updateNotice {
+                            Text("TinyPrune \(notice.version) is available").font(.caption).foregroundStyle(PrunePalette.safe)
+                        }
+                    }
+                }
             }
             if let issue = model.settingsIssue {
                 Section("Agent settings unavailable") {

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Settings shows the app version and a **Check for Updates…** button on macOS (Sparkle, or the GitHub notifier for Homebrew copies). The Linux/Windows Rust UI gets a Version and updates panel with a Check for updates button that runs the signed-feed `tinyprune update check`; it never installs without the confirm command. Neither is released yet.
+- AI agent templates now suggest each tool's own folder and mark which exist on this Mac: session transcripts for Claude Code, Codex (active and archived), OMP, pi and Gemini CLI; debug logs for OMP, Codex, GitHub Copilot and opencode. Session rule also matches `.jsonl.zst`. Folders are suggestions only; you still choose and authorize each. Template shape changed to `suggestedFolders` in Swift, Rust and golden fixtures.
+- Faster sidebar switching on macOS: navigation no longer reloads all agent state on every click (reload only if state is older than 10 s), unchanged values no longer republish, derived upcoming lists are cached, and Activity rows are lazy.
+- Overview shows less text: shorter status lines, empty states and ledger captions.
+- Not measured: a drop in main-thread stall time (page construction still dominates), real feed checks from the Rust UI button, or the new Settings button in the shipped app.
+
 ## 0.2.2 - 2026-10-22
 
 - Fix the app crashing on launch after a Homebrew upgrade. Re-registering the background agent trapped in `SMAppSystemServices.restartAgent()`: the `unregister` completion handler inherited `@MainActor` isolation inside a `@MainActor` class, and ServiceManagement calls it on an XPC queue, so Swift's isolation assertion aborted the app (`_dispatch_assert_queue_fail`). The handler is now `@Sendable`. The 0.2.1 change made this path run for an agent removed by the cask, which exposed the crash; 0.2.0 crashed in the same call after an upgrade.

@@ -57,6 +57,19 @@ package struct PruningHaltResolution {
     }
 }
 
+/// "Check for Updates…" supplied by the application, so Settings can offer it without knowing which updater is in use.
+package struct UpdateCheckAction {
+    package let isEnabled: Bool
+    package let help: String
+    package let perform: @MainActor () -> Void
+
+    package init(isEnabled: Bool, help: String, perform: @escaping @MainActor () -> Void) {
+        self.isEnabled = isEnabled
+        self.help = help
+        self.perform = perform
+    }
+}
+
 /// A newer release found by the optional, user-controlled version check (for builds without in-app installation).
 /// Nothing here installs anything: the actions only open a link or copy a command.
 package struct UpdateNotice {
@@ -226,7 +239,14 @@ package final class SMAppSystemServices: AgentSystemServices {
 
 @MainActor
 package final class AgentViewModel: ObservableObject {
-    @Published package private(set) var overview: AgentOverviewSnapshot?
+    @Published package private(set) var overview: AgentOverviewSnapshot? {
+        didSet {
+            let upcoming = overview?.upcoming ?? []
+            activeUpcoming = upcoming.filter { $0.explanation.disposition == .active }
+            activeUpcomingByDeadline = activeUpcoming.sorted { $0.explanation.scheduledAt < $1.explanation.scheduledAt }
+            previewUpcoming = upcoming.filter { $0.explanation.disposition == .preview }
+        }
+    }
     @Published package private(set) var activity: [AgentActivityItem] = []
     @Published package private(set) var settings = AgentSettings.default
     @Published package private(set) var hasLoadedSettings = false
@@ -242,6 +262,8 @@ package final class AgentViewModel: ObservableObject {
     @Published package var pruningHaltedReason: String?
     /// Optional one-tap way out of `pruningHaltedReason`, supplied by the application (for example "Review Update…").
     @Published package var pruningHaltResolution: PruningHaltResolution?
+    /// Set by the application; nil in builds that have no updater (for example UI snapshots).
+    @Published package var updateCheck: UpdateCheckAction?
     /// A newer release is available. Set by the application; independent of pruning safety.
     @Published package var updateNotice: UpdateNotice?
     /// Failure of the last menu-bar or quick action, shown where the action was offered.
@@ -470,7 +492,8 @@ package final class AgentViewModel: ObservableObject {
             refreshPending = true
             guard !isRefreshing else { return }
             isRefreshing = true
-            isLoading = overview == nil
+            let loadingNow = overview == nil
+            if isLoading != loadingNow { isLoading = loadingNow }
             Task {
                 registrationStatus = services.agentStatus
                 if !reconciledAgentThisSession {
@@ -488,10 +511,21 @@ package final class AgentViewModel: ObservableObject {
                     scheduleSecondaryLoads()
                     for waiter in waiters { waiter.resume() }
                 } while refreshPending
-                isLoading = false
+                if isLoading { isLoading = false }
                 isRefreshing = false
             }
         }
+    }
+
+    /// Refreshes after the user switches pages, but never during the switch itself: a fresh load issues three XPC
+    /// requests and republishes state while the new page is first being laid out. State fresher than `staleAfter`
+    /// is left alone (the background timer and app activation keep it honest); older state reloads once the
+    /// transition has settled.
+    package func refreshAfterNavigation(staleAfter: TimeInterval = 10, settleDelay: Duration = .milliseconds(400)) async {
+        if let refreshedAt, connectionIssue == nil, now().timeIntervalSince(refreshedAt) < staleAfter { return }
+        try? await Task.sleep(for: settleDelay)
+        guard !Task.isCancelled else { return }
+        await refresh()
     }
 
     private func loadState(allowRepair: Bool = true) async {
@@ -501,14 +535,14 @@ package final class AgentViewModel: ObservableObject {
                 return
             }
             let previousRoots = overview?.policy.managedRoots
-            overview = loaded
+            if overview != loaded { overview = loaded }
             if previousRoots != loaded.policy.managedRoots {
                 DistributedNotificationCenter.default().postNotificationName(
                     Notification.Name("com.navig-me.tinyprune.managedRootsChanged"),
                     object: nil, userInfo: nil, deliverImmediately: true
                 )
             }
-            connectionIssue = nil
+            if connectionIssue != nil { connectionIssue = nil }
             refreshedAt = now()
         } catch is CancellationError {
             return
@@ -538,7 +572,7 @@ package final class AgentViewModel: ObservableObject {
                !Task.isCancelled, generation == secondaryGeneration {
                 let knownMoves = Set(activity.lazy.filter { $0.kind == .movedToTrash }.map(\.id))
                 let hasNewMove = items.contains { $0.kind == .movedToTrash && !knownMoves.contains($0.id) }
-                activity = items
+                if activity != items { activity = items }
                 if hasNewMove { await refresh() }
                 guard !Task.isCancelled else { return }
                 await notifyAboutFailures(items)
@@ -549,15 +583,17 @@ package final class AgentViewModel: ObservableObject {
     private func invalidateSettingsLoad() {
         settingsGeneration += 1
         settingsTask?.cancel()
-        isLoadingSettings = false
+        if isLoadingSettings { isLoadingSettings = false }
     }
 
     private func scheduleSettingsLoad() {
         guard !isSavingSettings else { return }
         invalidateSettingsLoad()
         let generation = settingsGeneration
-        isLoadingSettings = true
-        settingsIssue = nil
+        // A background reload of settings that are already shown publishes nothing: every `@Published` write
+        // re-evaluates every visible page, and the flag is only observable while settings are missing or failed.
+        if !hasLoadedSettings || settingsIssue != nil { isLoadingSettings = true }
+        if settingsIssue != nil { settingsIssue = nil }
         settingsTask = Task { [weak self] in
             guard let self else { return }
             do {
@@ -565,13 +601,13 @@ package final class AgentViewModel: ObservableObject {
                     throw PolicyMutationError.unexpectedResponse
                 }
                 guard !Task.isCancelled, generation == settingsGeneration else { return }
-                settings = loaded
-                hasLoadedSettings = true
-                isLoadingSettings = false
+                if settings != loaded { settings = loaded }
+                if !hasLoadedSettings { hasLoadedSettings = true }
+                if isLoadingSettings { isLoadingSettings = false }
             } catch {
                 guard !Task.isCancelled, generation == settingsGeneration else { return }
                 settingsIssue = Self.describe(error)
-                isLoadingSettings = false
+                if isLoadingSettings { isLoadingSettings = false }
             }
         }
     }
@@ -772,7 +808,7 @@ package final class AgentViewModel: ObservableObject {
             ledgerMeasurementWaiters.removeAll()
             for waiter in waiters { waiter.resume() }
         }
-        let candidates = activeUpcoming.sorted { $0.explanation.scheduledAt < $1.explanation.scheduledAt }.prefix(100)
+        let candidates = activeUpcomingByDeadline.prefix(100)
         let missing = candidates.filter {
             let key = Self.ledgerKey($0)
             return ledgerSizes[key] == nil && !ledgerSizeFailures.contains(key)
@@ -861,10 +897,12 @@ package final class AgentViewModel: ObservableObject {
 
     // MARK: Derived honesty
 
-    /// Matches that will really move to Trash.
-    package var activeUpcoming: [AgentUpcomingItem] { overview?.upcoming.filter { $0.explanation.disposition == .active } ?? [] }
+    /// Matches that will really move to Trash. Derived once per overview, not once per SwiftUI body evaluation.
+    package private(set) var activeUpcoming: [AgentUpcomingItem] = []
+    /// `activeUpcoming` ordered by deadline; the order the reclaim ledger measures and sums in.
+    package private(set) var activeUpcomingByDeadline: [AgentUpcomingItem] = []
     /// Matches from Preview rules, which never touch files.
-    package var previewUpcoming: [AgentUpcomingItem] { overview?.upcoming.filter { $0.explanation.disposition == .preview } ?? [] }
+    package private(set) var previewUpcoming: [AgentUpcomingItem] = []
     package var activeCount: Int { overview?.deadlineSummary?.active ?? activeUpcoming.count }
     package var previewCount: Int { overview?.deadlineSummary?.preview ?? previewUpcoming.count }
     package var activeSoonCount: Int {

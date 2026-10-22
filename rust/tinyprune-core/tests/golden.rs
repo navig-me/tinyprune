@@ -185,7 +185,7 @@ fn run(op: &str, input: &Obj) -> Result<Value, RunError> {
             let template = tinyprune_core::templates::RuleTemplate::parse(&string(input, "template")?).ok_or_else(|| RunError::Format("invalid template".into()))?;
             let rules = template.rules(&string(input, "path")?, raw(input, "state", RuleState::Active, RuleState::parse)?,
                 input.get("temporaryLifetime").and_then(Value::as_f64).unwrap_or(259200.0), || Uuid(0))?;
-            Ok(json!({"title": template.title, "summary": template.summary, "suggestedFolder": template.suggested_folder, "isBroad": template.is_broad,
+            Ok(json!({"title": template.title, "summary": template.summary, "suggestedFolders": template.suggested_folders.iter().map(|(name, path)| json!({"name": name, "path": path})).collect::<Vec<_>>(), "isBroad": template.is_broad,
                 "rules": rules.iter().map(|rule| { let mut value = encode_rule(rule); value.as_object_mut().unwrap().remove("id"); value }).collect::<Vec<_>>()}))
         }
         "broadness" => {
