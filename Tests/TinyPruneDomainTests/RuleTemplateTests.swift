@@ -105,6 +105,16 @@ import Testing
         }
     }
 
+    @Test func debugLogRuleAgesOutOmpToolOutputButNeverReportsTranscriptsOrImages() throws {
+        let rule = try #require(RuleTemplate.agentDebugLogs.rules(in: home + "/.omp/agent/sessions", state: .preview).first)
+        let session = "-proj/2026-10-10T02-14-45-018Z_abc"
+        #expect(rule.matcher.matches(name: "5.bash.log", relativePath: session + "/5.bash.log", kind: .file))
+        for path in [session + ".jsonl", session + "/ModelComparison.md", session + "/local/ai-comparison.json", session + "/local/pasted-image-1.png", "-proj/." + "x.jsonl.lock.os"] {
+            let name = String(path.split(separator: "/").last!)
+            #expect(!rule.matcher.matches(name: name, relativePath: path, kind: .file))
+        }
+    }
+
     @Test func cacheGlobsExcludeIncompleteAndUnrelatedFiles() throws {
         let brew = try #require(RuleTemplate.homebrewDownloads.rules(in: home + "/Library/Caches/Homebrew/downloads", state: .preview).first)
         for path in ["hash--package.tar.gz", "hash--app.dmg", "hash--package.zip"] {

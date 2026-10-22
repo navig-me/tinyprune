@@ -71,7 +71,7 @@ public enum RuleTemplate: String, CaseIterable, Codable, Sendable, Identifiable 
         case .gradleCaches: "Generated and downloaded cache files after 90 days without modification; leaves Gradle settings and wrappers alone."
         case .agentSessionLogs: "Conversation transcripts (.jsonl, .jsonl.zst) kept by Claude Code, Codex, OMP, pi, and Gemini CLI, after 60 days without modification. Old sessions can no longer be resumed. Choose one agent's folder at a time."
         case .agentEditBackups: "Per-session file backups that Claude Code keeps for undo, after 30 days without modification."
-        case .agentDebugLogs: "Log and trace files (.log, .trace) written by OMP, Codex, GitHub Copilot, and opencode, after 14 days without modification."
+        case .agentDebugLogs: "Log and trace files (.log, .trace) written by OMP (including per-session tool output), Codex, GitHub Copilot, and opencode, after 14 days without modification. Session transcripts, reports, and images are not matched."
         }
     }
 
@@ -98,6 +98,7 @@ public enum RuleTemplate: String, CaseIterable, Codable, Sendable, Identifiable 
         case .agentEditBackups: [TemplateFolder("Claude Code", "~/.claude/file-history")]
         case .agentDebugLogs: [
             TemplateFolder("OMP", "~/.omp/logs"),
+            TemplateFolder("OMP session tool output", "~/.omp/agent/sessions"),
             TemplateFolder("Codex", "~/.codex/log"),
             TemplateFolder("GitHub Copilot", "~/.copilot/logs"),
             TemplateFolder("opencode", "~/.local/share/opencode/log"),

@@ -26,8 +26,8 @@ impl RuleTemplate {
             "agentSessionLogs" => ("agentSessionLogs", "AI Agent Session Logs", "Conversation transcripts (.jsonl, .jsonl.zst) kept by Claude Code, Codex, OMP, pi, and Gemini CLI, after 60 days without modification. Old sessions can no longer be resumed. Choose one agent's folder at a time.",
                 &[("Claude Code", "~/.claude/projects"), ("Codex", "~/.codex/sessions"), ("Codex (archived)", "~/.codex/archived_sessions"), ("OMP", "~/.omp/agent/sessions"), ("pi", "~/.pi/agent/sessions"), ("Gemini CLI", "~/.gemini/tmp")], true),
             "agentEditBackups" => ("agentEditBackups", "AI Agent Edit Backups", "Per-session file backups that Claude Code keeps for undo, after 30 days without modification.", &[("Claude Code", "~/.claude/file-history")], true),
-            "agentDebugLogs" => ("agentDebugLogs", "AI Agent Debug Logs", "Log and trace files (.log, .trace) written by OMP, Codex, GitHub Copilot, and opencode, after 14 days without modification.",
-                &[("OMP", "~/.omp/logs"), ("Codex", "~/.codex/log"), ("GitHub Copilot", "~/.copilot/logs"), ("opencode", "~/.local/share/opencode/log")], true),
+            "agentDebugLogs" => ("agentDebugLogs", "AI Agent Debug Logs", "Log and trace files (.log, .trace) written by OMP (including per-session tool output), Codex, GitHub Copilot, and opencode, after 14 days without modification. Session transcripts, reports, and images are not matched.",
+                &[("OMP", "~/.omp/logs"), ("OMP session tool output", "~/.omp/agent/sessions"), ("Codex", "~/.codex/log"), ("GitHub Copilot", "~/.copilot/logs"), ("opencode", "~/.local/share/opencode/log")], true),
             _ => return None,
         };
         Some(Self { key, title, summary, suggested_folders, is_broad })
