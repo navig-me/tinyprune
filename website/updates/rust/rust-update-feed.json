@@ -1,0 +1,24 @@
+{
+  "format": "tinyprune-rust-update-v1",
+  "generated": "2026-10-21T12:17:50Z",
+  "releases": [
+    {
+      "version": "0.2.0",
+      "build": 29,
+      "notes_url": "https://github.com/navig-me/tinyprune/releases/tag/rust-preview-0.2.0",
+      "published": "2026-10-21T12:17:50Z",
+      "artifacts": {
+        "linux-x86_64": {
+          "url": "https://github.com/navig-me/tinyprune/releases/download/rust-preview-0.2.0/tinyprune-dev-0.2.0-g18407d26e218-linux-x86_64.tar.gz",
+          "sha256": "1b972b38025d2dfc5155912e62bc50de263d60c2c7d601501a57ad2b4f223432",
+          "size": 8232019
+        },
+        "windows-x86_64": {
+          "url": "https://github.com/navig-me/tinyprune/releases/download/rust-preview-0.2.0/tinyprune-dev-0.2.0-g18407d26e218-windows-x86_64.zip",
+          "sha256": "2ae730ce1ee58275c18cc2e3c1830d7cd02cda4ae90ebefd6882a0b341ae72eb",
+          "size": 7867294
+        }
+      }
+    }
+  ]
+}
