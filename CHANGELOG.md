@@ -2,7 +2,10 @@
 
 ## Unreleased
 
-- Fix `brew upgrade` leaving "Agent unavailable": the cask's `uninstall launchctl:` step removes the background agent job, and the app only repaired agents macOS still listed as enabled. An agent this Mac registered before is now registered again on launch; a first launch still waits for "Install background agent".
+## 0.2.1 - 2026-10-22
+
+- Fix `brew upgrade` leaving "Agent unavailable": the cask's `uninstall launchctl:` step removes the background agent job, and the app only repaired agents macOS still listed as enabled. An agent this Mac registered before is now registered again on launch; a first launch still waits for "Install background agent". Upgrading from 0.2.0 or earlier through Homebrew can still show the unavailable state once, because the fix ships in the new app: click Install background agent.
+- macOS-only patch. The Linux and Windows Rust developer preview stays at 0.2.0 (build 29); its crates carry the 0.2.1 version number but were not rebuilt or republished.
 
 ## 0.2.0 - 2026-10-22
 
