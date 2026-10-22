@@ -194,16 +194,26 @@ package final class SMAppSystemServices: AgentSystemServices {
     /// `brew upgrade` and direct replacement leave macOS listing the agent as enabled while launchd has lost or
     /// cannot spawn the job, and the first request then hangs. Re-register once whenever the installed app build
     /// differs from the one that last registered, before anything talks to the agent. Returns true if it did.
+    /// The Homebrew cask's `uninstall launchctl:` step instead removes the job outright, so the status becomes
+    /// not registered. An agent this Mac registered before (the marker below) is registered again; a first launch has
+    /// no marker and still waits for the user's explicit "Install background agent".
     package func reconcileAgentAfterUpdate() async throws -> Bool {
         let info = Bundle.main.infoDictionary
         let build = "\(info?["CFBundleShortVersionString"] as? String ?? "?") (\(info?["CFBundleVersion"] as? String ?? "?"))"
         let key = "agentRegisteredByBuild"
         let defaults = UserDefaults.standard
-        guard launchAgent.status == .enabled else { return false }
-        if defaults.string(forKey: key) == build { return false }
+        guard Self.shouldReconcileAgent(status: launchAgent.status, registeredBuild: defaults.string(forKey: key), currentBuild: build) else { return false }
         try await restartAgent()
         defaults.set(build, forKey: key)
         return true
+    }
+
+    package static func shouldReconcileAgent(status: SMAppService.Status, registeredBuild: String?, currentBuild: String) -> Bool {
+        switch status {
+        case .enabled: return registeredBuild != currentBuild
+        case .notRegistered, .notFound: return registeredBuild != nil
+        default: return false
+        }
     }
     package func openLoginItems() { SMAppService.openSystemSettingsLoginItems() }
     package var launchesAtLogin: Bool { SMAppService.mainApp.status == .enabled }

@@ -86,6 +86,12 @@ do {
         await shoot("22-agent-unavailable-dev-build", .settings, model: model, router: router)
         await model.registerAgent()
         Check.expect(services.registerCalls == 1, "register goes through the injected services, not launchd")
+        let reconcile = SMAppSystemServices.shouldReconcileAgent
+        Check.expect(reconcile(.notRegistered, "0.1.11 (20)", "0.2.0 (23)"), "an agent removed by the Homebrew upgrade is registered again")
+        Check.expect(reconcile(.notFound, "0.1.11 (20)", "0.2.0 (23)"), "an agent macOS lost track of is registered again")
+        Check.expect(!reconcile(.notRegistered, nil, "0.2.0 (23)"), "a first launch still waits for the explicit install action")
+        Check.expect(!reconcile(.requiresApproval, "0.1.11 (20)", "0.2.0 (23)"), "an agent awaiting Login Items approval is not overridden")
+        Check.expect(reconcile(.enabled, "0.1.11 (20)", "0.2.0 (23)") && !reconcile(.enabled, "0.2.0 (23)", "0.2.0 (23)"), "an enabled agent is repaired once per build")
     }
 
     // MARK: - Empty agent (first run)

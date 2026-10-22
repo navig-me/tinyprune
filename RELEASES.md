@@ -12,6 +12,7 @@ Facts below were taken from `git tag`, `git log -1 --format=%cs <tag>`, `gh rele
 
 | Version | Status | Date | Channel |
 | --- | --- | --- | --- |
+| [0.2.1](#021) | **prepared, publication in progress** | 2026-10-22 | macOS (agent re-registration fix after `brew upgrade`); Rust preview unchanged at 0.2.0 |
 | [0.2.0](#020) | **published prereleases; both signed feeds live and verified** | 2026-10-22 | macOS (unchanged code) and Rust developer preview (Linux x86_64, Windows x86_64) |
 | 0.1.13 | published prerelease | 2026-10-13 | macOS ad-hoc |
 | 0.1.12 | published prerelease, not in the update feed | 2026-10-09 | macOS ad-hoc |
@@ -20,6 +21,14 @@ Facts below were taken from `git tag`, `git log -1 --format=%cs <tag>`, `gh rele
 | 0.0.1 | tag only, never released | 2026-10-02 | none |
 
 Published macOS releases so far are **GitHub prereleases** with ad-hoc signed, **not notarized** DMGs: the `release` Environment holds no Apple credentials, so `signing=auto` selects the ad-hoc mode ([.github/DEPLOYMENT.md](.github/DEPLOYMENT.md), ADR 0004/0005/0009). No Developer ID release has been produced. First-install Gatekeeper approval is required. The Rust preview uses unsigned archives and a separately authenticated feed; a prerelease hosting page alone does not make that feed live.
+
+## 0.2.1
+
+**Status: prepared, publication in progress.** Patch release for the "Agent unavailable" screen after `brew upgrade` (see [CHANGELOG](CHANGELOG.md#021---2026-10-22)). Owner-requested on 2026-10-22; evidence is added after the tag run. macOS only: the Linux/Windows Rust preview stays at 0.2.0 build 29 (not rebuilt or republished, feed unchanged). Version declarations (Swift default, serviceVersion and its two tests, all workspace crates, `rust/ui`, Tauri, both lockfiles) are 0.2.1.
+
+**Why a patch bump.** One behavior fix in `reconcileAgentAfterUpdate` plus a decision check; no schema, XPC protocol or rule-engine change.
+
+**Intended artifacts.** `TinyPrune-0.2.1.dmg`, `TinyPrune-0.2.1-homebrew.dmg`, `.sha256` sidecars and `TinyPrune-0.2.1.json`; ad-hoc signed, not notarized; GitHub prerelease; EdDSA-signed Sparkle appcast entry (build number above 23, assigned by the `release.yml` run); Homebrew cask via tap PR. Existing ADR 0009 key, no rotation.
 
 ## 0.2.0
 
