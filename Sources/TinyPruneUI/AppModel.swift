@@ -151,8 +151,10 @@ package final class SMAppSystemServices: AgentSystemServices {
     package func registerAgent() throws { try launchAgent.register() }
     package func restartAgent() async throws {
         let agent = launchAgent
+        // ServiceManagement calls the completion on an XPC queue. In a @MainActor class an unannotated closure
+        // inherits main-actor isolation, and Swift 6 then traps on the queue assertion, so it must be @Sendable.
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            agent.unregister { _ in continuation.resume() }
+            agent.unregister { @Sendable _ in continuation.resume() }
         }
         try launchAgent.register()
         // Registration alone can leave launchd's job throttled after repeated spawn failures; start it now.

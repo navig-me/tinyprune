@@ -2,9 +2,16 @@
 
 ## Unreleased
 
+## 0.2.2 - 2026-10-22
+
+- Fix the app crashing on launch after a Homebrew upgrade. Re-registering the background agent trapped in `SMAppSystemServices.restartAgent()`: the `unregister` completion handler inherited `@MainActor` isolation inside a `@MainActor` class, and ServiceManagement calls it on an XPC queue, so Swift's isolation assertion aborted the app (`_dispatch_assert_queue_fail`). The handler is now `@Sendable`. The 0.2.1 change made this path run for an agent removed by the cask, which exposed the crash; 0.2.0 crashed in the same call after an upgrade.
+- Verified by launching a local build on a Mac in the failing state: the app stayed running, re-registered the agent, and the agent answered `status`. No automated test reproduces the trap; it needs a real ServiceManagement reply.
+- macOS-only patch. The Linux and Windows Rust developer preview stays at 0.2.0 (build 29); its crates carry the 0.2.2 version number but were not rebuilt or republished.
+
 ## 0.2.1 - 2026-10-22
 
-- Fix `brew upgrade` leaving "Agent unavailable": the cask's `uninstall launchctl:` step removes the background agent job, and the app only repaired agents macOS still listed as enabled. An agent this Mac registered before is now registered again on launch; a first launch still waits for "Install background agent". Upgrading from 0.2.0 or earlier through Homebrew can still show the unavailable state once, because the fix ships in the new app: click Install background agent.
+- Fix `brew upgrade` leaving "Agent unavailable": the cask's `uninstall launchctl:` step removes the background agent job, and the app only repaired agents macOS still listed as enabled. An agent this Mac registered before is now registered again on launch; a first launch still waits for "Install background agent".
+- **Known defect:** on that path the app crashed on launch (fixed in 0.2.2). Upgrade to 0.2.2 with `brew upgrade --cask tinyprune`.
 - macOS-only patch. The Linux and Windows Rust developer preview stays at 0.2.0 (build 29); its crates carry the 0.2.1 version number but were not rebuilt or republished.
 
 ## 0.2.0 - 2026-10-22

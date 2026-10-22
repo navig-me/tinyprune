@@ -12,7 +12,8 @@ Facts below were taken from `git tag`, `git log -1 --format=%cs <tag>`, `gh rele
 
 | Version | Status | Date | Channel |
 | --- | --- | --- | --- |
-| [0.2.1](#021) | **published prerelease; Sparkle feed and Homebrew cask updated and verified** | 2026-10-22 | macOS (agent re-registration fix after `brew upgrade`); Rust preview unchanged at 0.2.0 |
+| [0.2.2](#022) | **prepared, publication in progress** | 2026-10-22 | macOS (fixes launch crash after `brew upgrade`); Rust preview unchanged at 0.2.0 |
+| [0.2.1](#021) | **published prerelease; defective: app crashes on launch after `brew upgrade` (fixed in 0.2.2)** | 2026-10-22 | macOS (agent re-registration fix after `brew upgrade`); Rust preview unchanged at 0.2.0 |
 | [0.2.0](#020) | **published prereleases; both signed feeds live and verified** | 2026-10-22 | macOS (unchanged code) and Rust developer preview (Linux x86_64, Windows x86_64) |
 | 0.1.13 | published prerelease | 2026-10-13 | macOS ad-hoc |
 | 0.1.12 | published prerelease, not in the update feed | 2026-10-09 | macOS ad-hoc |
@@ -21,6 +22,16 @@ Facts below were taken from `git tag`, `git log -1 --format=%cs <tag>`, `gh rele
 | 0.0.1 | tag only, never released | 2026-10-02 | none |
 
 Published macOS releases so far are **GitHub prereleases** with ad-hoc signed, **not notarized** DMGs: the `release` Environment holds no Apple credentials, so `signing=auto` selects the ad-hoc mode ([.github/DEPLOYMENT.md](.github/DEPLOYMENT.md), ADR 0004/0005/0009). No Developer ID release has been produced. First-install Gatekeeper approval is required. The Rust preview uses unsigned archives and a separately authenticated feed; a prerelease hosting page alone does not make that feed live.
+
+## 0.2.2
+
+**Status: prepared; publication in progress.** Patch release: fixes the app crashing on launch after a Homebrew upgrade (see [CHANGELOG](CHANGELOG.md#022---2026-10-22)). **0.2.1 is defective on that path** (app trap in `restartAgent()`); it stays published, and its release notes and the changelog point to 0.2.2. The first 0.2.1 regression was reported by the owner from a real `brew upgrade` on 2026-10-22; the crash report (`TinyPruneApp-…1137182.ips`) shows `_dispatch_assert_queue_fail` under `SMAppSystemServices.restartAgent()` called from ServiceManagement's `unregister` completion; the same frames appear in a 0.2.0 report from earlier that day. Owner authorized the assistant to merge and release in the standing 2026-10-22 instruction.
+
+**Cause and fix.** In a `@MainActor` class the completion handler passed to `SMAppService.unregister` inherited main-actor isolation; ServiceManagement replies on an XPC queue, so Swift 6's isolation check aborted the process. The closure is now `@Sendable`. Also corrected the earlier 0.2.1 copy, which wrongly said the first upgrade from 0.2.0 might still need a click "because the fix ships in the new app".
+
+**Verification.** Local ad-hoc build (0.2.1 marketing version, build 99, Homebrew distribution) launched on the affected Mac while launchd held a stale registration: the app stayed running with no new crash report, the agent registered to the new bundle, `launchctl` showed it running, and `tinyprune status` reported `available`. One `TinyPruneAgent` crash (Launch Constraint Violation) occurred at the first spawn before re-registration and did not recur. **Not verified:** an actual Homebrew upgrade to the released 0.2.2 DMG; an automated regression test (an isolated Swift and an Objective-C reproduction did not trap, so none is claimed). Evidence for the released artifacts is added after the tag run.
+
+**Intended artifacts.** `TinyPrune-0.2.2.dmg`, `TinyPrune-0.2.2-homebrew.dmg`, `.sha256` sidecars, `TinyPrune-0.2.2.json`; ad-hoc signed, not notarized; GitHub prerelease; EdDSA-signed Sparkle entry (build above 24); Homebrew cask via tap PR. Existing ADR 0009 key. Rust preview stays at 0.2.0 build 29.
 
 ## 0.2.1
 
