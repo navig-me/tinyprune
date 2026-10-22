@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fix `brew upgrade` leaving "Agent unavailable": the cask's `uninstall launchctl:` step removes the background agent job, and the app only repaired agents macOS still listed as enabled. An agent this Mac registered before is now registered again on launch; a first launch still waits for "Install background agent".
+
 ## 0.2.0 - 2026-10-22
 
 **Initially prepared 2026-10-21; published 2026-10-22.** Version 0.2.0 adds the Linux and Windows Rust runtime as an unsigned developer preview, available from the [preview release](https://github.com/navig-me/tinyprune/releases/tag/rust-preview-0.2.0). macOS remains the only supported product; its [0.2.0 release](https://github.com/navig-me/tinyprune/releases/tag/v0.2.0) app, agent, Finder extension, CLI and Sparkle updater are unchanged from 0.1.13 apart from the version number. Publication dates, artifacts and verification evidence are recorded in [RELEASES.md](https://github.com/navig-me/tinyprune/blob/main/RELEASES.md#020).
