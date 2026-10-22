@@ -1,12 +1,12 @@
 # TinyPrune — automatic file cleanup rules for macOS
 
 [![Downloads](https://img.shields.io/endpoint?url=https%3A%2F%2Ftinyprune.com%2Fbadge.json&style=for-the-badge&labelColor=302a2e)](https://github.com/navig-me/tinyprune/releases)
-[![Latest release](https://img.shields.io/github/v/release/navig-me/tinyprune?include_prereleases&style=for-the-badge&color=4a1f3d&labelColor=302a2e)](https://github.com/navig-me/tinyprune/releases/tag/v0.2.2)
+[![Latest release](https://img.shields.io/github/v/release/navig-me/tinyprune?include_prereleases&style=for-the-badge&color=4a1f3d&labelColor=302a2e)](https://github.com/navig-me/tinyprune/releases)
 [![macOS 14+](https://img.shields.io/badge/macOS-14%2B-4a1f3d?style=for-the-badge&logo=apple&logoColor=white&labelColor=302a2e)](https://docs.tinyprune.com/#install)
 
 TinyPrune is a free, MIT-licensed macOS app for automatic file cleanup with expiry rules. Choose folders, preview which downloads, screenshots or developer artifacts will expire, and protect important items with Keep. Eligible items move to **macOS Trash**, never permanent deletion.
 
-**macOS 14+ on Intel and Apple silicon.** macOS is the only supported product; the latest published macOS release is **[0.2.2](https://github.com/navig-me/tinyprune/releases/tag/v0.2.2)**. Unsigned Linux x86_64 and Windows x86_64 **[0.2.0 developer-preview downloads](https://github.com/navig-me/tinyprune/releases/tag/rust-preview-0.2.0)** are also available, not supported general-desktop releases. See the [release log](https://github.com/navig-me/tinyprune/blob/main/RELEASES.md#022) and [cross-platform status](#cross-platform-core).
+**macOS 14+ on Intel and Apple silicon.** macOS is the only supported product; the latest published macOS release is **[0.2.2](https://github.com/navig-me/tinyprune/releases)**. Version **0.2.3 is prepared, not published**; see its [release record](https://github.com/navig-me/tinyprune/blob/main/RELEASES.md#023). Unsigned Linux x86_64 and Windows x86_64 **[0.2.0 developer-preview downloads](https://github.com/navig-me/tinyprune/releases/tag/rust-preview-0.2.0)** remain available, not supported general-desktop releases. See the [cross-platform status](#cross-platform-core).
 
 <p align="center"><a href="https://tinyprune.com"><picture><source media="(prefers-color-scheme: dark)" srcset="website/assets/screens/preview-dark.png"><img src="website/assets/screens/preview-light.png" alt="TinyPrune Preview showing which files match a rule, when they expire and why" width="900"></picture></a></p>
 
@@ -41,7 +41,7 @@ Requires macOS 14 or later (Intel and Apple silicon).
 brew install --cask navig-me/tap/tinyprune
 ```
 
-**Homebrew installs 0.2.2.** The public cask points to the published 0.2.2 DMG. The [direct macOS download](https://github.com/navig-me/tinyprune/releases/tag/v0.2.2) is also available. 0.2.2 fixes an app crash on launch that could follow a Homebrew upgrade, and the **Agent unavailable** screen that went with it. If 0.2.1 crashes on launch, run `brew upgrade --cask tinyprune`.
+**Homebrew installs 0.2.2.** The public cask points to the published 0.2.2 DMG, not the prepared 0.2.3 source version. The [direct macOS download](https://github.com/navig-me/tinyprune/releases) is also available. 0.2.2 fixes an app crash on launch that could follow a Homebrew upgrade, and the **Agent unavailable** screen that went with it. If 0.2.1 crashes on launch, run `brew upgrade --cask tinyprune`.
 
 Early releases are **unsigned, not notarized pre-releases**. The Homebrew cask clears quarantine for you. If you download the DMG directly, copy `TinyPrune.app` to Applications, try opening it once, then allow it under System Settings → Privacy & Security → **Open Anyway**. Homebrew installs update only with `brew upgrade --cask tinyprune`.
 

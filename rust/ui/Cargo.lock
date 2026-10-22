@@ -3329,7 +3329,7 @@ dependencies = [
 
 [[package]]
 name = "tinyprune-ipc"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "libc",
  "serde",
@@ -3339,7 +3339,7 @@ dependencies = [
 
 [[package]]
 name = "tinyprune-ui"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "tauri",
  "tauri-build",

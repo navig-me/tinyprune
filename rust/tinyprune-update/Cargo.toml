@@ -1,6 +1,6 @@
 [package]
 name = "tinyprune-update"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 publish = false
 description = "Unreleased TinyPrune Rust-runtime updater: signed feed, verified staged install, Trash/update interlock"

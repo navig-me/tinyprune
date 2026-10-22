@@ -4,6 +4,15 @@ Runbook for maintainers. It covers both channels: the **macOS app** (the support
 
 This file contains no secrets and must stay free of them. Nothing here is a Linux or Windows support claim: the Rust archives are unsigned developer-preview builds, macOS is the only supported product.
 
+## Prepared 0.2.3 (2026-10-22)
+
+Source versions are aligned at 0.2.3; this is **prepared, not published**. The current published macOS release, Sparkle feed and Homebrew cask remain 0.2.2 (Sparkle build 25); the separate Linux/Windows Rust preview and signed Rust feed remain 0.2.0 build 29. The source Rust bump does not authorize rebuilding or publishing that preview. See [the 0.2.3 release record](../RELEASES.md#023); no checks, builds, signatures or actual 0.2.3 update installation are claimed by preparation.
+
+After the release PR is merged and the exact `main` commit has passed the required checks, use section 4 with tag `v0.2.3`. The new `release.yml` run's build must exceed **25**; never guess or set it to the marketing patch number. Reuse the existing protected signing workflow and public key, approve the normal Environment gates, review/merge `updates/v0.2.3`, await Pages deployment, then dispatch `gh workflow run publish-update-feed.yml -f tag=v0.2.3 -f verify_public=true`. Confirm the actual verification steps execute rather than skip. Update the tap separately if its optional token remains unset. Keep Linux/Windows URLs and the Rust feed at `rust-preview-0.2.0` / build 29 unless an explicit separate preview release is requested.
+
+Advance prepared documentation to published only after observing release, feed and tap results independently; fill in artifact SHA-256 values, actual build, run links, approvals and remaining limits in RELEASES.md. Signed-byte verification is not real production update-installation evidence.
+
+
 ## 0. State of the controls (read first)
 
 As configured and re-read through the GitHub API on 2026-10-21, `release` and `update-feed` require approval from `mihirkhandekar` and accept only the `main` branch or `v*` tags. Self-review is allowed because this is currently the sole repository maintainer; this is an explicit approval gate, not independent two-person review. These changes do not configure protection for `homebrew`, `cloudflare-pages-production` or `main`; those still require separate maintainer decisions. Re-check before every release:

@@ -1,6 +1,6 @@
 # TinyPrune Rust core (developer preview)
 
-This workspace reproduces TinyPrune's Swift decision logic against the shared, language-neutral [golden fixtures](../Fixtures/golden/README.md). Swift is the behavioral reference ([ADR 0010](../ADRs/0010-cross-platform-core-and-golden-fixtures.md)). Unsigned [0.2.0 developer-preview downloads](https://github.com/navig-me/tinyprune/releases/tag/rust-preview-0.2.0) are available for Linux x86_64 and Windows x86_64. These are not supported general-desktop releases; the [Swift macOS app](https://github.com/navig-me/tinyprune/releases/tag/v0.2.2) remains the only supported product.
+This workspace reproduces TinyPrune's Swift decision logic against the shared, language-neutral [golden fixtures](../Fixtures/golden/README.md). Swift is the behavioral reference ([ADR 0010](../ADRs/0010-cross-platform-core-and-golden-fixtures.md)). Source crates and the Tauri shell now declare **0.2.3**, prepared and not published. Unsigned [0.2.0 developer-preview downloads](https://github.com/navig-me/tinyprune/releases/tag/rust-preview-0.2.0) remain available for Linux x86_64 and Windows x86_64 at build 29; they were not rebuilt or republished for this version cutover. These are not supported general-desktop releases; the [Swift macOS app](https://github.com/navig-me/tinyprune/releases) remains the only supported product. See the [0.2.3 release record](../RELEASES.md#023).
 
 ## Layout
 

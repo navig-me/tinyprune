@@ -3,45 +3,70 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Privacy policy — TinyPrune</title>
+<title>Privacy policy | TinyPrune</title>
 <meta name="description" content="How TinyPrune handles local app data, optional network update checks, website analytics, and information you choose to share for support.">
 <link rel="canonical" href="https://tinyprune.com/privacy">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="TinyPrune">
-<meta property="og:title" content="Privacy policy — TinyPrune">
+<meta property="og:title" content="Privacy policy | TinyPrune">
 <meta property="og:description" content="Local app data, update checks, website analytics, and voluntary support information.">
 <meta property="og:url" content="https://tinyprune.com/privacy">
 <meta name="theme-color" content="#4a1f3d">
 <link rel="icon" type="image/svg+xml" href="https://tinyprune.com/favicon.svg">
-<link rel="stylesheet" href="https://tinyprune.com/styles.css">
+<link rel="stylesheet" href="/styles.css">
+<link rel="stylesheet" href="/privacy.css">
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
 <header><nav class="nav wrap" aria-label="Main navigation"><a class="brand" href="https://tinyprune.com/" aria-label="TinyPrune home"><img src="https://tinyprune.com/assets/tinyprune-plum.svg" alt="" width="28" height="28">TinyPrune</a><div class="nav-links"><a href="https://tinyprune.com/#how-it-works">How it works</a><a href="https://tinyprune.com/#philosophy">Safety</a><a href="https://docs.tinyprune.com/">Docs</a><a href="https://github.com/navig-me/tinyprune">GitHub</a></div></nav></header>
 <main id="main" class="privacy-policy wrap">
-<h1>Privacy policy</h1>
+<div class="policy-intro">
 <p class="policy-date">Last updated <time datetime="2026-10-22">22 October 2026</time></p>
+<h1 class="policy-title">Privacy policy</h1>
 <p>TinyPrune is an open-source project maintained by Mihir Khandekar in Singapore. This policy explains the supported macOS app and this website. The distinction matters: the app has no telemetry, while the homepage uses third-party analytics.</p>
-<nav class="policy-contents" aria-label="Privacy policy sections"><a href="#app-data">App data</a><a href="#updates">Update checks</a><a href="#website">Website analytics</a><a href="#support">Support and contact</a></nav>
+<ul class="policy-summary" aria-label="Privacy at a glance">
+<li><strong>The app:</strong> local cleanup, no account, no app telemetry.</li>
+<li><strong>Update checks:</strong> on by default, optional in Settings, and use the network.</li>
+<li><strong>The homepage:</strong> Google Analytics and PostHog measure visits and interactions.</li>
+</ul>
+</div>
+<div class="policy-layout">
+<nav class="policy-contents" aria-label="Privacy policy sections">
+<p class="policy-contents-label">On this page</p>
+<ol>
+<li><a href="#app-data">App data</a></li>
+<li><a href="#updates">Update checks</a></li>
+<li><a href="#website">Website analytics</a></li>
+<li><a href="#support">Support and contact</a></li>
+<li><a href="#changes">Policy changes</a></li>
+</ol>
+</nav>
+<div class="policy-body">
 <section aria-labelledby="app-data">
 <h2 id="app-data">Data stays local in the app</h2>
 <p>Core cleanup works without an account or internet access. It reads filesystem metadata, not the contents of your files. TinyPrune does not upload your files, folder inventory, cleanup rules, or activity history to the maintainer and does not include app telemetry.</p>
 <p>You choose and authorize managed folders. The macOS app stores security-scoped bookmarks for those grants so its background agent can access the selected locations. Access remains subject to macOS permissions; suggested template folders do not themselves grant access.</p>
+<details class="policy-detail">
+<summary>Technical detail: what the app stores</summary>
 <p>To apply and explain your rules, TinyPrune processes names and paths, filesystem identifiers, file types, sizes, timestamps, and project-activity metadata. Its local SQLite database stores managed folders and bookmarks, rules, overrides, observations, scheduled deadlines, and audit events such as cleanup decisions, safety skips, failures, and moves to Trash. On macOS the agent database is stored at <code>~/Library/Application Support/TinyPrune/state.sqlite3</code>. Preferences are also stored locally, and explicit item overrides can be written as filesystem extended attributes.</p>
+</details>
 <p>Paths and audit details can reveal personal information, including your username, project names, and folder names. Treat database copies, configuration exports, screenshots, and diagnostic output as potentially sensitive. This policy does not promise that removing a rule, removing a folder grant, or uninstalling the app erases all local records.</p>
 <p>Cleanup moves eligible items to macOS Trash, rather than permanently deleting them. TinyPrune does not empty Trash. Items remain subject to your actions and macOS Trash settings; TinyPrune is not a backup or a secure-erasure tool. Preview does not move files.</p>
 </section>
 <section aria-labelledby="updates">
 <h2 id="updates">Update checks use the network</h2>
 <p><em>Check for new versions</em> is on by default. Turn it off in Settings to stop automatic update checks. You can still request a manual check. Update installation requires your confirmation.</p>
+<h3>Where requests go</h3>
 <p>Key-enabled direct-download macOS copies use Sparkle to request the update feed at <a href="https://tinyprune.com/updates/appcast.xml">tinyprune.com/updates/appcast.xml</a>, release notes, and update downloads. Homebrew copies and copies without an update key use the public GitHub Releases API to check for a newer version, then offer a release link or a Homebrew upgrade command. The GitHub notifier sends the app version in its User-Agent header, not your file paths or rules.</p>
 <p>These requests reach Cloudflare, which serves this site and its update feed, and GitHub or its download-delivery services when you access releases or downloads. As with other HTTPS requests, the receiving services can process connection information such as your IP address, request time, requested URL, and client headers. These network checks are separate from local cleanup; no app files or cleanup rules are included in them.</p>
 </section>
 <section aria-labelledby="website">
 <h2 id="website">Website analytics are separate</h2>
 <p>The TinyPrune homepage loads Google Analytics and PostHog to measure visits and interactions. Google Analytics uses measurement ID <code>G-EERWCSKWF4</code>. PostHog is configured with the endpoint <code>https://us.i.posthog.com</code> and <code>person_profiles: 'identified_only'</code>; this setting is not a claim that anonymous activity is not collected.</p>
+<h3>What analytics can collect</h3>
 <p>The homepage explicitly sends PostHog events for link clicks, including the link label and destination, and for selecting a sample folder in the interactive demo. Analytics services can also collect page and browser information and use cookies or browser storage to recognize visits, subject to their SDK and service settings. Requests to these services expose connection information such as your IP address. The demo uses sample data and never accesses files on your device.</p>
 <p>The checked-in website configuration does not explicitly enable or disable PostHog session recording. Provider-side settings are not established by that source, so this policy does not claim that session recording is disabled or specify an analytics retention period. This privacy page itself does not load the analytics scripts.</p>
+<h3>Your browser controls</h3>
 <p>You can use browser privacy controls to restrict cookies, clear site storage, or block analytics requests. This is not an in-site consent or opt-out mechanism. For the providers' own practices and controls, see <a href="https://policies.google.com/privacy">Google's privacy policy</a>, <a href="https://posthog.com/privacy">PostHog's privacy policy</a>, and <a href="https://www.cloudflare.com/privacypolicy/">Cloudflare's privacy policy</a>. Their services and policies govern their own processing; no regional-hosting or fixed-retention guarantee is made here.</p>
 </section>
 <section aria-labelledby="support">
@@ -53,6 +78,8 @@
 <h2 id="changes">Changes to this policy</h2>
 <p>This policy may change as the app or website changes. The date above identifies the latest revision. Revisions are published on this page, and the open-source repository's <a href="https://github.com/navig-me/tinyprune/commits/main/website/privacy.html">page history</a> records changes.</p>
 </section>
+</div>
+</div>
 </main>
 <footer class="wrap"><a class="brand" href="https://tinyprune.com/">TinyPrune</a><span>Keep what matters.</span><div><a href="https://tinyprune.com/#faq">FAQ</a><a href="https://tinyprune.com/privacy" aria-current="page">Privacy</a><a href="https://github.com/navig-me/tinyprune/blob/main/RELEASES.md">Release history</a><a href="https://tinyprune.com/llms.txt">Agent reference</a><a href="https://github.com/navig-me/tinyprune/issues">Support</a><a href="https://buymeacoffee.com/mihirk">Buy me a coffee</a></div></footer>
 </body>

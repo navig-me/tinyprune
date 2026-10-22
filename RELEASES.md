@@ -12,6 +12,7 @@ Facts below were taken from `git tag`, `git log -1 --format=%cs <tag>`, `gh rele
 
 | Version | Status | Date | Channel |
 | --- | --- | --- | --- |
+| [0.2.3](#023) | **prepared, not published** | prepared 2026-10-22 | macOS Settings/templates/navigation polish and website/privacy updates; Rust source only, published preview unchanged at 0.2.0 build 29 |
 | [0.2.2](#022) | **published prerelease; Sparkle feed and Homebrew cask updated and verified** | 2026-10-22 | macOS (fixes launch crash after `brew upgrade`); Rust preview unchanged at 0.2.0 |
 | [0.2.1](#021) | **published prerelease; defective: app crashes on launch after `brew upgrade` (fixed in 0.2.2)** | 2026-10-22 | macOS (agent re-registration fix after `brew upgrade`); Rust preview unchanged at 0.2.0 |
 | [0.2.0](#020) | **published prereleases; both signed feeds live and verified** | 2026-10-22 | macOS (unchanged code) and Rust developer preview (Linux x86_64, Windows x86_64) |
@@ -22,6 +23,32 @@ Facts below were taken from `git tag`, `git log -1 --format=%cs <tag>`, `gh rele
 | 0.0.1 | tag only, never released | 2026-10-02 | none |
 
 Published macOS releases so far are **GitHub prereleases** with ad-hoc signed, **not notarized** DMGs: the `release` Environment holds no Apple credentials, so `signing=auto` selects the ad-hoc mode ([.github/DEPLOYMENT.md](.github/DEPLOYMENT.md), ADR 0004/0005/0009). No Developer ID release has been produced. First-install Gatekeeper approval is required. The Rust preview uses unsigned archives and a separately authenticated feed; a prerelease hosting page alone does not make that feed live.
+
+## 0.2.3
+
+**Status:** prepared, not published.
+
+**Date:** prepared 2026-10-22; tag and publication dates n/a (not tagged or published during preparation).
+
+**Tag and commit:** intended tag `v0.2.3`; no tag created and no release commit assigned during preparation. App/template/navigation changes were merged in PR #29; the release cutover and website/privacy work are not yet a verified release commit.
+
+**Why this version number:** patch release for Settings version/update controls, more useful AI-agent template folder suggestions and quieter/faster navigation state handling. macOS remains the only supported product. All source versions are aligned at 0.2.3 (packager default, Swift agent health default and its two assertions, eleven Rust workspace manifests plus `rust/ui`, Tauri and both lockfiles); this does not rebuild or republish the Linux/Windows developer preview.
+
+**Artifacts and signing:** n/a, no 0.2.3 artifacts produced during preparation. Planned macOS artifacts are `TinyPrune-0.2.3.dmg`, `TinyPrune-0.2.3-homebrew.dmg`, their `.sha256` sidecars and `TinyPrune-0.2.3.json`. With the documented no-Apple-credentials configuration, the expected mode is ad-hoc signed, not notarized (`signing: unsigned`), GitHub prerelease; actual signing mode must be read from the release metadata. Reuse the existing protected EdDSA workflow and public key; no key is created, rotated or accessed by this cutover.
+
+**SHA-256:** n/a, artifacts not built or downloaded; populate from the immutable published sidecars and independently verified downloads after publication.
+
+**Build numbers:** 0.2.3 macOS build unknown until `release.yml` runs; its `github.run_number` must exceed the currently published Sparkle build **25** (0.2.2). No 0.2.3 entry is added to either feed during preparation. Existing macOS artifacts, Sparkle feed and Homebrew cask remain **0.2.2**; Linux/Windows downloads remain **`rust-preview-0.2.0`, build 29**, with the Rust feed unchanged. Rust artifact and macOS release workflow counters are separate.
+
+**Highlights:** Settings displays the version and offers a manual update check, with Sparkle for eligible macOS direct builds and the release notifier for Homebrew/no-key copies. AI-agent templates suggest tool-specific session/debug folders (including OMP), indicate locally existing suggestions, and recognize compressed `.jsonl.zst` transcripts; suggestions still require user choice and authorization. Navigation avoids unnecessary reload/publication work and caches derived Upcoming lists; Activity rows are lazy, and Overview copy is shorter. Rust UI version/update controls are source-only here and do not install without the confirmation command. Website redesign and a dedicated privacy policy are part of this release preparation. See [CHANGELOG](CHANGELOG.md#023---2026-10-22).
+
+**Verification:** no checks, builds, test runs, artifact signature checks, protected public-feed verification or actual update installation are performed or claimed by this preparation. Historical 0.2.2/0.2.0 evidence below applies only to those recorded builds, not to 0.2.3. The integrating maintainer must record exact-commit CI/native/golden/site results and post-publication evidence here.
+
+**Workflow runs and approvals:** n/a, no release, signing, feed, artifact or deployment workflow was dispatched during preparation. After required checks and merge to `main`, tag `v0.2.3`, approve the normal Environment gates, review/merge `updates/v0.2.3`, await Pages deployment, and run protected `publish-update-feed.yml` with `tag=v0.2.3` and `verify_public=true`. Record actual run links and approvals; a skipped signing or verification step is not success evidence. Update/verify the Homebrew tap independently if its optional token remains unset.
+
+**Known issues / not verified:** the new Settings button in a shipped app, real signed-feed checks from the Rust UI, actual Homebrew upgrade to 0.2.3, genuine older/newer production Sparkle installation, Developer ID/notarization, screen-reader and broad Linux/Windows desktop acceptance are not established. Reduced reload/derived-state work is not a measured main-thread stall-time improvement. Public-feed authentication is not update-installation proof. Do not announce Linux/Windows 0.2.3 downloads or support.
+
+**Rollback or withdrawal:** n/a, not published. Once published, do not overwrite immutable artifacts or hand-edit signed feeds; supersede a defective release with a higher version/build through the normal reviewed signing procedure.
 
 ## 0.2.2
 

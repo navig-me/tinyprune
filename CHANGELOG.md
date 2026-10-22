@@ -2,11 +2,15 @@
 
 ## Unreleased
 
+## 0.2.3 - 2026-10-22
+
 - Add the website privacy policy at https://tinyprune.com/privacy, linked from the footer, covering local app data, update checks, website analytics, and voluntary support disclosures.
-- Settings shows the app version and a **Check for Updates…** button on macOS (Sparkle, or the GitHub notifier for Homebrew copies). The Linux/Windows Rust UI gets a Version and updates panel with a Check for updates button that runs the signed-feed `tinyprune update check`; it never installs without the confirm command. Neither is released yet.
+- Settings shows the app version and a **Check for Updates…** button on macOS (Sparkle, or the GitHub notifier for Homebrew copies). The Linux/Windows Rust UI source adds a Version and updates panel that runs the signed-feed `tinyprune update check`; it never installs without the confirmation command. Rust preview downloads remain 0.2.0 build 29.
 - AI agent templates now suggest each tool's own folder and mark which exist on this Mac: session transcripts for Claude Code, Codex (active and archived), OMP, pi and Gemini CLI; debug logs for OMP, Codex, GitHub Copilot and opencode. Session rule also matches `.jsonl.zst`. Folders are suggestions only; you still choose and authorize each. Template shape changed to `suggestedFolders` in Swift, Rust and golden fixtures.
 - Faster sidebar switching on macOS: navigation no longer reloads all agent state on every click (reload only if state is older than 10 s), unchanged values no longer republish, derived upcoming lists are cached, and Activity rows are lazy.
 - Overview shows less text: shorter status lines, empty states and ledger captions.
+- OMP session tool-output logs can be matched using the debug-logs template. Reports, images, session transcripts and lock files are excluded; broad templates remain Preview-first.
+- Refine the privacy page into a readable document with section navigation. Shorten FAQ answers into native expandable disclosures and add direct Windows/Linux preview download buttons beside the Mac option.
 - Not measured: a drop in main-thread stall time (page construction still dominates), real feed checks from the Rust UI button, or the new Settings button in the shipped app.
 
 ## 0.2.2 - 2026-10-22
