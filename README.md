@@ -1,7 +1,7 @@
 # TinyPrune — automatic file cleanup rules for macOS
 
 [![Downloads](https://img.shields.io/endpoint?url=https%3A%2F%2Ftinyprune.com%2Fbadge.json&style=for-the-badge&labelColor=302a2e)](https://github.com/navig-me/tinyprune/releases)
-[![Latest release](https://img.shields.io/github/v/release/navig-me/tinyprune?include_prereleases&style=for-the-badge&color=4a1f3d&labelColor=302a2e)](https://github.com/navig-me/tinyprune/releases/latest)
+[![Latest release](https://img.shields.io/github/v/release/navig-me/tinyprune?include_prereleases&style=for-the-badge&color=4a1f3d&labelColor=302a2e)](https://github.com/navig-me/tinyprune/releases/tag/v0.2.0)
 [![macOS 14+](https://img.shields.io/badge/macOS-14%2B-4a1f3d?style=for-the-badge&logo=apple&logoColor=white&labelColor=302a2e)](https://docs.tinyprune.com/#install)
 
 TinyPrune is a free, MIT-licensed macOS app for automatic file cleanup with expiry rules. Choose folders, preview which downloads, screenshots or developer artifacts will expire, and protect important items with Keep. Eligible items move to **macOS Trash**, never permanent deletion.
@@ -41,11 +41,13 @@ Requires macOS 14 or later (Intel and Apple silicon).
 brew install --cask navig-me/tap/tinyprune
 ```
 
-**Homebrew currently installs 0.1.11.** Its automated 0.2.0 tap update was skipped because the release token was unavailable; the [manual tap update](https://github.com/navig-me/homebrew-tap/pull/1) is awaiting merge. For 0.2.0 now, use the [direct macOS download](https://github.com/navig-me/tinyprune/releases/tag/v0.2.0).
+**Homebrew installs 0.2.0.** The [tap update](https://github.com/navig-me/homebrew-tap/pull/1) is merged, and the public cask points to the published 0.2.0 DMG. The [direct macOS download](https://github.com/navig-me/tinyprune/releases/tag/v0.2.0) is also available.
 
 Early releases are **unsigned, not notarized pre-releases**. The Homebrew cask clears quarantine for you. If you download the DMG directly, copy `TinyPrune.app` to Applications, try opening it once, then allow it under System Settings → Privacy & Security → **Open Anyway**. Homebrew installs update only with `brew upgrade --cask tinyprune`.
 
 Key-enabled direct builds support Sparkle updates authenticated by EdDSA-signed feeds, release notes and DMGs, including ad-hoc builds without an Apple account. **Check for new versions** is on by default in Settings; **Update Now** opens the native confirmation dialog and installation is never automatic. Homebrew never constructs Sparkle; Homebrew and direct copies without a public key use GitHub release notices and manual download or `brew upgrade`. The Trash/update interlock remains active, including interrupted-update recovery for matching key-enabled ad-hoc direct targets.
+
+The live macOS Sparkle feed publishes 0.2.0 (build 23), retaining build 22. Its protected public-verification workflow passed, checking the live feed, release notes and DMG hash/signature against the app's existing public key. This verifies publication and authentication, not production update installation.
 
 EdDSA does not notarize the app or change first-install Gatekeeper approval. Sparkle replacements are expected not to carry browser-download quarantine, but an actual older/newer end-to-end installation remains unverified. See [ADR 0009](ADRs/0009-eddsa-only-updates-for-adhoc-builds.md) for update trust, private-key loss/rotation and acceptance requirements.
 
@@ -87,7 +89,7 @@ Tests: see [AGENTS.md](AGENTS.md#running-tests). Architecture and release proces
 
 ## Cross-platform core
 
-**[0.2.0 developer-preview downloads](https://github.com/navig-me/tinyprune/releases/tag/rust-preview-0.2.0) are available for Linux x86_64 and Windows x86_64.** The unsigned Rust archives are not supported general-desktop releases; the Swift macOS app remains the only supported product. The production signed Rust update feed is deployed and independently verified against the published archives. The protected public-verification workflow still awaits Environment approval; production update installation on either OS remains unverified.
+**[0.2.0 developer-preview downloads](https://github.com/navig-me/tinyprune/releases/tag/rust-preview-0.2.0) are available for Linux x86_64 and Windows x86_64.** The unsigned Rust archives are not supported general-desktop releases; the Swift macOS app remains the only supported product. The production signed Rust update feed publishes 0.2.0 (build 29) and is independently verified against the published archives. The protected public-verification workflow passed against the live feed signature and both public release archives using the existing production key; production update installation on either OS remains unverified.
 
 Native Linux inotify and Windows `ReadDirectoryChangesW`, filesystem/Trash adapters, stores, IPC, daemon/CLI, developer installs, and the Windows managed updater have been exercised in recorded CI or container runs. The Tauri UI ran against the real agent in Linux aarch64 Docker and on a Windows CI runner. These checks are not desktop acceptance or production release evidence. See the [Rust workspace status matrix](https://github.com/navig-me/tinyprune/blob/main/rust/README.md#status-matrix) for exact environments, evidence and remaining limits, rather than a second copy here.
 

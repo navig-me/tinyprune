@@ -38,7 +38,7 @@ Hot Windows-flavor loops do not re-normalize both operands per pair: `tinyprune_
 
 ## Status matrix
 
-Evidence: PR #15 checks at commit `536d105` passed on Ubuntu 24.04, Windows 2022 and macOS 14/15 (later commits need their own check). UI and updater Docker smokes ran locally on Linux aarch64. CI benchmarks are non-gating, so a green job can hide a failed benchmark. The unsigned 0.2.0 Linux x86_64 and Windows x86_64 archives are now published developer previews, not supported general-desktop releases; see the [release log](../RELEASES.md#020) for publication evidence. The production signed Rust feed is deployed and independently verified against those public archive downloads, using the existing production key. The protected public-verification workflow awaits Environment approval; production OS update installation remains unverified.
+Evidence: PR #15 checks at commit `536d105` passed on Ubuntu 24.04, Windows 2022 and macOS 14/15 (later commits need their own check). UI and updater Docker smokes ran locally on Linux aarch64. CI benchmarks are non-gating, so a green job can hide a failed benchmark. The unsigned 0.2.0 Linux x86_64 and Windows x86_64 archives are now published developer previews, not supported general-desktop releases; see the [release log](../RELEASES.md#020) for publication evidence. The production signed Rust feed publishes 0.2.0 (build 29) and is independently verified against those public archive downloads, using the existing production key. The protected public-verification workflow passed against the live feed signature and both public release archives; production OS update installation remains unverified.
 
 | Component | Linux | Windows | macOS (Rust) |
 |---|---|---|---|
