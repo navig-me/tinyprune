@@ -20,9 +20,11 @@ const htmlFiles = async (directory = '') => {
 const pages = new Map(await Promise.all((await htmlFiles()).map(async path => [path, await load(path)])));
 const pathForURL = url => {
   const path = decodeURIComponent(url.pathname).replace(/^\//, '');
-  return !path || path.endsWith('/') ? `${path}index.html` : path;
+  if (!path || path.endsWith('/')) return `${path}index.html`;
+  // Cloudflare Pages serves extensionless routes from matching HTML files.
+  return pages.has(`${path}.html`) ? `${path}.html` : path;
 };
-const pageURL = path => new URL(path === 'index.html' ? '/' : path.replace(/index\.html$/, ''), origin);
+const pageURL = path => new URL(path === 'index.html' ? '/' : path.replace(/index\.html$/, '').replace(/\.html$/, ''), origin);
 const indexable = new Set();
 
 for (const [path, html] of pages) {
@@ -82,6 +84,15 @@ const links = tags(html, 'link');
 const meta = tags(html, 'meta');
 if (!links.some(tag => tag.rel === 'alternate' && tag.type === 'text/plain' && tag.href === `${origin}/llms.txt`)) fail('Landing head must discover llms.txt');
 if (!tags(html, 'a').some(tag => tag.href === `${origin}/llms.txt` || tag.href === '/llms.txt')) fail('Landing navigation must expose the agent reference');
+const privacy = pages.get('privacy.html');
+if (!privacy) fail('Publish privacy.html for the Cloudflare Pages /privacy route');
+for (const [path, source] of [['index.html', html], ['privacy.html', privacy]]) {
+  const footer = source.match(/<footer\b[^>]*>([\s\S]*?)<\/footer>/i)?.[1] ?? '';
+  if (!tags(footer, 'a').some(tag => tag.href === `${origin}/privacy`)) fail(`${path}: footer must link the canonical privacy page`);
+}
+for (const id of ['app-data', 'updates', 'website', 'support', 'changes']) {
+  if (!ids(privacy).has(id)) fail(`Privacy policy must cover ${id}`);
+}
 for (const host of [docsOrigin, 'https://github.com/navig-me/tinyprune/releases']) {
   if (!tags(html, 'a').some(tag => tag.href === `${host}/` || tag.href === host)) fail(`Landing page must link ${host}`);
 }
@@ -125,7 +136,7 @@ for (const url of discoveryLinks) {
 }
 const headers = await load('_headers');
 if (!headers.includes(`<${origin}/llms.txt>; rel="alternate"; type="text/plain"`)) fail('Response headers must discover the agent reference');
-if (!pages.has('404.html') || indexable.has(`${origin}/404.html`)) fail('Publish a real noindex 404 outside the sitemap');
+if (!pages.has('404.html') || indexable.has(pageURL('404.html').href)) fail('Publish a real noindex 404 outside the sitemap');
 const socialImage = await readFile(new URL('og.png', root));
 if (socialImage.toString('hex', 0, 8) !== '89504e470d0a1a0a' || socialImage.readUInt32BE(16) !== 1200 || socialImage.readUInt32BE(20) !== 630) fail('Social image must be a 1200x630 PNG');
 for (const tag of meta.filter(tag => ['og:image', 'twitter:image'].includes(tag.property ?? tag.name))) {

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add the website privacy policy at https://tinyprune.com/privacy, linked from the footer, covering local app data, update checks, website analytics, and voluntary support disclosures.
 - Settings shows the app version and a **Check for Updates…** button on macOS (Sparkle, or the GitHub notifier for Homebrew copies). The Linux/Windows Rust UI gets a Version and updates panel with a Check for updates button that runs the signed-feed `tinyprune update check`; it never installs without the confirm command. Neither is released yet.
 - AI agent templates now suggest each tool's own folder and mark which exist on this Mac: session transcripts for Claude Code, Codex (active and archived), OMP, pi and Gemini CLI; debug logs for OMP, Codex, GitHub Copilot and opencode. Session rule also matches `.jsonl.zst`. Folders are suggestions only; you still choose and authorize each. Template shape changed to `suggestedFolders` in Swift, Rust and golden fixtures.
 - Faster sidebar switching on macOS: navigation no longer reloads all agent state on every click (reload only if state is older than 10 s), unchanged values no longer republish, derived upcoming lists are cached, and Activity rows are lazy.
