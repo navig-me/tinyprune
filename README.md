@@ -6,7 +6,7 @@
 
 TinyPrune is a free, MIT-licensed macOS app for automatic file cleanup with expiry rules. Choose folders, preview which downloads, screenshots or developer artifacts will expire, and protect important items with Keep. Eligible items move to **macOS Trash**, never permanent deletion.
 
-**macOS 14+ on Intel and Apple silicon.** macOS is the only supported product; the latest published macOS release is **[0.2.2](https://github.com/navig-me/tinyprune/releases)**. Version **0.2.3 is prepared, not published**; see its [release record](https://github.com/navig-me/tinyprune/blob/main/RELEASES.md#023). Unsigned Linux x86_64 and Windows x86_64 **[0.2.0 developer-preview downloads](https://github.com/navig-me/tinyprune/releases/tag/rust-preview-0.2.0)** remain available, not supported general-desktop releases. See the [cross-platform status](#cross-platform-core).
+**macOS 14+ on Intel and Apple silicon.** macOS is the only supported product; the latest published macOS release is **[0.2.3](https://github.com/navig-me/tinyprune/releases)**, an ad-hoc signed, not notarized GitHub prerelease; see its [release record](https://github.com/navig-me/tinyprune/blob/main/RELEASES.md#023). Unsigned Linux x86_64 and Windows x86_64 **[0.2.0 developer-preview downloads](https://github.com/navig-me/tinyprune/releases/tag/rust-preview-0.2.0)** remain available, not supported general-desktop releases. See the [cross-platform status](#cross-platform-core).
 
 <p align="center"><a href="https://tinyprune.com"><picture><source media="(prefers-color-scheme: dark)" srcset="website/assets/screens/preview-dark.png"><img src="website/assets/screens/preview-light.png" alt="TinyPrune Preview showing which files match a rule, when they expire and why" width="900"></picture></a></p>
 
@@ -41,13 +41,13 @@ Requires macOS 14 or later (Intel and Apple silicon).
 brew install --cask navig-me/tap/tinyprune
 ```
 
-**Homebrew installs 0.2.2.** The public cask points to the published 0.2.2 DMG, not the prepared 0.2.3 source version. The [direct macOS download](https://github.com/navig-me/tinyprune/releases) is also available. 0.2.2 fixes an app crash on launch that could follow a Homebrew upgrade, and the **Agent unavailable** screen that went with it. If 0.2.1 crashes on launch, run `brew upgrade --cask tinyprune`.
+**Homebrew installs 0.2.3.** The public cask points to the published 0.2.3 DMG (build 26). The [direct macOS download](https://github.com/navig-me/tinyprune/releases) is also available. A real Homebrew upgrade from 0.2.2 to 0.2.3 was observed on the maintainer's Mac; the app and agent came up and reported available, though one background-agent crash report at first spawn (cause undiagnosed) preceded recovery. 0.2.2 fixed an app crash on launch that could follow a Homebrew upgrade, and the **Agent unavailable** screen that went with it. If 0.2.1 crashes on launch, run `brew upgrade --cask tinyprune`.
 
 Early releases are **unsigned, not notarized pre-releases**. The Homebrew cask clears quarantine for you. If you download the DMG directly, copy `TinyPrune.app` to Applications, try opening it once, then allow it under System Settings → Privacy & Security → **Open Anyway**. Homebrew installs update only with `brew upgrade --cask tinyprune`.
 
 Key-enabled direct builds support Sparkle updates authenticated by EdDSA-signed feeds, release notes and DMGs, including ad-hoc builds without an Apple account. **Check for new versions** is on by default in Settings; **Update Now** opens the native confirmation dialog and installation is never automatic. Homebrew never constructs Sparkle; Homebrew and direct copies without a public key use GitHub release notices and manual download or `brew upgrade`. The Trash/update interlock remains active, including interrupted-update recovery for matching key-enabled ad-hoc direct targets.
 
-The live macOS Sparkle feed publishes 0.2.2 (newest build), retaining build 24. Its protected public-verification workflow passed, checking the live feed, release notes and DMG hash/signature against the app's existing public key. This verifies publication and authentication, not production update installation.
+The live macOS Sparkle feed publishes 0.2.3 (build 26, newest), retaining builds 25, 24, 23 and 22. Its protected public-verification workflow passed, checking the live feed, release notes and DMG hash/signature against the app's existing public key. This verifies publication and authentication, not production update installation; a Sparkle in-app update from 0.2.2 to 0.2.3 has not been verified.
 
 EdDSA does not notarize the app or change first-install Gatekeeper approval. Sparkle replacements are expected not to carry browser-download quarantine, but an actual older/newer end-to-end installation remains unverified. See [ADR 0009](ADRs/0009-eddsa-only-updates-for-adhoc-builds.md) for update trust, private-key loss/rotation and acceptance requirements.
 

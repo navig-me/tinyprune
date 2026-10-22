@@ -12,7 +12,7 @@ Facts below were taken from `git tag`, `git log -1 --format=%cs <tag>`, `gh rele
 
 | Version | Status | Date | Channel |
 | --- | --- | --- | --- |
-| [0.2.3](#023) | **prepared, not published** | prepared 2026-10-22 | macOS Settings/templates/navigation polish and website/privacy updates; Rust source only, published preview unchanged at 0.2.0 build 29 |
+| [0.2.3](#023) | **published prerelease; Sparkle feed and Homebrew cask updated and verified; real Homebrew upgrade from 0.2.2 observed** | 2026-10-22 | macOS Settings/templates/navigation polish and website/privacy updates; Rust source only, published preview unchanged at 0.2.0 build 29 |
 | [0.2.2](#022) | **published prerelease; Sparkle feed and Homebrew cask updated and verified** | 2026-10-22 | macOS (fixes launch crash after `brew upgrade`); Rust preview unchanged at 0.2.0 |
 | [0.2.1](#021) | **published prerelease; defective: app crashes on launch after `brew upgrade` (fixed in 0.2.2)** | 2026-10-22 | macOS (agent re-registration fix after `brew upgrade`); Rust preview unchanged at 0.2.0 |
 | [0.2.0](#020) | **published prereleases; both signed feeds live and verified** | 2026-10-22 | macOS (unchanged code) and Rust developer preview (Linux x86_64, Windows x86_64) |
@@ -26,29 +26,36 @@ Published macOS releases so far are **GitHub prereleases** with ad-hoc signed, *
 
 ## 0.2.3
 
-**Status:** prepared, not published.
+**Status:** published prerelease (GitHub prerelease; ad-hoc signed, not notarized); Sparkle feed live and verified; Homebrew cask at 0.2.3; a real Homebrew upgrade from 0.2.2 was observed. Sparkle in-app installation was **not** verified.
 
-**Date:** prepared 2026-10-22; tag and publication dates n/a (not tagged or published during preparation).
+**Date:** 2026-10-22 (owner authorization date for the release, feed and tap steps). The exact publication timestamp is not recorded here.
 
-**Tag and commit:** intended tag `v0.2.3`; no tag created and no release commit assigned during preparation. App/template/navigation changes were merged in PR #29; the release cutover and website/privacy work are not yet a verified release commit.
+**Tag and commit:** tag `v0.2.3` points to `b2399d3a5ac049d5a8a6e5a9e833100e4f359b9e`. App/template/navigation changes were merged in PR #29.
 
-**Why this version number:** patch release for Settings version/update controls, more useful AI-agent template folder suggestions and quieter/faster navigation state handling. macOS remains the only supported product. All source versions are aligned at 0.2.3 (packager default, Swift agent health default and its two assertions, eleven Rust workspace manifests plus `rust/ui`, Tauri and both lockfiles); this does not rebuild or republish the Linux/Windows developer preview.
+**Why this version number:** patch release for Settings version/update controls, more useful AI-agent template folder suggestions and quieter/faster navigation state handling. macOS remains the only supported product. All source versions are aligned at 0.2.3 (packager default, Swift agent health default and its two assertions, eleven Rust workspace manifests plus `rust/ui`, Tauri and both lockfiles); this did not rebuild or republish the Linux/Windows developer preview.
 
-**Artifacts and signing:** n/a, no 0.2.3 artifacts produced during preparation. Planned macOS artifacts are `TinyPrune-0.2.3.dmg`, `TinyPrune-0.2.3-homebrew.dmg`, their `.sha256` sidecars and `TinyPrune-0.2.3.json`. With the documented no-Apple-credentials configuration, the expected mode is ad-hoc signed, not notarized (`signing: unsigned`), GitHub prerelease; actual signing mode must be read from the release metadata. Reuse the existing protected EdDSA workflow and public key; no key is created, rotated or accessed by this cutover.
+**Artifacts and signing:** `TinyPrune-0.2.3.dmg` and `TinyPrune-0.2.3-homebrew.dmg`, with their `.sha256` sidecars and release metadata. Ad-hoc/unsigned, **not notarized**, GitHub prerelease; no Developer ID signing. The existing protected EdDSA workflow and public key were reused; no key was created or rotated.
 
-**SHA-256:** n/a, artifacts not built or downloaded; populate from the immutable published sidecars and independently verified downloads after publication.
+**SHA-256:** `TinyPrune-0.2.3.dmg` `5a6d889a3abf010bb0150dedd2e8a5e2a11422167b838157c86893ee58aa0eff`; `TinyPrune-0.2.3-homebrew.dmg` `b6e9fad585545129c0967bbb58df54d9c480069ae3b2b6f16bf80652694ede41`. Both were verified against the downloaded sidecars.
 
-**Build numbers:** 0.2.3 macOS build unknown until `release.yml` runs; its `github.run_number` must exceed the currently published Sparkle build **25** (0.2.2). No 0.2.3 entry is added to either feed during preparation. Existing macOS artifacts, Sparkle feed and Homebrew cask remain **0.2.2**; Linux/Windows downloads remain **`rust-preview-0.2.0`, build 29**, with the Rust feed unchanged. Rust artifact and macOS release workflow counters are separate.
+**Build numbers:** macOS build **26** (Sparkle `CFBundleVersion`). The appcast lists 0.2.3 / build 26 first, retaining builds 25, 24, 23 and 22. Linux/Windows downloads remain **`rust-preview-0.2.0`, build 29**, and the Rust feed is unchanged. Rust artifact and macOS release workflow counters are separate.
 
-**Highlights:** Settings displays the version and offers a manual update check, with Sparkle for eligible macOS direct builds and the release notifier for Homebrew/no-key copies. AI-agent templates suggest tool-specific session/debug folders (including OMP), indicate locally existing suggestions, and recognize compressed `.jsonl.zst` transcripts; suggestions still require user choice and authorization. Navigation avoids unnecessary reload/publication work and caches derived Upcoming lists; Activity rows are lazy, and Overview copy is shorter. Rust UI version/update controls are source-only here and do not install without the confirmation command. Website redesign and a dedicated privacy policy are part of this release preparation. See [CHANGELOG](CHANGELOG.md#023---2026-10-22).
+**Highlights:** Settings displays the version and offers a manual update check, with Sparkle for eligible macOS direct builds and the release notifier for Homebrew/no-key copies. AI-agent templates suggest tool-specific session/debug folders (including OMP), indicate locally existing suggestions, and recognize compressed `.jsonl.zst` transcripts; suggestions still require user choice and authorization. Navigation avoids unnecessary reload/publication work and caches derived Upcoming lists; Activity rows are lazy, and Overview copy is shorter. Rust UI version/update controls are source-only and do not install without the confirmation command. Website redesign and a dedicated privacy policy are part of this release. See [CHANGELOG](CHANGELOG.md#023---2026-10-22).
 
-**Verification:** no checks, builds, test runs, artifact signature checks, protected public-feed verification or actual update installation are performed or claimed by this preparation. Historical 0.2.2/0.2.0 evidence below applies only to those recorded builds, not to 0.2.3. The integrating maintainer must record exact-commit CI/native/golden/site results and post-publication evidence here.
+**Verification:**
 
-**Workflow runs and approvals:** n/a, no release, signing, feed, artifact or deployment workflow was dispatched during preparation. After required checks and merge to `main`, tag `v0.2.3`, approve the normal Environment gates, review/merge `updates/v0.2.3`, await Pages deployment, and run protected `publish-update-feed.yml` with `tag=v0.2.3` and `verify_public=true`. Record actual run links and approvals; a skipped signing or verification step is not success evidence. Update/verify the Homebrew tap independently if its optional token remains unset.
+- Exact-commit CI: [run 39736213606](https://github.com/navig-me/tinyprune/actions/runs/39736213606), all jobs passed.
+- Local, on the release source: 196 Swift tests including the 100k benchmark, domain/engine smokes, and UI snapshots (130 assertions, 0 failed). The settings-loading snapshots reported 2 unlabeled AppKit text fields; this was reported, not investigated.
+- Release artifacts: both DMGs verified against their downloaded sidecars (hashes above).
+- Feed: Sparkle feed [PR #30](https://github.com/navig-me/tinyprune/pull/30) merged as `d74f7646adc3206bcc6d783ca7b001502ea6ff8e`. Appcast XML, notes and DMG signatures were independently verified with CryptoKit against the existing public key. Pages deployment passed. Protected [`verify_public` run 39740254481](https://github.com/navig-me/tinyprune/actions/runs/39740254481) passed.
+- Homebrew: the tap was updated by hand ([homebrew-tap PR `release/v0.2.3`](https://github.com/navig-me/homebrew-tap), merged); the cask reads 0.2.3 with the verified hash.
+- **Real Homebrew upgrade 0.2.2 to 0.2.3** on the maintainer's Mac: installed 0.2.3 build 26; the app launched and stayed running; the agent re-registered itself and reported `serviceVersion` 0.2.3, status `available`, and stayed running. One `TinyPruneAgent` crash report was produced at first spawn (15:26:15) before recovery. Its cause was **not diagnosed**; the same one-off was seen after the 0.2.2 upgrade.
 
-**Known issues / not verified:** the new Settings button in a shipped app, real signed-feed checks from the Rust UI, actual Homebrew upgrade to 0.2.3, genuine older/newer production Sparkle installation, Developer ID/notarization, screen-reader and broad Linux/Windows desktop acceptance are not established. Reduced reload/derived-state work is not a measured main-thread stall-time improvement. Public-feed authentication is not update-installation proof. Do not announce Linux/Windows 0.2.3 downloads or support.
+**Workflow runs and approvals:** [release run 39739453533](https://github.com/navig-me/tinyprune/actions/runs/39739453533). The `release` and `update-feed` Environment gates were approved by the assistant under the owner's 2026-10-22 authorization (owner-authorized maintainer approval, not independent two-person review). The release run's Homebrew job was skipped because `HOMEBREW_TAP_TOKEN` is unset, hence the manual tap update above; a skipped step is not success evidence.
 
-**Rollback or withdrawal:** n/a, not published. Once published, do not overwrite immutable artifacts or hand-edit signed feeds; supersede a defective release with a higher version/build through the normal reviewed signing procedure.
+**Known issues / not verified:** Sparkle in-app update installation from 0.2.2 to 0.2.3; the new Settings Check for Updates button clicked in the shipped app; the Rust UI update button against the live feed; Developer ID/notarization; any Windows/Linux signing; screen-reader and broad Linux/Windows desktop acceptance. The first-spawn `TinyPruneAgent` crash above is undiagnosed. The 2 unlabeled AppKit text fields in settings-loading snapshots are uninvestigated. Reduced reload/derived-state work is not a measured main-thread stall-time improvement. Public-feed authentication is not update-installation proof. Do not announce Linux/Windows 0.2.3 downloads or support.
+
+**Rollback or withdrawal:** n/a, not withdrawn. Do not overwrite immutable artifacts or hand-edit signed feeds; supersede a defective release with a higher version/build through the normal reviewed signing procedure.
 
 ## 0.2.2
 
