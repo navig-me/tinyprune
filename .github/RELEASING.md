@@ -1,14 +1,14 @@
 # Releasing TinyPrune
 
-Runbook for maintainers. It covers both channels: the **macOS app** (the supported product) and the **Rust runtime developer preview** for Linux x86_64 and Windows x86_64. Decisions and rationale: [ADR 0013](../ADRs/0013-release-process-and-signing-custody.md). Every release is recorded in [RELEASES.md](../RELEASES.md). Workflow and Environment setup details: [DEPLOYMENT.md](DEPLOYMENT.md).
+Runbook for maintainers. The **macOS app is the only supported product and current public release focus**. Windows/Linux development and new publishing are paused while macOS stabilizes; the Rust procedure below is retained as an engineering reference, not authorization to resume. Decisions and rationale: [ADR 0013](../ADRs/0013-release-process-and-signing-custody.md). Every release is recorded in [RELEASES.md](../RELEASES.md). Workflow and Environment setup details: [DEPLOYMENT.md](DEPLOYMENT.md).
 
-This file contains no secrets and must stay free of them. Nothing here is a Linux or Windows support claim: the Rust archives are unsigned developer-preview builds, macOS is the only supported product.
+This file contains no secrets and must stay free of them. Do not publish new cross-platform archives, preview releases or signed-feed entries without explicit resumption. Preserve the existing Rust 0.2.0 build 29 feed/signature, immutable release assets and signing key for installed preview users; do not delete assets, rewrite signed bytes or rotate keys as part of hiding public downloads. Historical previews are not recommended public installs. See [PLAN.md](../PLAN.md#cross-platform-core-paused) and the [Rust evidence matrix](../rust/README.md#status-matrix) for implementation evidence and unresolved Windows Store/Linux acceptance gates.
 
 ## Current status: 0.2.3 published (2026-10-22)
 
-macOS 0.2.3 (build 26) is a **published prerelease** (ad-hoc signed, not notarized). The Sparkle feed lists 0.2.3 first, retaining builds 25, 24, 23 and 22, and the Homebrew cask reads 0.2.3; both were updated and verified independently of the release run (the Homebrew job skipped because the optional token is unset, so the tap was updated by hand). The separate Linux/Windows Rust preview and signed Rust feed remain 0.2.0 build 29, and the Rust bump did not rebuild or publish that preview. See [the 0.2.3 release record](../RELEASES.md#023) for the tag, run links, hashes and approvals. Not verified: Sparkle in-app installation, the Settings Check for Updates button in the shipped app, the Rust UI button against the live feed, Developer ID/notarization and Windows/Linux signing. A real Homebrew upgrade 0.2.2 to 0.2.3 was observed, with one undiagnosed first-spawn `TinyPruneAgent` crash report before recovery.
+macOS 0.2.3 (build 26) is a **published prerelease** (ad-hoc signed, not notarized). The Sparkle feed lists 0.2.3 first, retaining builds 25, 24, 23 and 22, and the Homebrew cask reads 0.2.3; both were updated and verified independently of the release run (the Homebrew job skipped because the optional token is unset, so the tap was updated by hand). The historical Linux/Windows Rust preview and signed feed remain 0.2.0 build 29. See [the release record](../RELEASES.md#023) for evidence. Pending Mac validation: production Sparkle installation, shipped Settings Check for Updates, Developer ID/notarization and repeated upgrade/restart stability. A real Homebrew 0.2.2 → 0.2.3 upgrade recovered after a first-spawn agent OS pre-main Code Signature Invalid / Launch Constraint Violation; the exact constraint/cause and fix remain unproven, and no mitigation shipped.
 
-For the next release, use section 4 with the new tag. The new `release.yml` run's build must exceed **26**; never guess or set it to the marketing patch number. Reuse the existing protected signing workflow and public key, approve the normal Environment gates, review/merge the `updates/vX.Y.Z` PR, await Pages deployment, then dispatch `gh workflow run publish-update-feed.yml -f tag=vX.Y.Z -f verify_public=true`. Confirm the actual verification steps execute rather than skip. Update the tap separately if its optional token remains unset. Keep Linux/Windows URLs and the Rust feed at `rust-preview-0.2.0` / build 29 unless an explicit separate preview release is requested.
+For the next **macOS** release, use section 4 with the new tag. The new `release.yml` run's build must exceed **26**; never guess or set it to the marketing patch number. Reuse the existing protected signing workflow and public key, approve the normal Environment gates, review/merge the `updates/vX.Y.Z` PR, await Pages deployment, then dispatch `gh workflow run publish-update-feed.yml -f tag=vX.Y.Z -f verify_public=true`. Confirm the actual verification steps execute rather than skip. Update the tap separately if its optional token remains unset. Leave Linux/Windows assets and the Rust feed at `rust-preview-0.2.0` / build 29; no new cross-platform publishing without explicit resumption.
 
 Advance prepared documentation to published only after observing release, feed and tap results independently; fill in artifact SHA-256 values, actual build, run links, approvals and remaining limits in RELEASES.md. Signed-byte verification is not real production update-installation evidence.
 
@@ -80,10 +80,10 @@ Do all of these in the release PR or before tagging. Record the evidence (run li
 3. `RELEASES.md` has the new `## X.Y.Z` entry (copy the template at its top; prepared releases say "prepared, not published") and previous entries are untouched.
 4. `CHANGELOG.md`: a dated `## X.Y.Z - YYYY-MM-DD` section above the older ones, a fresh empty `## Unreleased` above it, wording that matches what was actually verified. The macOS release notes and Sparkle notes are generated from this section.
 5. Golden fixtures: `swift test --filter GoldenFixtureTests` and `cd rust && cargo test --locked -p tinyprune-core` (command for CommandLineTools-only Macs is in AGENTS.md).
-6. Smoke and end-to-end: `rust-core` end-to-end smoke (all three OSes), `windows-update-e2e` job of `rust-artifacts.yml` (real Scheduled Task, launcher, throwaway key), the Linux Docker install test, `native` acceptance. Note which ran on which commit.
-7. Benchmark numbers recorded: the 100k-entry and store benchmarks are non-gating and write their tables to the job summary of the `rust-core` jobs. Copy the figures (and the runner) into the RELEASES.md entry; do not quote numbers from another machine as if they came from CI.
+6. macOS smoke and end-to-end: run native acceptance and record the commit and environment. Rust-only smoke/install/update jobs are engineering evidence, not required new cross-platform publication; invoke them only within explicitly resumed work. Historical commands and runs remain documented in the Rust matrix.
+7. Record benchmark figures and their runner only when actually observed for this commit; non-gating jobs require inspecting their results. Do not quote another machine's figures as CI results or imply paused checks ran.
 8. Environments: section 0 checks pass; the three public-key locations match (section 1).
-9. For a Rust preview additionally: the repository variable `TINYPRUNE_UPDATE_PUBLIC_KEY` is set (section 3), and you have read the "Not verified" list in the RELEASES.md entry so the announcement does not overstate it.
+9. A Rust preview requires explicit resumption first, then the repository variable `TINYPRUNE_UPDATE_PUBLIC_KEY` (section 3) and a reviewed "Not verified" list. No macOS release authorizes a Rust preview implicitly.
 
 ## 3. How the Rust workflow embeds the production key
 
@@ -99,7 +99,7 @@ gh variable set TINYPRUNE_UPDATE_PUBLIC_KEY --body "$(gh api repos/:owner/:repo/
 
 ## 4. macOS release procedure
 
-Build numbers: the macOS build number is the `release.yml` `github.run_number` (`CFBundleVersion`); it must exceed every appcast entry. Published 0.2.0 DMGs and the newest live appcast entry carry **23**, above retained **22 / 0.1.13**.
+Build numbers: the macOS build number is the `release.yml` `github.run_number` (`CFBundleVersion`); it must exceed every appcast entry. The current published 0.2.3 DMGs and newest appcast entry carry **26**, retaining builds 25, 24, 23 and 22.
 
 1. Merge the release PR (version bump, CHANGELOG, RELEASES.md) into `main` after review and green CI. Do not tag a commit that is not on `main`.
 2. There is no pre-tag dry run: `release.yml`'s `workflow_dispatch` needs an existing `vX.Y.Z` tag. Pre-tag confidence comes from the `native` CI job, which packages both channels. After tagging, `release.yml` publishes directly (tag pushes publish); a dispatch with `publish=false` is only for re-inspecting an existing tag.
@@ -112,7 +112,9 @@ Build numbers: the macOS build number is the `release.yml` `github.run_number` (
 9. Homebrew: review the `navig-me/homebrew-tap` PR if `HOMEBREW_TAP_TOKEN` is set; otherwise render the cask by hand as in DEPLOYMENT.md.
 10. Download both DMGs, `shasum -a 256 -c` against the sidecars, and fill the checksums, build number, run links and approvals into RELEASES.md (a follow-up PR; the entry already exists).
 
-## 5. Rust developer-preview procedure
+## 5. Rust developer-preview procedure (paused reference)
+
+**Do not execute new builds or publication steps below without explicit resumption.** Existing assets/feed/key must remain intact. The procedure is historical engineering reference, not a current release checklist.
 
 Archives and executables are unsigned; the **feed** is signed to authenticate its contents and archive hashes. This is not OS code signing, notarization or a supported-platform claim. Build number: `github.run_number` of the `rust-artifacts.yml` dispatch run you promote; `tinyprune-feed generate` refuses a number not above the retained feed entries.
 
@@ -130,9 +132,9 @@ Note: archive names and the `VERSION` stamp currently say `tinyprune-dev` and `s
 ## 6. Post-release checklist
 
 - RELEASES.md entry updated from "prepared" to published with run links, checksums and build numbers.
-- `https://tinyprune.com/updates/appcast.xml` (macOS) and `https://tinyprune.com/updates/rust/rust-update-feed.json` (Rust) serve the new entry; `Version consistency` still passes on `main`.
-- `tinyprune --version` and `tinyprune-agentd --version` from the published archive print the release version.
-- Install the new macOS DMG on a disposable Mac and confirm first-run Gatekeeper wording matches the release notes (ad-hoc). Update from the previous version if you want to extend the unverified Sparkle acceptance (ADR 0009).
+- The macOS appcast serves the new entry; `Version consistency` still passes on `main`. During the platform pause the Rust feed/signature and its build 29 assets remain unchanged.
+- The published macOS app/CLI report the release version. Rust preview version checks apply only to an explicitly resumed Rust release.
+- Install the new macOS DMG on a disposable Mac and confirm first-run Gatekeeper wording matches the release notes. Exercise production Sparkle older/newer installation, the shipped Settings check, and repeated upgrade/restart stability; record unexecuted checks as pending. Developer ID/notarization requires separate acceptance.
 - Website and docs mention no stale version (the `versions` job guards pins of the form `vX.Y.Z` / `TinyPrune X.Y.Z`).
 - Announce only what RELEASES.md says was verified. Do not announce Linux/Windows support.
 
@@ -141,7 +143,7 @@ Note: archive names and the `VERSION` stamp currently say `tinyprune-dev` and `s
 Version and build numbers only go up. Clients refuse downgrades and replayed feeds, so you cannot rewind a feed.
 
 - **Bad macOS release:** ship `X.Y.(Z+1)` with the fix through the normal procedure; the new, higher `sparkle:version` supersedes it for everyone. Edit the bad GitHub release's notes to say it is superseded (an edit of release text, not of immutable assets). Do not delete or replace assets: the appcast pins the DMG's length and signature, and published artifacts are immutable. A signed `appcast.xml` cannot be hand-edited; removing an entry requires regenerating and re-signing it through the workflow in a reviewed PR (not yet exercised).
-- **Bad Rust preview:** publish a higher build the same way. For an immediate stop before a fix exists, the safest tools are: mark the hosting prerelease as superseded in its notes; and, if nobody should install it, delete only the feed PR before merge. Once a feed is live there is no rewind; a new feed with a higher build whose newest entry is the fix is the remedy. A client that already installed the bad build rolls itself back only when the new build fails its own health check.
+- **Bad Rust preview:** requires an explicit incident/resumption decision before publishing a higher build through section 5. Mark the hosting prerelease's notes if necessary; do not delete or replace existing assets or alter signed feed bytes. Once a feed is live there is no rewind; a higher-build fix is the update remedy, not mutating the historical release. A client that already installed the bad build rolls itself back only when the new build fails its own health check.
 - **Record it:** change the RELEASES.md entry's status to `withdrawn` or `yanked`, with date, reason and the replacement version, in the same PR that ships the replacement. Never delete the entry or its checksums.
 - **Key compromise or loss:** section 1 and ADR 0009; this is an incident, not a rollback.
 
@@ -150,7 +152,7 @@ Version and build numbers only go up. Clients refuse downgrades and replayed fee
 - Retain and verify the configured approval/branch gates on `release` and `update-feed` (section 0). Review `homebrew`, `cloudflare-pages-production` and `main` protections separately; they were not changed as part of these signing-gate approvals.
 - Verify the configured repository variable `TINYPRUNE_UPDATE_PUBLIC_KEY` still equals both Environment public keys (sections 1 and 3); never replace or rotate it as routine release preparation.
 - Approve each Environment-gated job when appropriate (`release` once; `update-feed` for the appcast publish, the appcast verify, the Rust sign and the Rust verify; `cloudflare-pages-production` for each Pages deploy), merge the feed PRs, and push the tag. These are maintainer actions, not approvals implied by this runbook. For 0.2.0, owner-authorized approvals and merges are complete: both prereleases and signed feeds are published, both protected public verifications passed, and no release approval remains outstanding (section 0). Gates remain enabled for future releases.
-- Create the Rust hosting prerelease (section 5, step 3).
+- Only after explicit resumption: create a new Rust hosting prerelease (section 5, step 3). No new cross-platform publishing is a standing manual action during the pause.
 - Apple Developer ID signing and notarization: not available. Without all six Apple secrets in `release` every macOS release is ad-hoc and not notarized; providing them is an account-level maintainer action (DEPLOYMENT.md).
 - Keep the private key backup offline and verify it is restorable. No tool in this repository can verify that for you.
 - Configure the Homebrew tap token for future automation; the 0.2.0 manual tap PR is already merged and its published cask version/checksum validated, without a fresh installation. Google Search Console/Bing sitemap submission, any announcement, and real-desktop acceptance (GUI first-run on macOS 15/26, Linux/Windows UI, screen reader, non-administrator and logon/reboot behavior) remain manual. Production-build live OS update installation end-to-end has not been executed.

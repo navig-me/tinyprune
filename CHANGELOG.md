@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Focus public distribution on macOS while stability work continues. Remove Windows/Linux download buttons and public install promotion; pause new Rust feed publication while retaining historical preview assets and the signed feed for existing installs.
+- Consolidate completed work and pending macOS validation, agent launch-constraint investigation, Windows signing/MSIX research, and Linux desktop acceptance in PLAN.md and the release documentation.
+
 ## 0.2.3 - 2026-10-22
 
 - Add the website privacy policy at https://tinyprune.com/privacy, linked from the footer, covering local app data, update checks, website analytics, and voluntary support disclosures.

@@ -44,8 +44,19 @@ env:
   PAGES_DIR: website/updates/rust
 
 jobs:
+  # Public cross-platform releases are paused. Keep verification available for
+  # existing preview clients; resuming publication requires an explicit code change.
+  publication-paused:
+    if: ${{ !inputs.verify_public }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Reject paused cross-platform publication
+        run: |
+          echo "::error::Windows and Linux publication is paused while macOS stabilizes."
+          exit 1
+
   prepare:
-    if: ${{ !inputs.verify_public && github.ref == 'refs/heads/main' }}
+    if: ${{ false && !inputs.verify_public && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:

@@ -1,6 +1,6 @@
-# TinyPrune Rust core (developer preview)
+# TinyPrune Rust core (development paused)
 
-This workspace reproduces TinyPrune's Swift decision logic against the shared, language-neutral [golden fixtures](../Fixtures/golden/README.md). Swift is the behavioral reference ([ADR 0010](../ADRs/0010-cross-platform-core-and-golden-fixtures.md)). Source crates and the Tauri shell declare **0.2.3**, the version of the published macOS prerelease. Unsigned [0.2.0 developer-preview downloads](https://github.com/navig-me/tinyprune/releases/tag/rust-preview-0.2.0) remain available for Linux x86_64 and Windows x86_64 at build 29; they were not rebuilt or republished for 0.2.3, and the Rust feed is unchanged. These are not supported general-desktop releases; the [Swift macOS app](https://github.com/navig-me/tinyprune/releases) remains the only supported product. See the [0.2.3 release record](../RELEASES.md#023).
+This workspace reproduces TinyPrune's Swift decision logic against the shared, language-neutral [golden fixtures](../Fixtures/golden/README.md). Swift is the behavioral reference ([ADR 0010](../ADRs/0010-cross-platform-core-and-golden-fixtures.md)). **Windows and Linux development and new public releases are paused while macOS stabilizes.** Source crates and the Tauri shell declare **0.2.3**, the published macOS prerelease version; this did not publish a Rust 0.2.3 release. The unsigned [historical 0.2.0 preview](https://github.com/navig-me/tinyprune/releases/tag/rust-preview-0.2.0) for Linux x86_64 and Windows x86_64 (build 29) is retained as engineering evidence, not a recommended public install. Preserve its immutable archives and existing signed feed/key for installed users. The [Swift macOS app](https://github.com/navig-me/tinyprune/releases) remains the only supported product. See the [release record](../RELEASES.md#023).
 
 ## Layout
 
@@ -25,7 +25,7 @@ The core is synchronous and trait-based. It provides no concrete filesystem, dat
 
 Product invariants apply identically here: metadata only, Trash only (never permanent deletion), Keep wins, re-check current identity/policy/protection/deadline/pause/availability before Trash, and Preview never trashes. Preserve path bytes rather than silently normalizing Unicode; Swift-compatible comparisons and raw-scalar glob behavior are distinct contracts.
 
-The Rust agent (`tinyprune-agentd`) and its IPC, CLI and UI are available as a developer preview, not a supported Linux or Windows product. CI executes native watchers, sockets/pipes, daemon/CLI smokes, dev installs and a non-gating 100k benchmark on Linux and Windows; the Tauri webview ran in a Linux aarch64 Docker container and on a Windows CI runner. POSIX rename and the Windows Shell cannot atomically condition a move on source identity; adapter READMEs document the races. Fixture coverage does not prove platform-adapter safety. ADR 0011 records the runtime decisions: macOS stays on Swift, Windows config import/export is unsupported, macOS has only a periodic reconcile fallback. ADR 0012 covers the separate, user-confirmed Rust updater; macOS keeps Sparkle.
+The Rust agent (`tinyprune-agentd`) and its IPC, CLI and UI were published as a historical developer preview, not a supported Linux or Windows product. Recorded CI executes native watchers, sockets/pipes, daemon/CLI smokes, dev installs and a non-gating 100k benchmark on Linux and Windows; the Tauri webview ran in a Linux aarch64 Docker container and on a Windows CI runner. POSIX rename and the Windows Shell cannot atomically condition a move on source identity; adapter READMEs document the races. Fixture coverage does not prove platform-adapter safety. ADR 0011 records the runtime decisions: macOS stays on Swift, Windows config import/export is unsupported, macOS has only a periodic reconcile fallback. ADR 0012 covers the separate, user-confirmed Rust updater; macOS keeps Sparkle.
 
 ### Platform paths and hidden metadata
 
@@ -51,6 +51,12 @@ Evidence: PR #15 checks at commit `536d105` passed on Ubuntu 24.04, Windows 2022
 | User-confirmed updater (ADR 0012) | unit tests and a Docker signed-feed update/rollback with a throwaway key passed; production signed feed deployed and independently verified against the published archive, not a production OS update-install test | unit tests pass in CI; managed update end to end on a hosted `windows-2022` runner (throwaway key, loopback feed, real Scheduled Task and launcher; update, restart into the new build, state survival, tamper/replay refusal, rollback, Trash blocked while quiesced) passed in workflow run 39550764775 at `c25ee1f`; one run, no logon/reboot trigger or non-admin user tested; production signed feed deployed and independently verified against the published archive, not a production OS update-install test | not used; Sparkle unchanged |
 
 Not accepted as a supported product: Windows 100k performance, desktop-level and screen-reader accessibility, OS-signed releases, and production update installation. The deployed feed's signature and archive verification do not establish OS installation acceptance.
+
+### Paused distribution work
+
+- **Windows:** SignPath declined. Microsoft Store MSIX was researched only; no package was built or accepted. Pending: fullTrust capability, startupTask, CLI alias, data migration and coexistence with unpackaged previews, Store-managed update ownership versus the custom updater, WebView2 provisioning, real Recycle Bin and IPC smoke under packaged identity, and Store certification. The CI evidence above is for the existing unpackaged runtime, not an MSIX or general desktop acceptance.
+- **Linux:** native desktop/screen-reader acceptance, distribution trust/signing and production update installation remain pending; Docker and hosted-runner checks do not accept a desktop release.
+- No new cross-platform publishing without explicit resumption. The historical 0.2.0 build 29 signed feed and immutable assets remain available to existing clients, without deletion, replacement or key rotation. See the [release runbook](../.github/RELEASING.md).
 
 ## Commands
 
